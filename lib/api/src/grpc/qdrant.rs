@@ -15767,6 +15767,22 @@ pub struct GetAuditLogResponse {
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateOramMutationActivationChallengeRequest {
+    /// Exact canonical JSON for PrivateOramPeerActivationChallengeV1.
+    #[prost(bytes = "vec", tag = "1")]
+    pub challenge_canonical_json: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateOramMutationActivationChallengeResponse {
+    /// Exact canonical JSON for PrivateOramPeerActivationSignedAckV1.
+    #[prost(bytes = "vec", tag = "1")]
+    pub signed_ack_canonical_json: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrivateOramReplicationEpochState {
     #[prost(uint64, tag = "1")]
     pub index_epoch: u64,
@@ -15871,63 +15887,179 @@ pub struct CompletePrivateOramWritebackResponse {
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PrivateOramMutationOwnerTerminalIndex {
-    #[prost(enumeration = "PrivateOramReplicationIndexKind", tag = "1")]
-    pub index_kind: i32,
-    #[prost(string, tag = "2")]
-    pub index_name: ::prost::alloc::string::String,
-    #[prost(string, tag = "3")]
-    pub prepared_journal_digest: ::prost::alloc::string::String,
-    #[prost(string, tag = "4")]
-    pub terminal_state_digest: ::prost::alloc::string::String,
-}
-#[derive(serde::Serialize)]
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RecoverPrivateOramMutationOwnerRequest {
-    #[prost(string, tag = "1")]
-    pub collection_name: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
-    pub collection_id: ::prost::alloc::string::String,
-    #[prost(string, tag = "3")]
-    pub mutation_id: ::prost::alloc::string::String,
-    #[prost(string, tag = "4")]
-    pub parent_descriptor_digest: ::prost::alloc::string::String,
-    #[prost(string, tag = "5")]
-    pub decision_record_digest: ::prost::alloc::string::String,
-    #[prost(uint64, tag = "6")]
-    pub coordinator_peer_id: u64,
-    #[prost(uint64, tag = "7")]
-    pub owner_peer_id: u64,
-    #[prost(string, tag = "8")]
-    pub vector_name: ::prost::alloc::string::String,
-    #[prost(string, tag = "9")]
-    pub signing_key_id: ::prost::alloc::string::String,
+    /// Canonical JSON encoding of qdrant_sec::PrivateOramPeerRecoveryRequestV2.
+    #[prost(bytes = "vec", tag = "1")]
+    pub request_canonical_json: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RecoverPrivateOramMutationOwnerResponse {
-    #[prost(uint64, tag = "1")]
-    pub owner_peer_id: u64,
-    #[prost(enumeration = "PrivateOramMutationOwnerTerminalKind", tag = "2")]
-    pub terminal_kind: i32,
-    #[prost(string, tag = "3")]
-    pub journal_descriptor_digest: ::prost::alloc::string::String,
+    /// Canonical JSON encodings of the terminal evidence and its peer-identity signature.
+    #[prost(bytes = "vec", tag = "1")]
+    pub terminal_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub public_key_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub signature_canonical_json: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InstallPrivateOramOwnerRecoveryCapsuleV2Request {
+    /// Canonical JSON encoding of qdrant_sec::PrivateOramOwnerCapsuleInstallRequestV2.
+    #[prost(bytes = "vec", tag = "1")]
+    pub install_request_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Exact bounded canonical JSON encoding of the inert storage capsule package.
+    #[prost(bytes = "vec", tag = "2")]
+    pub capsule_package_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Coordinator peer identity and signature over request plus package digest/length.
+    #[prost(bytes = "vec", tag = "3")]
+    pub coordinator_public_key_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub coordinator_signature_canonical_json: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InstallPrivateOramOwnerRecoveryCapsuleV2Response {
+    /// Exact canonical storage receipt and owner-signed transport response statement.
+    #[prost(bytes = "vec", tag = "1")]
+    pub receipt_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub install_response_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub owner_public_key_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub owner_signature_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Canonical transport-independent owner signature retained in Raft readiness state.
+    #[prost(bytes = "vec", tag = "5")]
+    pub owner_install_attestation_canonical_json: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrestagePrivateOramMutationOwnerV2Request {
+    /// Canonical JSON encoding of qdrant_sec::PrivateOramOwnerPrestageRequestV2.
+    #[prost(bytes = "vec", tag = "1")]
+    pub prestage_request_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Exact bounded canonical JSON encoding of the inert owner package.
+    #[prost(bytes = "vec", tag = "2")]
+    pub prestage_package_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Coordinator peer identity and signature over request plus package digest/length.
+    #[prost(bytes = "vec", tag = "3")]
+    pub coordinator_public_key_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub coordinator_signature_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Exact committed V3 reservation challenge authorizing this owner pre-stage.
+    #[prost(bytes = "vec", tag = "5")]
+    pub reservation_challenge_canonical_json: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrestagePrivateOramMutationOwnerV2Response {
+    #[prost(bytes = "vec", tag = "1")]
+    pub receipt_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub prestage_response_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub owner_public_key_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub owner_signature_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Transport-independent owner signature retained in the all-owner admission certificate.
+    #[prost(bytes = "vec", tag = "5")]
+    pub owner_prestage_attestation_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Owner-signed proof that the finalized reservation was consumed by this durable install.
+    #[prost(bytes = "vec", tag = "6")]
+    pub reservation_resolution_receipt_canonical_json: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AdoptPrivateOramMutationOwnerV2Request {
+    /// Canonical JSON encoding of qdrant_sec::PrivateOramOwnerAdoptionRequestV1.
+    #[prost(bytes = "vec", tag = "1")]
+    pub adoption_request_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Canonical JSON encoding of collection::PrivateOramOwnerPrepareParentV2.
+    #[prost(bytes = "vec", tag = "2")]
+    pub parent_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub coordinator_public_key_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub coordinator_signature_canonical_json: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AdoptPrivateOramMutationOwnerV2Response {
+    /// Canonical JSON encoding of collection::PrivateOramOwnerPreparedEvidenceV2.
+    #[prost(bytes = "vec", tag = "1")]
+    pub evidence_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Canonical JSON encoding of qdrant_sec::PrivateOramOwnerAdoptionResponseV1.
+    #[prost(bytes = "vec", tag = "2")]
+    pub adoption_response_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub owner_public_key_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub owner_signature_canonical_json: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PreparePrivateOramMutationOwnerReservationV3Request {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub vector_name: ::prost::alloc::string::String,
+    /// Exact canonical JSON for qdrant_sec::PrivateOramOwnerReservationPrepareChallengeV1.
+    #[prost(bytes = "vec", tag = "3")]
+    pub challenge_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Pinned owner signing key used to resolve the vector-local HNSW owner context.
     #[prost(string, tag = "4")]
-    pub prepared_state_digest: ::prost::alloc::string::String,
-    #[prost(string, tag = "5")]
-    pub terminal_record_digest: ::prost::alloc::string::String,
-    #[prost(string, tag = "6")]
-    pub parent_descriptor_digest: ::prost::alloc::string::String,
-    #[prost(string, tag = "7")]
-    pub decision_authority_record_digest: ::prost::alloc::string::String,
-    #[prost(string, tag = "8")]
-    pub reconciliation_authority_digest: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "9")]
-    pub indexes: ::prost::alloc::vec::Vec<PrivateOramMutationOwnerTerminalIndex>,
-    #[prost(string, tag = "10")]
-    pub terminal_evidence_digest: ::prost::alloc::string::String,
+    pub owner_signing_key_id: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PreparePrivateOramMutationOwnerReservationV3Response {
+    /// Exact canonical JSON for qdrant_sec::PrivateOramOwnerReservationPrepareV1.
+    #[prost(bytes = "vec", tag = "1")]
+    pub prepare_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Exact canonical JSON for the owner's PrivateOramPeerRecoveryPublicKeyV1.
+    #[prost(bytes = "vec", tag = "2")]
+    pub owner_public_key_canonical_json: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolvePrivateOramMutationOwnerReservationV3Request {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub vector_name: ::prost::alloc::string::String,
+    /// Pinned owner signing key used to resolve the vector-local HNSW owner context.
+    #[prost(string, tag = "3")]
+    pub owner_signing_key_id: ::prost::alloc::string::String,
+    /// Exact canonical JSON for qdrant_sec::PrivateOramOwnerReservationPrepareChallengeV1.
+    #[prost(bytes = "vec", tag = "4")]
+    pub challenge_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Reconstruct a durable finalized completion. An installed owner returns installed evidence;
+    /// an uninstalled owner releases only when the same attempt has committed PrestageAborted.
+    #[prost(bool, tag = "5")]
+    pub recover_completion: bool,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolvePrivateOramMutationOwnerReservationV3Response {
+    /// True only when the exact durable reservation fence was resolved.
+    #[prost(bool, tag = "1")]
+    pub resolved: bool,
+    /// Exact canonical JSON for qdrant_sec::SignedPrivateOramOwnerReservationResolutionReceiptV1.
+    #[prost(bytes = "vec", tag = "2")]
+    pub resolution_receipt_canonical_json: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -16413,6 +16545,39 @@ pub mod qdrant_internal_client {
                 .insert(GrpcMethod::new("qdrant.QdrantInternal", "GetAuditLog"));
             self.inner.unary(req, path, codec).await
         }
+        /// Sign one bounded activation challenge from this peer's stable local Raft view.
+        pub async fn acknowledge_private_oram_mutation_activation(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::PrivateOramMutationActivationChallengeRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::PrivateOramMutationActivationChallengeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/AcknowledgePrivateOramMutationActivation",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "AcknowledgePrivateOramMutationActivation",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// Durably stage one owner-signed encrypted private ORAM writeback.
         pub async fn prepare_private_oram_writeback(
             &mut self,
@@ -16532,6 +16697,171 @@ pub mod qdrant_internal_client {
                     GrpcMethod::new(
                         "qdrant.QdrantInternal",
                         "RecoverPrivateOramMutationOwner",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Durably install one coordinator-signed sequence-3 owner recovery capsule.
+        pub async fn install_private_oram_owner_recovery_capsule_v2(
+            &mut self,
+            request: impl tonic::IntoStreamingRequest<
+                Message = super::PrivateOramInstallChunk,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::InstallPrivateOramOwnerRecoveryCapsuleV2Response>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/InstallPrivateOramOwnerRecoveryCapsuleV2",
+            );
+            let mut req = request.into_streaming_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "InstallPrivateOramOwnerRecoveryCapsuleV2",
+                    ),
+                );
+            self.inner.client_streaming(req, path, codec).await
+        }
+        /// Durably install one inert paired-owner intent before Raft mutation admission.
+        pub async fn prestage_private_oram_mutation_owner_v2(
+            &mut self,
+            request: impl tonic::IntoStreamingRequest<
+                Message = super::PrivateOramInstallChunk,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::PrestagePrivateOramMutationOwnerV2Response>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/PrestagePrivateOramMutationOwnerV2",
+            );
+            let mut req = request.into_streaming_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "PrestagePrivateOramMutationOwnerV2",
+                    ),
+                );
+            self.inner.client_streaming(req, path, codec).await
+        }
+        /// Adopts one exact durable pre-stage only after the sequence-1 parent is published.
+        pub async fn adopt_private_oram_mutation_owner_v2(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::AdoptPrivateOramMutationOwnerV2Request,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::AdoptPrivateOramMutationOwnerV2Response>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/AdoptPrivateOramMutationOwnerV2",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "AdoptPrivateOramMutationOwnerV2",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Durably fence one exact committed V3 reservation challenge on its owner.
+        pub async fn prepare_private_oram_mutation_owner_reservation_v3(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::PreparePrivateOramMutationOwnerReservationV3Request,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::PreparePrivateOramMutationOwnerReservationV3Response>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/PreparePrivateOramMutationOwnerReservationV3",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "PreparePrivateOramMutationOwnerReservationV3",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Resolve one exact committed V3 reservation challenge on its owner.
+        pub async fn resolve_private_oram_mutation_owner_reservation_v3(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::ResolvePrivateOramMutationOwnerReservationV3Request,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::ResolvePrivateOramMutationOwnerReservationV3Response>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/ResolvePrivateOramMutationOwnerReservationV3",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "ResolvePrivateOramMutationOwnerReservationV3",
                     ),
                 );
             self.inner.unary(req, path, codec).await
@@ -16767,6 +17097,14 @@ pub mod qdrant_internal_server {
             tonic::Response<super::GetAuditLogResponse>,
             tonic::Status,
         >;
+        /// Sign one bounded activation challenge from this peer's stable local Raft view.
+        async fn acknowledge_private_oram_mutation_activation(
+            &self,
+            request: tonic::Request<super::PrivateOramMutationActivationChallengeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrivateOramMutationActivationChallengeResponse>,
+            tonic::Status,
+        >;
         /// Durably stage one owner-signed encrypted private ORAM writeback.
         async fn prepare_private_oram_writeback(
             &self,
@@ -16797,6 +17135,50 @@ pub mod qdrant_internal_server {
             request: tonic::Request<super::RecoverPrivateOramMutationOwnerRequest>,
         ) -> std::result::Result<
             tonic::Response<super::RecoverPrivateOramMutationOwnerResponse>,
+            tonic::Status,
+        >;
+        /// Durably install one coordinator-signed sequence-3 owner recovery capsule.
+        async fn install_private_oram_owner_recovery_capsule_v2(
+            &self,
+            request: tonic::Request<tonic::Streaming<super::PrivateOramInstallChunk>>,
+        ) -> std::result::Result<
+            tonic::Response<super::InstallPrivateOramOwnerRecoveryCapsuleV2Response>,
+            tonic::Status,
+        >;
+        /// Durably install one inert paired-owner intent before Raft mutation admission.
+        async fn prestage_private_oram_mutation_owner_v2(
+            &self,
+            request: tonic::Request<tonic::Streaming<super::PrivateOramInstallChunk>>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrestagePrivateOramMutationOwnerV2Response>,
+            tonic::Status,
+        >;
+        /// Adopts one exact durable pre-stage only after the sequence-1 parent is published.
+        async fn adopt_private_oram_mutation_owner_v2(
+            &self,
+            request: tonic::Request<super::AdoptPrivateOramMutationOwnerV2Request>,
+        ) -> std::result::Result<
+            tonic::Response<super::AdoptPrivateOramMutationOwnerV2Response>,
+            tonic::Status,
+        >;
+        /// Durably fence one exact committed V3 reservation challenge on its owner.
+        async fn prepare_private_oram_mutation_owner_reservation_v3(
+            &self,
+            request: tonic::Request<
+                super::PreparePrivateOramMutationOwnerReservationV3Request,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::PreparePrivateOramMutationOwnerReservationV3Response>,
+            tonic::Status,
+        >;
+        /// Resolve one exact committed V3 reservation challenge on its owner.
+        async fn resolve_private_oram_mutation_owner_reservation_v3(
+            &self,
+            request: tonic::Request<
+                super::ResolvePrivateOramMutationOwnerReservationV3Request,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::ResolvePrivateOramMutationOwnerReservationV3Response>,
             tonic::Status,
         >;
         /// Idempotently install one complete signed encrypted index on a replica.
@@ -17115,6 +17497,63 @@ pub mod qdrant_internal_server {
                     };
                     Box::pin(fut)
                 }
+                "/qdrant.QdrantInternal/AcknowledgePrivateOramMutationActivation" => {
+                    #[allow(non_camel_case_types)]
+                    struct AcknowledgePrivateOramMutationActivationSvc<
+                        T: QdrantInternal,
+                    >(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::UnaryService<
+                        super::PrivateOramMutationActivationChallengeRequest,
+                    > for AcknowledgePrivateOramMutationActivationSvc<T> {
+                        type Response = super::PrivateOramMutationActivationChallengeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::PrivateOramMutationActivationChallengeRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::acknowledge_private_oram_mutation_activation(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = AcknowledgePrivateOramMutationActivationSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/qdrant.QdrantInternal/PreparePrivateOramWriteback" => {
                     #[allow(non_camel_case_types)]
                     struct PreparePrivateOramWritebackSvc<T: QdrantInternal>(pub Arc<T>);
@@ -17316,6 +17755,291 @@ pub mod qdrant_internal_server {
                     let fut = async move {
                         let inner = inner.0;
                         let method = RecoverPrivateOramMutationOwnerSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/InstallPrivateOramOwnerRecoveryCapsuleV2" => {
+                    #[allow(non_camel_case_types)]
+                    struct InstallPrivateOramOwnerRecoveryCapsuleV2Svc<
+                        T: QdrantInternal,
+                    >(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::ClientStreamingService<
+                        super::PrivateOramInstallChunk,
+                    > for InstallPrivateOramOwnerRecoveryCapsuleV2Svc<T> {
+                        type Response = super::InstallPrivateOramOwnerRecoveryCapsuleV2Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                tonic::Streaming<super::PrivateOramInstallChunk>,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::install_private_oram_owner_recovery_capsule_v2(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = InstallPrivateOramOwnerRecoveryCapsuleV2Svc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.client_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/PrestagePrivateOramMutationOwnerV2" => {
+                    #[allow(non_camel_case_types)]
+                    struct PrestagePrivateOramMutationOwnerV2Svc<T: QdrantInternal>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::ClientStreamingService<
+                        super::PrivateOramInstallChunk,
+                    > for PrestagePrivateOramMutationOwnerV2Svc<T> {
+                        type Response = super::PrestagePrivateOramMutationOwnerV2Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                tonic::Streaming<super::PrivateOramInstallChunk>,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::prestage_private_oram_mutation_owner_v2(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = PrestagePrivateOramMutationOwnerV2Svc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.client_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/AdoptPrivateOramMutationOwnerV2" => {
+                    #[allow(non_camel_case_types)]
+                    struct AdoptPrivateOramMutationOwnerV2Svc<T: QdrantInternal>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::UnaryService<
+                        super::AdoptPrivateOramMutationOwnerV2Request,
+                    > for AdoptPrivateOramMutationOwnerV2Svc<T> {
+                        type Response = super::AdoptPrivateOramMutationOwnerV2Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::AdoptPrivateOramMutationOwnerV2Request,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::adopt_private_oram_mutation_owner_v2(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = AdoptPrivateOramMutationOwnerV2Svc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/PreparePrivateOramMutationOwnerReservationV3" => {
+                    #[allow(non_camel_case_types)]
+                    struct PreparePrivateOramMutationOwnerReservationV3Svc<
+                        T: QdrantInternal,
+                    >(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::UnaryService<
+                        super::PreparePrivateOramMutationOwnerReservationV3Request,
+                    > for PreparePrivateOramMutationOwnerReservationV3Svc<T> {
+                        type Response = super::PreparePrivateOramMutationOwnerReservationV3Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::PreparePrivateOramMutationOwnerReservationV3Request,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::prepare_private_oram_mutation_owner_reservation_v3(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = PreparePrivateOramMutationOwnerReservationV3Svc(
+                            inner,
+                        );
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/ResolvePrivateOramMutationOwnerReservationV3" => {
+                    #[allow(non_camel_case_types)]
+                    struct ResolvePrivateOramMutationOwnerReservationV3Svc<
+                        T: QdrantInternal,
+                    >(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::UnaryService<
+                        super::ResolvePrivateOramMutationOwnerReservationV3Request,
+                    > for ResolvePrivateOramMutationOwnerReservationV3Svc<T> {
+                        type Response = super::ResolvePrivateOramMutationOwnerReservationV3Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ResolvePrivateOramMutationOwnerReservationV3Request,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::resolve_private_oram_mutation_owner_reservation_v3(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = ResolvePrivateOramMutationOwnerReservationV3Svc(
+                            inner,
+                        );
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

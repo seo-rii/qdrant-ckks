@@ -29,6 +29,7 @@ use common::defaults::CONSENSUS_META_OP_WAIT;
 use data_encoding::BASE64URL_NOPAD;
 use futures::StreamExt as _;
 use futures::stream::FuturesUnordered;
+use parking_lot::Mutex;
 use segment::types::ShardKey;
 
 use crate::content_manager::collection_meta_ops::AliasOperations;
@@ -49,6 +50,13 @@ use crate::content_manager::consensus_ops::{
     canonical_private_oram_shard_transfer_post_layout_digest,
     private_oram_shard_key_post_layout_entries,
 };
+use crate::content_manager::private_oram_mutation_journal::{
+    PrivateOramMutationAdmissionPlanV2, PrivateOramMutationAllOwnersPrestagedV2,
+    PrivateOramMutationClearPendingProposalV2, PrivateOramMutationNeedCleanupWitnessV2,
+    PrivateOramMutationNeedClearV2, PrivateOramMutationNeedParentProgressV2,
+    PrivateOramMutationRecoveryReadinessProposalV2,
+    encode_private_oram_mutation_admission_recovery_manifest_v2,
+};
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 use crate::rbac::{Auth, CollectionMultipass};
 use crate::{
@@ -61,6 +69,95 @@ pub struct Dispatcher {
     toc: Arc<TableOfContent>,
     consensus_state: Option<ConsensusStateRef>,
     resharding_enabled: bool,
+    private_oram_live_admission_registry: Arc<Mutex<PrivateOramLiveAdmissionRegistryV2>>,
+}
+
+const PRIVATE_ORAM_LIVE_ADMISSION_MAX_RECORDS: usize = 1_024;
+const PRIVATE_ORAM_LIVE_ADMISSION_MAX_LEASE_SECS: u64 = 600;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrivateOramLiveAdmissionRecordPhaseV2 {
+    Seed,
+    Bound,
+}
+
+struct PrivateOramLiveAdmissionRecordV2 {
+    collection_id: String,
+    mutation_id: String,
+    leader_peer_id: PeerId,
+    leader_term: u64,
+    expires_at_unix: u64,
+    phase: PrivateOramLiveAdmissionRecordPhaseV2,
+    session_commitment: Option<String>,
+    generation: Option<u64>,
+    writer_fence: Option<u64>,
+    expected_aggregate_digest: Option<String>,
+}
+
+#[derive(Default)]
+struct PrivateOramLiveAdmissionRegistryV2 {
+    records: HashMap<String, PrivateOramLiveAdmissionRecordV2>,
+}
+
+/// Process-local seed issued only while a paired append session is live.
+///
+/// It is intentionally not serializable. A persisted owner receipt cannot reconstruct it.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct PrivateOramLiveAdmissionSeedV2 {
+    capability_id: String,
+    collection_id: String,
+    mutation_id: String,
+    leader_peer_id: PeerId,
+    leader_term: u64,
+    expires_at_unix: u64,
+}
+
+impl Debug for PrivateOramLiveAdmissionSeedV2 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramLiveAdmissionSeedV2")
+            .field("capability_id", &"[redacted]")
+            .field("collection_id", &"[redacted]")
+            .field("mutation_id", &"[redacted]")
+            .field("leader_peer_id", &self.leader_peer_id)
+            .field("leader_term", &self.leader_term)
+            .field("expires_at_unix", &self.expires_at_unix)
+            .finish()
+    }
+}
+
+/// Single-use, non-serializable authority required to build a V2 admission operation.
+#[doc(hidden)]
+pub struct PrivateOramLiveAdmissionPermitV2 {
+    capability_id: String,
+    collection_id: String,
+    mutation_id: String,
+    leader_peer_id: PeerId,
+    leader_term: u64,
+    expires_at_unix: u64,
+    session_commitment: String,
+    generation: u64,
+    writer_fence: u64,
+    expected_aggregate_digest: String,
+}
+
+impl Debug for PrivateOramLiveAdmissionPermitV2 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramLiveAdmissionPermitV2")
+            .field("capability_id", &"[redacted]")
+            .field("collection_id", &"[redacted]")
+            .field("mutation_id", &"[redacted]")
+            .field("leader_peer_id", &self.leader_peer_id)
+            .field("leader_term", &self.leader_term)
+            .field("expires_at_unix", &self.expires_at_unix)
+            .field("session_commitment", &"[redacted]")
+            .field("generation", &self.generation)
+            .field("writer_fence", &self.writer_fence)
+            .field("expected_aggregate_digest", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -96,12 +193,73 @@ pub struct PrivateOramPendingTransitionRef<'a> {
     pub writeback_digest: &'a str,
 }
 
+/// Opaque Raft operation built before the caller crosses the append cancellation boundary.
+#[doc(hidden)]
+pub struct PrivateOramMutationAdmissionSubmissionV2 {
+    admission_operation: ConsensusOperations,
+    rejection_operation: ConsensusOperations,
+    lease: PrivateOramMutationLease,
+    recovery_manifest_digest: String,
+}
+
+impl Debug for PrivateOramMutationAdmissionSubmissionV2 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramMutationAdmissionSubmissionV2")
+            .field("admission_operation", &"[redacted]")
+            .field("rejection_operation", &"[redacted]")
+            .field("lease", &self.lease)
+            .field("recovery_manifest_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateOramMutationAdmissionOutcomeV2 {
+    AppliedExact,
+    CommittedRejected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateOramMutationAdmissionFailureClassV2 {
+    DefinitelyNotSubmitted,
+    Unknown,
+}
+
+pub struct PrivateOramMutationAdmissionFailureV2 {
+    class: PrivateOramMutationAdmissionFailureClassV2,
+    source: StorageError,
+}
+
+impl PrivateOramMutationAdmissionFailureV2 {
+    pub fn class(&self) -> PrivateOramMutationAdmissionFailureClassV2 {
+        self.class
+    }
+
+    pub fn into_storage_error(self) -> StorageError {
+        self.source
+    }
+}
+
+impl Debug for PrivateOramMutationAdmissionFailureV2 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramMutationAdmissionFailureV2")
+            .field("class", &self.class)
+            .field("source", &"[redacted]")
+            .finish()
+    }
+}
+
 impl Dispatcher {
     pub fn new(toc: Arc<TableOfContent>) -> Self {
         Self {
             toc,
             consensus_state: None,
             resharding_enabled: false,
+            private_oram_live_admission_registry: Arc::new(Mutex::new(
+                PrivateOramLiveAdmissionRegistryV2::default(),
+            )),
         }
     }
 
@@ -2161,6 +2319,429 @@ impl Dispatcher {
         Ok(consensus_state.private_oram_layout(key))
     }
 
+    #[doc(hidden)]
+    pub fn issue_private_oram_mutation_live_admission_seed_v2(
+        &self,
+        collection_id: &str,
+        mutation_id: &str,
+        expires_at_unix: u64,
+    ) -> Result<PrivateOramLiveAdmissionSeedV2, StorageError> {
+        let now_unix = current_private_oram_unix_secs()?;
+        let (leader_peer_id, leader_term) = self.private_oram_live_admission_leader_token_v2()?;
+        if collection_id.is_empty()
+            || collection_id.len() > 1_024
+            || decode_private_oram_sha256_digest(mutation_id).is_none()
+            || expires_at_unix <= now_unix
+            || expires_at_unix.saturating_sub(now_unix) > PRIVATE_ORAM_LIVE_ADMISSION_MAX_LEASE_SECS
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM live admission seed request is invalid",
+            ));
+        }
+        let mut registry = self.private_oram_live_admission_registry.lock();
+        registry
+            .records
+            .retain(|_, record| record.expires_at_unix > now_unix);
+        if registry.records.len() >= PRIVATE_ORAM_LIVE_ADMISSION_MAX_RECORDS {
+            return Err(StorageError::service_error(
+                "private ORAM live admission registry is full",
+            ));
+        }
+        let capability_id = (0..4)
+            .map(|_| uuid::Uuid::new_v4().to_string())
+            .find(|candidate| !registry.records.contains_key(candidate))
+            .ok_or_else(|| {
+                StorageError::service_error("private ORAM live admission capability collision")
+            })?;
+        registry.records.insert(
+            capability_id.clone(),
+            PrivateOramLiveAdmissionRecordV2 {
+                collection_id: collection_id.to_string(),
+                mutation_id: mutation_id.to_string(),
+                leader_peer_id,
+                leader_term,
+                expires_at_unix,
+                phase: PrivateOramLiveAdmissionRecordPhaseV2::Seed,
+                session_commitment: None,
+                generation: None,
+                writer_fence: None,
+                expected_aggregate_digest: None,
+            },
+        );
+        Ok(PrivateOramLiveAdmissionSeedV2 {
+            capability_id,
+            collection_id: collection_id.to_string(),
+            mutation_id: mutation_id.to_string(),
+            leader_peer_id,
+            leader_term,
+            expires_at_unix,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn bind_private_oram_mutation_live_admission_permit_v2(
+        &self,
+        seed: &PrivateOramLiveAdmissionSeedV2,
+        session_commitment: String,
+        plan: &PrivateOramMutationAdmissionPlanV2,
+        all_owners_prestaged: &PrivateOramMutationAllOwnersPrestagedV2,
+    ) -> Result<PrivateOramLiveAdmissionPermitV2, StorageError> {
+        let now_unix = current_private_oram_unix_secs()?;
+        let (leader_peer_id, leader_term) = self.private_oram_live_admission_leader_token_v2()?;
+        all_owners_prestaged
+            .validate_admission_plan(plan)
+            .map_err(|_| {
+                StorageError::bad_request(
+                    "private ORAM mutation all-owner pre-stage certificate is invalid",
+                )
+            })?;
+        let lease = plan.lease();
+        let generation = lease.generation;
+        let writer_fence = lease.writer_fence;
+        let expected_aggregate_digest = all_owners_prestaged.expected_aggregate_digest();
+        if decode_private_oram_sha256_digest(&session_commitment).is_none()
+            || decode_private_oram_sha256_digest(expected_aggregate_digest).is_none()
+            || generation == 0
+            || writer_fence == 0
+            || generation != writer_fence
+            || seed.expires_at_unix <= now_unix
+            || seed.leader_peer_id != leader_peer_id
+            || seed.leader_term != leader_term
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM live admission permit binding is invalid",
+            ));
+        }
+        let mut registry = self.private_oram_live_admission_registry.lock();
+        registry
+            .records
+            .retain(|_, record| record.expires_at_unix > now_unix);
+        let record = registry
+            .records
+            .get_mut(&seed.capability_id)
+            .ok_or_else(|| {
+                StorageError::bad_request("private ORAM live admission seed is unavailable")
+            })?;
+        if record.phase != PrivateOramLiveAdmissionRecordPhaseV2::Seed
+            || record.collection_id != seed.collection_id
+            || record.mutation_id != seed.mutation_id
+            || record.leader_peer_id != seed.leader_peer_id
+            || record.leader_term != seed.leader_term
+            || record.expires_at_unix != seed.expires_at_unix
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM live admission seed is invalid",
+            ));
+        }
+        record.phase = PrivateOramLiveAdmissionRecordPhaseV2::Bound;
+        record.session_commitment = Some(session_commitment.clone());
+        record.generation = Some(generation);
+        record.writer_fence = Some(writer_fence);
+        record.expected_aggregate_digest = Some(expected_aggregate_digest.to_string());
+        Ok(PrivateOramLiveAdmissionPermitV2 {
+            capability_id: seed.capability_id.clone(),
+            collection_id: seed.collection_id.clone(),
+            mutation_id: seed.mutation_id.clone(),
+            leader_peer_id,
+            leader_term,
+            expires_at_unix: seed.expires_at_unix,
+            session_commitment,
+            generation,
+            writer_fence,
+            expected_aggregate_digest: expected_aggregate_digest.to_string(),
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn revoke_private_oram_mutation_live_admission_seed_v2(
+        &self,
+        seed: &PrivateOramLiveAdmissionSeedV2,
+    ) {
+        let mut registry = self.private_oram_live_admission_registry.lock();
+        if registry
+            .records
+            .get(&seed.capability_id)
+            .is_some_and(|record| {
+                record.phase == PrivateOramLiveAdmissionRecordPhaseV2::Seed
+                    && record.collection_id == seed.collection_id
+                    && record.mutation_id == seed.mutation_id
+                    && record.leader_peer_id == seed.leader_peer_id
+                    && record.leader_term == seed.leader_term
+                    && record.expires_at_unix == seed.expires_at_unix
+            })
+        {
+            registry.records.remove(&seed.capability_id);
+        }
+    }
+
+    /// Builds the exact admission operation and consumes its process-local permit before return.
+    fn prepare_private_oram_mutation_admission_v2(
+        &self,
+        plan: &PrivateOramMutationAdmissionPlanV2,
+        all_owners_prestaged: &PrivateOramMutationAllOwnersPrestagedV2,
+        prepared_aggregate_digest: &str,
+        permit: &PrivateOramLiveAdmissionPermitV2,
+    ) -> Result<PrivateOramMutationAdmissionSubmissionV2, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error("private ORAM mutation admission requires distributed mode")
+        })?;
+        all_owners_prestaged
+            .validate_admission_plan(plan)
+            .map_err(|_| {
+                StorageError::bad_request(
+                    "private ORAM mutation all-owner pre-stage certificate is invalid",
+                )
+            })?;
+        for evidence in all_owners_prestaged.owner_evidence() {
+            let pin =
+                consensus_state.private_oram_peer_recovery_signer_pin(evidence.owner_peer_id())?;
+            if &pin.activation_authority() != all_owners_prestaged.activation_authority()
+                || pin.signer() != &evidence.attestation().owner_public_key
+            {
+                return Err(StorageError::PreconditionFailed {
+                    description: "private ORAM mutation owner pre-stage authority changed"
+                        .to_string(),
+                });
+            }
+        }
+        let recovery_manifest_canonical_json =
+            encode_private_oram_mutation_admission_recovery_manifest_v2(all_owners_prestaged)
+                .map_err(|_| {
+                    StorageError::bad_request(
+                        "private ORAM mutation admission recovery manifest is invalid",
+                    )
+                })?;
+        let key = PrivateOramMutationKey {
+            collection_id: plan.lease().collection_id.clone(),
+        };
+        if consensus_state.private_oram_mutation_v2_current_aggregate_digest(&key)?
+            != prepared_aggregate_digest
+            || consensus_state
+                .private_oram_mutation_v2_active_append_attempt(&key)?
+                .as_ref()
+                .is_none_or(|(reservation, prepared)| {
+                    reservation.expected_aggregate_digest()
+                        != all_owners_prestaged.expected_aggregate_digest()
+                        || prepared.as_ref() != Some(all_owners_prestaged)
+                })
+        {
+            return Err(StorageError::PreconditionFailed {
+                description: "private ORAM mutation prepared authority changed".to_string(),
+            });
+        }
+        let expected_aggregate_digest = prepared_aggregate_digest.to_string();
+        let admission_operation = consensus_state
+            .private_oram_mutation_v2_admission_operation_at_expected(
+                plan.lease().clone(),
+                recovery_manifest_canonical_json.clone(),
+                expected_aggregate_digest.clone(),
+            )?;
+        let rejection_operation = consensus_state
+            .private_oram_mutation_v2_admission_rejected_operation_at_expected(
+                plan.lease().clone(),
+                recovery_manifest_canonical_json,
+                expected_aggregate_digest,
+            )?;
+        self.consume_private_oram_mutation_live_admission_permit_v2(
+            permit,
+            plan,
+            all_owners_prestaged,
+        )?;
+        Ok(PrivateOramMutationAdmissionSubmissionV2 {
+            admission_operation,
+            rejection_operation,
+            lease: plan.lease().clone(),
+            recovery_manifest_digest: all_owners_prestaged.manifest_digest().to_string(),
+        })
+    }
+
+    /// Submits an already-built admission. An exact retry is both idempotent and a Raft ordering
+    /// barrier: a lost first response cannot be mistaken for a definitive pre-admission failure.
+    pub async fn submit_private_oram_mutation_admission_v2(
+        &self,
+        plan: &PrivateOramMutationAdmissionPlanV2,
+        all_owners_prestaged: &PrivateOramMutationAllOwnersPrestagedV2,
+        prepared_aggregate_digest: &str,
+        permit: PrivateOramLiveAdmissionPermitV2,
+        wait_timeout: Option<Duration>,
+    ) -> Result<PrivateOramMutationAdmissionOutcomeV2, PrivateOramMutationAdmissionFailureV2> {
+        let submission = self
+            .prepare_private_oram_mutation_admission_v2(
+                plan,
+                all_owners_prestaged,
+                prepared_aggregate_digest,
+                &permit,
+            )
+            .map_err(|source| PrivateOramMutationAdmissionFailureV2 {
+                // Operation construction and all authority checks happen before the process-local
+                // permit is consumed. After consumption this function has no fallible work before
+                // returning the opaque submission, so an error here cannot have reached Raft.
+                class: PrivateOramMutationAdmissionFailureClassV2::DefinitelyNotSubmitted,
+                source,
+            })?;
+        let consensus_state =
+            self.consensus_state
+                .as_ref()
+                .ok_or_else(|| PrivateOramMutationAdmissionFailureV2 {
+                    class: PrivateOramMutationAdmissionFailureClassV2::Unknown,
+                    source: StorageError::service_error(
+                        "private ORAM mutation admission requires distributed mode",
+                    ),
+                })?;
+        for operation in [
+            submission.admission_operation.clone(),
+            submission.admission_operation.clone(),
+            submission.rejection_operation.clone(),
+            submission.rejection_operation.clone(),
+        ] {
+            let _proposal_result = consensus_state
+                .propose_consensus_op_with_await(operation, wait_timeout)
+                .await;
+            if let Ok(Some(outcome)) = self.inspect_private_oram_mutation_admission_outcome_v2(
+                &submission.lease,
+                &submission.recovery_manifest_digest,
+            ) {
+                return Ok(outcome);
+            }
+        }
+        Err(PrivateOramMutationAdmissionFailureV2 {
+            class: PrivateOramMutationAdmissionFailureClassV2::Unknown,
+            source: StorageError::service_error(
+                "private ORAM mutation admission outcome requires recovery",
+            ),
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn inspect_private_oram_mutation_admission_outcome_v2(
+        &self,
+        lease: &PrivateOramMutationLease,
+        recovery_manifest_digest: &str,
+    ) -> Result<Option<PrivateOramMutationAdmissionOutcomeV2>, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error("private ORAM mutation admission requires distributed mode")
+        })?;
+        let key = PrivateOramMutationKey {
+            collection_id: lease.collection_id.clone(),
+        };
+        if consensus_state.private_oram_mutation_lease(&key) == Some(lease.clone()) {
+            return Ok(Some(PrivateOramMutationAdmissionOutcomeV2::AppliedExact));
+        }
+        if consensus_state.private_oram_mutation_v2_retains_rejected_admission(
+            &key,
+            lease,
+            recovery_manifest_digest,
+        )? {
+            return Ok(Some(
+                PrivateOramMutationAdmissionOutcomeV2::CommittedRejected,
+            ));
+        }
+        Ok(None)
+    }
+
+    /// Returns the full consensus-retained owner manifest only while the exact admitted lease is
+    /// authoritative. The lease and manifest are read under one persistent-state guard.
+    pub fn private_oram_mutation_v2_exact_admitted_recovery_manifest(
+        &self,
+        lease: &PrivateOramMutationLease,
+    ) -> Result<Option<PrivateOramMutationAllOwnersPrestagedV2>, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error("private ORAM mutation admission requires distributed mode")
+        })?;
+        let key = PrivateOramMutationKey {
+            collection_id: lease.collection_id.clone(),
+        };
+        consensus_state.private_oram_mutation_v2_exact_admitted_recovery_manifest(&key, lease)
+    }
+
+    pub fn active_private_oram_mutation_keys(
+        &self,
+    ) -> Result<Vec<PrivateOramMutationKey>, StorageError> {
+        self.consensus_state()
+            .ok_or_else(|| {
+                StorageError::service_error(
+                    "private ORAM mutation discovery requires distributed mode",
+                )
+            })?
+            .active_private_oram_mutation_keys()
+    }
+
+    pub fn private_oram_mutation_pending_acknowledgement_keys(
+        &self,
+    ) -> Result<Vec<(PrivateOramMutationKey, PeerId, u64)>, StorageError> {
+        self.consensus_state
+            .as_ref()
+            .ok_or_else(|| {
+                StorageError::service_error(
+                    "private ORAM mutation acknowledgement discovery requires distributed mode",
+                )
+            })?
+            .private_oram_mutation_pending_acknowledgement_keys()
+    }
+
+    fn private_oram_live_admission_leader_token_v2(&self) -> Result<(PeerId, u64), StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error("private ORAM live admission requires distributed mode")
+        })?;
+        consensus_state.require_private_oram_mutation_coordinator_is_local_leader()?;
+        let term = consensus_state.hard_state().term;
+        if term == 0 {
+            return Err(StorageError::PreconditionFailed {
+                description: "private ORAM live admission leader term is unavailable".to_string(),
+            });
+        }
+        Ok((self.this_peer_id(), term))
+    }
+
+    fn consume_private_oram_mutation_live_admission_permit_v2(
+        &self,
+        permit: &PrivateOramLiveAdmissionPermitV2,
+        plan: &PrivateOramMutationAdmissionPlanV2,
+        all_owners_prestaged: &PrivateOramMutationAllOwnersPrestagedV2,
+    ) -> Result<(), StorageError> {
+        let now_unix = current_private_oram_unix_secs()?;
+        let (leader_peer_id, leader_term) = self.private_oram_live_admission_leader_token_v2()?;
+        let lease = plan.lease();
+        if permit.collection_id != lease.collection_id
+            || permit.mutation_id != lease.mutation_id
+            || permit.generation != lease.generation
+            || permit.writer_fence != lease.writer_fence
+            || permit.expected_aggregate_digest != all_owners_prestaged.expected_aggregate_digest()
+            || permit.leader_peer_id != leader_peer_id
+            || permit.leader_term != leader_term
+            || permit.expires_at_unix <= now_unix
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM live admission permit is invalid",
+            ));
+        }
+        let mut registry = self.private_oram_live_admission_registry.lock();
+        registry
+            .records
+            .retain(|_, record| record.expires_at_unix > now_unix);
+        let record = registry.records.get(&permit.capability_id).ok_or_else(|| {
+            StorageError::bad_request("private ORAM live admission permit is unavailable")
+        })?;
+        if record.phase != PrivateOramLiveAdmissionRecordPhaseV2::Bound
+            || record.collection_id != permit.collection_id
+            || record.mutation_id != permit.mutation_id
+            || record.leader_peer_id != permit.leader_peer_id
+            || record.leader_term != permit.leader_term
+            || record.expires_at_unix != permit.expires_at_unix
+            || record.session_commitment.as_deref() != Some(&permit.session_commitment)
+            || record.generation != Some(permit.generation)
+            || record.writer_fence != Some(permit.writer_fence)
+            || record.expected_aggregate_digest.as_deref()
+                != Some(&permit.expected_aggregate_digest)
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM live admission permit is invalid",
+            ));
+        }
+        registry.records.remove(&permit.capability_id);
+        Ok(())
+    }
+
     pub fn private_oram_consensus_external_recovery(
         &self,
         key: &PrivateOramExternalRecoveryKey,
@@ -2171,6 +2752,155 @@ impl Dispatcher {
             )
         })?;
         Ok(consensus_state.private_oram_external_recovery(key))
+    }
+
+    pub async fn submit_private_oram_mutation_recovery_readiness_v2(
+        &self,
+        proposal: PrivateOramMutationRecoveryReadinessProposalV2,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM mutation recovery readiness requires distributed mode",
+            )
+        })?;
+        let operation = consensus_state
+            .private_oram_mutation_v2_recovery_capsules_ready_operation(
+                proposal.key().clone(),
+                proposal.expectation(),
+            )?;
+        if !consensus_state
+            .propose_consensus_op_with_await(operation, wait_timeout)
+            .await?
+        {
+            return Err(StorageError::service_error(
+                "private ORAM mutation recovery readiness was not applied",
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn submit_private_oram_mutation_parent_progress_v2(
+        &self,
+        progress: PrivateOramMutationNeedParentProgressV2,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM mutation parent progress requires distributed mode",
+            )
+        })?;
+        let proposal = progress.into_proposal();
+        let operation = consensus_state.private_oram_mutation_v2_parent_progress_operation(
+            proposal.key().clone(),
+            proposal.expectation(),
+        )?;
+        if !consensus_state
+            .propose_consensus_op_with_await(operation, wait_timeout)
+            .await?
+        {
+            return Err(StorageError::service_error(
+                "private ORAM mutation parent progress was not applied",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn private_oram_mutation_cleanup_witness_operation_v2(
+        &self,
+        permit: PrivateOramMutationNeedCleanupWitnessV2,
+    ) -> Result<ConsensusOperations, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM mutation cleanup witness requires distributed mode",
+            )
+        })?;
+        let proposal = permit.into_proposal();
+        consensus_state.private_oram_mutation_v2_cleanup_witness_operation(
+            proposal.key().clone(),
+            proposal.expectation(),
+        )
+    }
+
+    pub async fn submit_private_oram_mutation_clear_pending_v2(
+        &self,
+        proposal: PrivateOramMutationClearPendingProposalV2,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM mutation clear-pending requires distributed mode",
+            )
+        })?;
+        let (key, generation, witness_digest, clear_attempt_id_digest) = proposal.into_parts();
+        let operation = consensus_state.private_oram_mutation_v2_clear_pending_operation(
+            key,
+            generation,
+            &witness_digest,
+            clear_attempt_id_digest,
+        )?;
+        if !consensus_state
+            .propose_consensus_op_with_await(operation, wait_timeout)
+            .await?
+        {
+            return Err(StorageError::service_error(
+                "private ORAM mutation clear-pending was not applied",
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn submit_private_oram_mutation_clear_v2(
+        &self,
+        permit: PrivateOramMutationNeedClearV2,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error("private ORAM mutation clear requires distributed mode")
+        })?;
+        let (key, generation, clear_attempt_id_digest) = permit.into_parts();
+        let operation = consensus_state.private_oram_mutation_v2_clear_operation(
+            key,
+            generation,
+            &clear_attempt_id_digest,
+        )?;
+        if !consensus_state
+            .propose_consensus_op_with_await(operation, wait_timeout)
+            .await?
+        {
+            return Err(StorageError::service_error(
+                "private ORAM mutation clear was not applied",
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn submit_private_oram_mutation_clear_acknowledgement_v2(
+        &self,
+        key: PrivateOramMutationKey,
+        expected_owner_peer_id: PeerId,
+        expected_generation: u64,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM mutation clear acknowledgement requires distributed mode",
+            )
+        })?;
+        let operation = consensus_state.private_oram_mutation_v2_clear_acknowledgement_operation(
+            key,
+            expected_owner_peer_id,
+            expected_generation,
+        )?;
+        if !consensus_state
+            .propose_consensus_op_with_await(operation, wait_timeout)
+            .await?
+        {
+            return Err(StorageError::service_error(
+                "private ORAM mutation clear acknowledgement was not applied",
+            ));
+        }
+        Ok(())
     }
 
     pub async fn await_consensus_sync(

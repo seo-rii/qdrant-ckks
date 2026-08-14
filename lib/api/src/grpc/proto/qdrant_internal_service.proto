@@ -22,6 +22,11 @@ service QdrantInternal {
   // Get audit log entries from this peer
   rpc GetAuditLog(GetAuditLogRequest) returns (GetAuditLogResponse) {}
 
+  // Sign one bounded activation challenge from this peer's stable local Raft view.
+  rpc AcknowledgePrivateOramMutationActivation(
+      PrivateOramMutationActivationChallengeRequest)
+      returns (PrivateOramMutationActivationChallengeResponse) {}
+
   // Durably stage one owner-signed encrypted private ORAM writeback.
   rpc PreparePrivateOramWriteback(PreparePrivateOramWritebackRequest)
       returns (PreparePrivateOramWritebackResponse) {}
@@ -37,6 +42,28 @@ service QdrantInternal {
   // Recover one paired private ORAM owner from locally revalidated durable state.
   rpc RecoverPrivateOramMutationOwner(RecoverPrivateOramMutationOwnerRequest)
       returns (RecoverPrivateOramMutationOwnerResponse) {}
+
+  // Durably install one coordinator-signed sequence-3 owner recovery capsule.
+  rpc InstallPrivateOramOwnerRecoveryCapsuleV2(stream PrivateOramInstallChunk)
+      returns (InstallPrivateOramOwnerRecoveryCapsuleV2Response) {}
+
+  // Durably install one inert paired-owner intent before Raft mutation admission.
+  rpc PrestagePrivateOramMutationOwnerV2(stream PrivateOramInstallChunk)
+      returns (PrestagePrivateOramMutationOwnerV2Response) {}
+
+  // Adopts one exact durable pre-stage only after the sequence-1 parent is published.
+  rpc AdoptPrivateOramMutationOwnerV2(AdoptPrivateOramMutationOwnerV2Request)
+      returns (AdoptPrivateOramMutationOwnerV2Response) {}
+
+  // Durably fence one exact committed V3 reservation challenge on its owner.
+  rpc PreparePrivateOramMutationOwnerReservationV3(
+      PreparePrivateOramMutationOwnerReservationV3Request)
+      returns (PreparePrivateOramMutationOwnerReservationV3Response) {}
+
+  // Resolve one exact committed V3 reservation challenge on its owner.
+  rpc ResolvePrivateOramMutationOwnerReservationV3(
+      ResolvePrivateOramMutationOwnerReservationV3Request)
+      returns (ResolvePrivateOramMutationOwnerReservationV3Response) {}
 
   // Idempotently install one complete signed encrypted index on a replica.
   rpc InstallPrivateOramIndex(InstallPrivateOramIndexRequest)
@@ -98,6 +125,16 @@ message GetAuditLogRequest {
 message GetAuditLogResponse {
   // Audit log entries as raw JSON strings (one per entry)
   repeated string entries = 1;
+}
+
+message PrivateOramMutationActivationChallengeRequest {
+  // Exact canonical JSON for PrivateOramPeerActivationChallengeV1.
+  bytes challenge_canonical_json = 1;
+}
+
+message PrivateOramMutationActivationChallengeResponse {
+  // Exact canonical JSON for PrivateOramPeerActivationSignedAckV1.
+  bytes signed_ack_canonical_json = 1;
 }
 
 // Internal-only wire contract for replicated private ORAM writebacks. The RPC
@@ -172,36 +209,112 @@ enum PrivateOramMutationOwnerTerminalKind {
   PRIVATE_ORAM_MUTATION_OWNER_TERMINAL_KIND_ABORTED_OLD = 2;
 }
 
-message PrivateOramMutationOwnerTerminalIndex {
-  PrivateOramReplicationIndexKind index_kind = 1;
-  string index_name = 2;
-  string prepared_journal_digest = 3;
-  string terminal_state_digest = 4;
-}
-
 message RecoverPrivateOramMutationOwnerRequest {
-  string collection_name = 1;
-  string collection_id = 2;
-  string mutation_id = 3;
-  string parent_descriptor_digest = 4;
-  string decision_record_digest = 5;
-  uint64 coordinator_peer_id = 6;
-  uint64 owner_peer_id = 7;
-  string vector_name = 8;
-  string signing_key_id = 9;
+  // Canonical JSON encoding of qdrant_sec::PrivateOramPeerRecoveryRequestV2.
+  bytes request_canonical_json = 1;
 }
 
 message RecoverPrivateOramMutationOwnerResponse {
-  uint64 owner_peer_id = 1;
-  PrivateOramMutationOwnerTerminalKind terminal_kind = 2;
-  string journal_descriptor_digest = 3;
-  string prepared_state_digest = 4;
-  string terminal_record_digest = 5;
-  string parent_descriptor_digest = 6;
-  string decision_authority_record_digest = 7;
-  string reconciliation_authority_digest = 8;
-  repeated PrivateOramMutationOwnerTerminalIndex indexes = 9;
-  string terminal_evidence_digest = 10;
+  // Canonical JSON encodings of the terminal evidence and its peer-identity signature.
+  bytes terminal_canonical_json = 1;
+  bytes public_key_canonical_json = 2;
+  bytes signature_canonical_json = 3;
+}
+
+message InstallPrivateOramOwnerRecoveryCapsuleV2Request {
+  // Canonical JSON encoding of qdrant_sec::PrivateOramOwnerCapsuleInstallRequestV2.
+  bytes install_request_canonical_json = 1;
+  // Exact bounded canonical JSON encoding of the inert storage capsule package.
+  bytes capsule_package_canonical_json = 2;
+  // Coordinator peer identity and signature over request plus package digest/length.
+  bytes coordinator_public_key_canonical_json = 3;
+  bytes coordinator_signature_canonical_json = 4;
+}
+
+message InstallPrivateOramOwnerRecoveryCapsuleV2Response {
+  // Exact canonical storage receipt and owner-signed transport response statement.
+  bytes receipt_canonical_json = 1;
+  bytes install_response_canonical_json = 2;
+  bytes owner_public_key_canonical_json = 3;
+  bytes owner_signature_canonical_json = 4;
+  // Canonical transport-independent owner signature retained in Raft readiness state.
+  bytes owner_install_attestation_canonical_json = 5;
+}
+
+message PrestagePrivateOramMutationOwnerV2Request {
+  // Canonical JSON encoding of qdrant_sec::PrivateOramOwnerPrestageRequestV2.
+  bytes prestage_request_canonical_json = 1;
+  // Exact bounded canonical JSON encoding of the inert owner package.
+  bytes prestage_package_canonical_json = 2;
+  // Coordinator peer identity and signature over request plus package digest/length.
+  bytes coordinator_public_key_canonical_json = 3;
+  bytes coordinator_signature_canonical_json = 4;
+  // Exact committed V3 reservation challenge authorizing this owner pre-stage.
+  bytes reservation_challenge_canonical_json = 5;
+}
+
+message PrestagePrivateOramMutationOwnerV2Response {
+  bytes receipt_canonical_json = 1;
+  bytes prestage_response_canonical_json = 2;
+  bytes owner_public_key_canonical_json = 3;
+  bytes owner_signature_canonical_json = 4;
+  // Transport-independent owner signature retained in the all-owner admission certificate.
+  bytes owner_prestage_attestation_canonical_json = 5;
+  // Owner-signed proof that the finalized reservation was consumed by this durable install.
+  bytes reservation_resolution_receipt_canonical_json = 6;
+}
+
+message AdoptPrivateOramMutationOwnerV2Request {
+  // Canonical JSON encoding of qdrant_sec::PrivateOramOwnerAdoptionRequestV1.
+  bytes adoption_request_canonical_json = 1;
+  // Canonical JSON encoding of collection::PrivateOramOwnerPrepareParentV2.
+  bytes parent_canonical_json = 2;
+  bytes coordinator_public_key_canonical_json = 3;
+  bytes coordinator_signature_canonical_json = 4;
+}
+
+message AdoptPrivateOramMutationOwnerV2Response {
+  // Canonical JSON encoding of collection::PrivateOramOwnerPreparedEvidenceV2.
+  bytes evidence_canonical_json = 1;
+  // Canonical JSON encoding of qdrant_sec::PrivateOramOwnerAdoptionResponseV1.
+  bytes adoption_response_canonical_json = 2;
+  bytes owner_public_key_canonical_json = 3;
+  bytes owner_signature_canonical_json = 4;
+}
+
+message PreparePrivateOramMutationOwnerReservationV3Request {
+  string collection_name = 1;
+  string vector_name = 2;
+  // Exact canonical JSON for qdrant_sec::PrivateOramOwnerReservationPrepareChallengeV1.
+  bytes challenge_canonical_json = 3;
+  // Pinned owner signing key used to resolve the vector-local HNSW owner context.
+  string owner_signing_key_id = 4;
+}
+
+message PreparePrivateOramMutationOwnerReservationV3Response {
+  // Exact canonical JSON for qdrant_sec::PrivateOramOwnerReservationPrepareV1.
+  bytes prepare_canonical_json = 1;
+  // Exact canonical JSON for the owner's PrivateOramPeerRecoveryPublicKeyV1.
+  bytes owner_public_key_canonical_json = 2;
+}
+
+message ResolvePrivateOramMutationOwnerReservationV3Request {
+  string collection_name = 1;
+  string vector_name = 2;
+  // Pinned owner signing key used to resolve the vector-local HNSW owner context.
+  string owner_signing_key_id = 3;
+  // Exact canonical JSON for qdrant_sec::PrivateOramOwnerReservationPrepareChallengeV1.
+  bytes challenge_canonical_json = 4;
+  // Reconstruct a durable finalized completion. An installed owner returns installed evidence;
+  // an uninstalled owner releases only when the same attempt has committed PrestageAborted.
+  bool recover_completion = 5;
+}
+
+message ResolvePrivateOramMutationOwnerReservationV3Response {
+  // True only when the exact durable reservation fence was resolved.
+  bool resolved = 1;
+  // Exact canonical JSON for qdrant_sec::SignedPrivateOramOwnerReservationResolutionReceiptV1.
+  bytes resolution_receipt_canonical_json = 2;
 }
 
 message PrivateHnswInitialReplicationBundle {

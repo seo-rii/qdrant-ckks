@@ -41,6 +41,7 @@ use tonic::{Request, Response, Status};
 use crate::common::auth::AuthKeys;
 use crate::common::helpers;
 use crate::common::http_client::HttpClient;
+use crate::common::private_oram_peer_identity::PrivateOramPeerRecoveryIdentity;
 use crate::common::telemetry::TelemetryCollector;
 use crate::common::telemetry_ops::requests_telemetry::TonicTelemetryCollector;
 use crate::settings::Settings;
@@ -286,6 +287,7 @@ pub fn init_internal(
     telemetry_collector: Arc<tokio::sync::Mutex<TelemetryCollector>>,
     tonic_telemetry_collector: Arc<parking_lot::Mutex<TonicTelemetryCollector>>,
     settings: Settings,
+    private_oram_peer_identity: Option<Arc<PrivateOramPeerRecoveryIdentity>>,
     host: String,
     internal_grpc_port: u16,
     tls_config: Option<ServerTlsConfig>,
@@ -314,6 +316,7 @@ pub fn init_internal(
             settings.clone(),
             consensus_state.clone(),
             toc.clone(),
+            private_oram_peer_identity,
         );
         let qdrant_internal_max_decoding_message_size =
             private_oram_grpc_max_decoding_message_size(settings.service.max_request_size_mb);

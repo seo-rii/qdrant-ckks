@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -8,18 +8,26 @@ use api::grpc::private_oram_chunking::{
 };
 use api::grpc::qdrant_internal_server::QdrantInternal;
 use api::grpc::{
+    AdoptPrivateOramMutationOwnerV2Request, AdoptPrivateOramMutationOwnerV2Response,
     CompletePrivateOramWritebackRequest, CompletePrivateOramWritebackResponse, GetAuditLogRequest,
     GetAuditLogResponse, GetConsensusCommitRequest, GetConsensusCommitResponse,
     GetTelemetryRequest, GetTelemetryResponse, InstallPrivateOramIndexRequest,
     InstallPrivateOramIndexResponse, InstallPrivateOramLiveReplicaRequest,
-    InstallPrivateOramLiveReplicaResponse, PeerTelemetry, PreparePrivateOramWritebackRequest,
-    PreparePrivateOramWritebackResponse, PrivateOramInstallChunk, PrivateOramReplicationEpochState,
-    PrivateOramReplicationIndexKind, PrivateOramReplicationTransition,
-    RecoverPrivateOramMutationOwnerRequest, RecoverPrivateOramMutationOwnerResponse,
-    RequestPrivateOramReshardingResumeRequest, RequestPrivateOramReshardingResumeResponse,
-    RequestPrivateOramShardRecoveryRequest, RequestPrivateOramShardRecoveryResponse,
-    WaitOnConsensusCommitRequest, WaitOnConsensusCommitResponse,
-    install_private_oram_index_request, install_private_oram_live_replica_request,
+    InstallPrivateOramLiveReplicaResponse, InstallPrivateOramOwnerRecoveryCapsuleV2Request,
+    InstallPrivateOramOwnerRecoveryCapsuleV2Response, PeerTelemetry,
+    PreparePrivateOramMutationOwnerReservationV3Request,
+    PreparePrivateOramMutationOwnerReservationV3Response, PreparePrivateOramWritebackRequest,
+    PreparePrivateOramWritebackResponse, PrestagePrivateOramMutationOwnerV2Request,
+    PrestagePrivateOramMutationOwnerV2Response, PrivateOramInstallChunk,
+    PrivateOramMutationActivationChallengeRequest, PrivateOramMutationActivationChallengeResponse,
+    PrivateOramReplicationEpochState, PrivateOramReplicationIndexKind,
+    PrivateOramReplicationTransition, RecoverPrivateOramMutationOwnerRequest,
+    RecoverPrivateOramMutationOwnerResponse, RequestPrivateOramReshardingResumeRequest,
+    RequestPrivateOramReshardingResumeResponse, RequestPrivateOramShardRecoveryRequest,
+    RequestPrivateOramShardRecoveryResponse, ResolvePrivateOramMutationOwnerReservationV3Request,
+    ResolvePrivateOramMutationOwnerReservationV3Response, WaitOnConsensusCommitRequest,
+    WaitOnConsensusCommitResponse, install_private_oram_index_request,
+    install_private_oram_live_replica_request,
 };
 use chrono::DateTime;
 use collection::config::{CollectionConfigInternal, ShardingMethod};
@@ -43,15 +51,44 @@ use collection::shards::transfer::{
     PrivateOramTransferIndexKind, PrivateOramTransferIndexState, PrivateOramTransferLayoutState,
     PrivateOramTransferLayoutTransition, ShardTransfer, ShardTransferMethod, ShardTransferRestart,
 };
+use collection::{
+    decode_private_oram_owner_prepare_parent_v2, encode_private_oram_owner_prepared_evidence_v2,
+    encode_private_oram_owner_prestage_receipt_v2,
+};
 use common::types::{DetailsLevel, TelemetryDetail};
 use data_encoding::BASE64URL_NOPAD;
 use futures::{Stream, StreamExt};
 use prost::Message;
 use qdrant_sec::{
-    PrivateHnswOramBucket, PrivateHnswOramSignature, PrivateHnswOramUploadBundle,
-    PrivateResultOramBucket, PrivateResultOramSignature, PrivateResultOramUploadBundle,
-    ResultPrivacyMode,
+    PRIVATE_ORAM_OWNER_ADOPTION_PROTOCOL_VERSION_V1,
+    PRIVATE_ORAM_OWNER_CAPSULE_ATTESTATION_MAX_CANONICAL_BYTES_V2,
+    PRIVATE_ORAM_OWNER_CAPSULE_MAX_CANONICAL_BYTES_V2,
+    PRIVATE_ORAM_OWNER_CAPSULE_RECEIPT_MAX_CANONICAL_BYTES_V2,
+    PRIVATE_ORAM_OWNER_PRESTAGE_ATTESTATION_MAX_CANONICAL_BYTES_V2,
+    PRIVATE_ORAM_OWNER_PRESTAGE_MAX_CANONICAL_BYTES_V2,
+    PRIVATE_ORAM_OWNER_PRESTAGE_RECEIPT_MAX_CANONICAL_BYTES_V2, PrivateHnswOramBucket,
+    PrivateHnswOramSignature, PrivateHnswOramUploadBundle, PrivateOramOwnerAdoptionRequestV1,
+    PrivateOramOwnerAdoptionResponseV1, PrivateOramOwnerCapsuleInstallRequestV2,
+    PrivateOramOwnerCapsuleInstallResponseV2, PrivateOramOwnerPrestageRequestV2,
+    PrivateOramOwnerPrestageResponseV2, PrivateOramOwnerReservationPrepareChallengeV1,
+    PrivateOramPeerActivationChallengeV1, PrivateOramPeerRecoveryPublicKeyV1,
+    PrivateOramPeerRecoveryRequestV2, PrivateOramPeerRecoverySignatureV2, PrivateResultOramBucket,
+    PrivateResultOramSignature, PrivateResultOramUploadBundle, ResultPrivacyMode,
+    decode_private_oram_owner_prestage_package_v2,
+    encode_private_oram_owner_capsule_install_attestation_v2,
+    encode_private_oram_owner_prestage_attestation_v2,
+    encode_private_oram_owner_reservation_prepare_v1,
+    encode_signed_private_oram_owner_reservation_resolution_receipt_v1,
+    private_oram_owner_capsule_install_attestation_statement_v2,
+    private_oram_owner_capsule_install_response_v2,
+    private_oram_owner_prestage_attestation_statement_v2, private_oram_owner_prestage_response_v2,
+    validate_private_oram_owner_adoption_request_signature_v1,
+    validate_private_oram_owner_capsule_install_request_signature_v2,
+    validate_private_oram_owner_prestage_request_signature_v2,
+    validate_private_oram_peer_recovery_request_v2_shape,
 };
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use storage::audit::AuditConfig;
 use storage::audit_reader::{AuditLogQuery, read_local_audit_logs};
@@ -67,6 +104,7 @@ use storage::content_manager::consensus_ops::{
     private_oram_index_keys_for_config, private_oram_layout_is_precommitted_transfer_recovery,
 };
 use storage::content_manager::errors::StorageError;
+use storage::content_manager::private_oram_mutation_journal::encode_private_oram_owner_recovery_capsule_install_receipt_v2;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::{
     Dispatcher, PrivateOramEpochRef, PrivateOramPendingTransitionRef, PrivateOramRecoveryAction,
@@ -81,8 +119,11 @@ use uuid::Uuid;
 use crate::common::collections::{
     do_update_collection_cluster, submit_restart_transfer_with_private_oram_preinstall,
 };
+use crate::common::private_oram_peer_identity::PrivateOramPeerRecoveryIdentity;
 use crate::common::telemetry::TelemetryCollector;
-use crate::common::{private_hnsw, private_result_oram};
+use crate::common::{
+    private_hnsw, private_oram_mutation, private_oram_recovery, private_result_oram,
+};
 use crate::settings::Settings;
 use crate::tonic::api::{private_hnsw_api, private_result_oram_api};
 
@@ -99,6 +140,104 @@ fn private_oram_install_chunk_status(error: PrivateOramInstallChunkError) -> Sta
 const PRIVATE_ORAM_INSTALL_STREAM_CONCURRENCY: usize = 1;
 const PRIVATE_ORAM_INSTALL_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const PRIVATE_ORAM_ACTIVATION_ACK_MAX_JSON_BYTES: usize = 64 * 1024;
+const PRIVATE_ORAM_ACTIVATION_ACK_CACHE_MAX_ENTRIES: usize = 4096;
+const PRIVATE_ORAM_ACTIVATION_ACK_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES: usize = 64 * 1024;
+const PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_MAX_JSON_BYTES: usize = 128 * 1024;
+
+fn decode_canonical_private_oram_owner_recovery_json<T>(encoded: &[u8]) -> Result<T, Status>
+where
+    T: DeserializeOwned + Serialize,
+{
+    if encoded.is_empty() || encoded.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES {
+        return Err(Status::resource_exhausted(
+            "private ORAM owner recovery payload is oversized",
+        ));
+    }
+    let decoded = serde_json::from_slice(encoded)
+        .map_err(|_| Status::invalid_argument("private ORAM owner recovery payload is invalid"))?;
+    if serde_json::to_vec(&decoded)
+        .map_err(|_| Status::invalid_argument("private ORAM owner recovery payload is invalid"))?
+        != encoded
+    {
+        return Err(Status::invalid_argument(
+            "private ORAM owner recovery payload is not canonical JSON",
+        ));
+    }
+    Ok(decoded)
+}
+
+struct PrivateOramActivationAckCacheEntry {
+    challenge_digest: [u8; 32],
+    signed_ack_canonical_json: Vec<u8>,
+    expires_at: Instant,
+}
+
+#[derive(Default)]
+struct PrivateOramActivationAckCache {
+    entries: HashMap<String, PrivateOramActivationAckCacheEntry>,
+    order: VecDeque<String>,
+}
+
+impl PrivateOramActivationAckCache {
+    fn lookup(
+        &mut self,
+        nonce: &str,
+        challenge_digest: [u8; 32],
+        now: Instant,
+    ) -> Result<Option<Vec<u8>>, Status> {
+        self.prune(now);
+        let Some(entry) = self.entries.get(nonce) else {
+            return Ok(None);
+        };
+        if entry.challenge_digest != challenge_digest {
+            return Err(Status::invalid_argument(
+                "private ORAM activation challenge nonce was reused",
+            ));
+        }
+        Ok(Some(entry.signed_ack_canonical_json.clone()))
+    }
+
+    fn insert(
+        &mut self,
+        nonce: String,
+        challenge_digest: [u8; 32],
+        signed_ack_canonical_json: Vec<u8>,
+        now: Instant,
+    ) {
+        self.prune(now);
+        while self.entries.len() >= PRIVATE_ORAM_ACTIVATION_ACK_CACHE_MAX_ENTRIES {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+        self.order.push_back(nonce.clone());
+        self.entries.insert(
+            nonce,
+            PrivateOramActivationAckCacheEntry {
+                challenge_digest,
+                signed_ack_canonical_json,
+                expires_at: now + PRIVATE_ORAM_ACTIVATION_ACK_CACHE_TTL,
+            },
+        );
+    }
+
+    fn prune(&mut self, now: Instant) {
+        while let Some(nonce) = self.order.front() {
+            let expired = self
+                .entries
+                .get(nonce)
+                .is_none_or(|entry| entry.expires_at <= now);
+            if !expired {
+                break;
+            }
+            let nonce = self.order.pop_front().expect("front was present");
+            self.entries.remove(&nonce);
+        }
+    }
+}
 
 #[cfg(feature = "staging")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -301,6 +440,8 @@ pub struct QdrantInternalService {
     /// Audit configuration
     audit_config: Option<AuditConfig>,
     toc: Arc<TableOfContent>,
+    private_oram_peer_identity: Option<Arc<PrivateOramPeerRecoveryIdentity>>,
+    private_oram_activation_ack_cache: Mutex<PrivateOramActivationAckCache>,
     private_oram_replication_lock: Mutex<()>,
     private_oram_install_stream_slots: Semaphore,
 }
@@ -311,6 +452,7 @@ impl QdrantInternalService {
         settings: Settings,
         consensus_state: ConsensusStateRef,
         toc: Arc<TableOfContent>,
+        private_oram_peer_identity: Option<Arc<PrivateOramPeerRecoveryIdentity>>,
     ) -> Self {
         let audit_config = settings.audit.clone();
         Self {
@@ -319,6 +461,8 @@ impl QdrantInternalService {
             consensus_state,
             audit_config,
             toc,
+            private_oram_peer_identity,
+            private_oram_activation_ack_cache: Mutex::new(Default::default()),
             private_oram_replication_lock: Mutex::new(()),
             private_oram_install_stream_slots: Semaphore::new(
                 PRIVATE_ORAM_INSTALL_STREAM_CONCURRENCY,
@@ -3083,6 +3227,106 @@ impl QdrantInternal for QdrantInternalService {
         Ok(Response::new(GetAuditLogResponse { entries }))
     }
 
+    async fn acknowledge_private_oram_mutation_activation(
+        &self,
+        request: Request<PrivateOramMutationActivationChallengeRequest>,
+    ) -> Result<Response<PrivateOramMutationActivationChallengeResponse>, Status> {
+        let identity = self.private_oram_peer_identity.as_ref().ok_or_else(|| {
+            Status::failed_precondition("private ORAM mutation V2 activation is not configured")
+        })?;
+        let challenge_canonical_json = request.into_inner().challenge_canonical_json;
+        if challenge_canonical_json.is_empty()
+            || challenge_canonical_json.len() > PRIVATE_ORAM_ACTIVATION_ACK_MAX_JSON_BYTES
+        {
+            return Err(Status::resource_exhausted(
+                "private ORAM activation challenge is oversized",
+            ));
+        }
+        let challenge: PrivateOramPeerActivationChallengeV1 =
+            serde_json::from_slice(&challenge_canonical_json).map_err(|_| {
+                Status::invalid_argument("private ORAM activation challenge is invalid")
+            })?;
+        if serde_json::to_vec(&challenge)
+            .map_err(|_| Status::invalid_argument("private ORAM activation challenge is invalid"))?
+            != challenge_canonical_json
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM activation challenge is not canonical JSON",
+            ));
+        }
+
+        let challenge_digest: [u8; 32] = Sha256::digest(&challenge_canonical_json).into();
+        let mut cache = self.private_oram_activation_ack_cache.lock().await;
+        let now = Instant::now();
+        if let Some(cached) = cache.lookup(&challenge.challenge_nonce, challenge_digest, now)? {
+            return Ok(Response::new(
+                PrivateOramMutationActivationChallengeResponse {
+                    signed_ack_canonical_json: cached,
+                },
+            ));
+        }
+
+        let v2_binary_capability_digest =
+            crate::common::crypto::private_oram_mutation_v2_binary_capability_digest();
+        let v3_binary_capability_digest =
+            crate::common::crypto::private_oram_mutation_v3_binary_capability_digest();
+        let binary_capability_digest = match challenge.protocol_version {
+            qdrant_sec::PRIVATE_ORAM_PEER_ACTIVATION_PROTOCOL_VERSION_V1
+                if challenge.required_binary_capability_digest == v2_binary_capability_digest =>
+            {
+                v2_binary_capability_digest
+            }
+            qdrant_sec::PRIVATE_ORAM_PEER_ACTIVATION_PROTOCOL_VERSION_V2
+                if challenge.required_binary_capability_digest == v3_binary_capability_digest =>
+            {
+                v3_binary_capability_digest
+            }
+            _ => {
+                return Err(Status::failed_precondition(
+                    "private ORAM activation protocol and binary capability do not match",
+                ));
+            }
+        };
+        let runtime_capability_fingerprint =
+            crate::common::crypto::crypto_runtime_capability_fingerprint(&self.settings);
+        let (observation, expected_signer) = self
+            .consensus_state
+            .private_oram_peer_activation_observation(
+                &challenge,
+                identity.process_incarnation(),
+                env!("CARGO_PKG_VERSION"),
+                &binary_capability_digest,
+                &runtime_capability_fingerprint,
+            )
+            .map_err(Status::from)?;
+        if identity.public_key() != &expected_signer {
+            return Err(Status::failed_precondition(
+                "private ORAM activation peer identity does not match authority pin",
+            ));
+        }
+        let signed_ack = identity
+            .sign_activation_ack(&challenge, observation)
+            .map_err(|_| Status::internal("private ORAM activation acknowledgement failed"))?;
+        let signed_ack_canonical_json = serde_json::to_vec(&signed_ack)
+            .map_err(|_| Status::internal("private ORAM activation acknowledgement failed"))?;
+        if signed_ack_canonical_json.len() > PRIVATE_ORAM_ACTIVATION_ACK_MAX_JSON_BYTES {
+            return Err(Status::internal(
+                "private ORAM activation acknowledgement is oversized",
+            ));
+        }
+        cache.insert(
+            challenge.challenge_nonce,
+            challenge_digest,
+            signed_ack_canonical_json.clone(),
+            now,
+        );
+        Ok(Response::new(
+            PrivateOramMutationActivationChallengeResponse {
+                signed_ack_canonical_json,
+            },
+        ))
+    }
+
     async fn prepare_private_oram_writeback(
         &self,
         request: Request<PreparePrivateOramWritebackRequest>,
@@ -3248,33 +3492,904 @@ impl QdrantInternal for QdrantInternalService {
         &self,
         request: Request<RecoverPrivateOramMutationOwnerRequest>,
     ) -> Result<Response<RecoverPrivateOramMutationOwnerResponse>, Status> {
-        let request = request.into_inner();
-        if request.collection_name.is_empty()
-            || request.collection_name.len() > 255
-            || request.collection_id.is_empty()
-            || request.collection_id.len() > 255
-            || request.mutation_id.is_empty()
-            || request.mutation_id.len() > 255
-            || request.parent_descriptor_digest.len() != 43
-            || request.decision_record_digest.len() != 43
-            || request.vector_name.is_empty()
-            || request.vector_name.len() > 255
-            || request.signing_key_id.is_empty()
-            || request.signing_key_id.len() > 256
-        {
-            return Err(Status::invalid_argument(
-                "private ORAM owner recovery request shape is invalid",
-            ));
-        }
+        let identity = self.private_oram_peer_identity.as_ref().ok_or_else(|| {
+            Status::failed_precondition("private ORAM mutation V2 is not configured")
+        })?;
+        let request: PrivateOramPeerRecoveryRequestV2 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &request.into_inner().request_canonical_json,
+            )?;
+        validate_private_oram_peer_recovery_request_v2_shape(&request).map_err(|_| {
+            Status::invalid_argument("private ORAM owner recovery request shape is invalid")
+        })?;
         if request.owner_peer_id != self.toc.this_peer_id
+            || identity.peer_id() != self.toc.this_peer_id
             || request.coordinator_peer_id == request.owner_peer_id
         {
             return Err(Status::invalid_argument(
                 "private ORAM owner recovery target peer is invalid",
             ));
         }
-        Err(Status::failed_precondition(
-            "private ORAM paired owner recovery is not activated",
+        let signer_pair = self
+            .consensus_state
+            .private_oram_peer_recovery_signer_pair_pin(
+                request.owner_peer_id,
+                request.coordinator_peer_id,
+            )
+            .map_err(Status::from)?;
+        if identity.public_key() != signer_pair.owner().signer()
+            || signer_pair.owner().registry_generation()
+                != signer_pair.coordinator().registry_generation()
+            || signer_pair.owner().manifest_digest() != signer_pair.coordinator().manifest_digest()
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM owner recovery peer identity does not match authority pin",
+            ));
+        }
+        let terminal = private_oram_recovery::do_recover_private_oram_mutation_owner_v2(
+            &self.toc,
+            &self.settings,
+            &self.consensus_state,
+            &request,
+        )
+        .await
+        .map_err(Status::from)?;
+        let signer_pair_after = self
+            .consensus_state
+            .private_oram_peer_recovery_signer_pair_pin(
+                request.owner_peer_id,
+                request.coordinator_peer_id,
+            )
+            .map_err(Status::from)?;
+        if signer_pair_after != signer_pair
+            || identity.public_key() != signer_pair_after.owner().signer()
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM owner recovery authority changed during recovery",
+            ));
+        }
+        let signature = identity
+            .sign_response(&request, &terminal)
+            .map_err(|_| Status::internal("private ORAM owner recovery response signing failed"))?;
+        let terminal_canonical_json = serde_json::to_vec(&terminal).map_err(|_| {
+            Status::internal("private ORAM owner recovery response encoding failed")
+        })?;
+        let public_key_canonical_json =
+            serde_json::to_vec(identity.public_key()).map_err(|_| {
+                Status::internal("private ORAM owner recovery response encoding failed")
+            })?;
+        let signature_canonical_json = serde_json::to_vec(&signature).map_err(|_| {
+            Status::internal("private ORAM owner recovery response encoding failed")
+        })?;
+        let response_bytes = terminal_canonical_json
+            .len()
+            .checked_add(public_key_canonical_json.len())
+            .and_then(|size| size.checked_add(signature_canonical_json.len()))
+            .ok_or_else(|| Status::internal("private ORAM owner recovery response is oversized"))?;
+        if terminal_canonical_json.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES
+            || public_key_canonical_json.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES
+            || signature_canonical_json.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES
+            || response_bytes > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES
+        {
+            return Err(Status::internal(
+                "private ORAM owner recovery response is oversized",
+            ));
+        }
+        Ok(Response::new(RecoverPrivateOramMutationOwnerResponse {
+            terminal_canonical_json,
+            public_key_canonical_json,
+            signature_canonical_json,
+        }))
+    }
+
+    async fn install_private_oram_owner_recovery_capsule_v2(
+        &self,
+        request: Request<tonic::Streaming<PrivateOramInstallChunk>>,
+    ) -> Result<Response<InstallPrivateOramOwnerRecoveryCapsuleV2Response>, Status> {
+        let identity = self.private_oram_peer_identity.as_ref().ok_or_else(|| {
+            Status::failed_precondition("private ORAM mutation V2 is not configured")
+        })?;
+        let _stream_slot = timeout(
+            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+            self.private_oram_install_stream_slots.acquire(),
+        )
+        .await
+        .map_err(|_| Status::deadline_exceeded("private ORAM install stream wait timed out"))?
+        .map_err(|_| Status::unavailable("private ORAM install stream is unavailable"))?;
+        let wire: InstallPrivateOramOwnerRecoveryCapsuleV2Request =
+            decode_private_oram_install_stream(
+                request.into_inner(),
+                PRIVATE_ORAM_INSTALL_STREAM_IDLE_TIMEOUT,
+                PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+            )
+            .await?;
+        if wire.capsule_package_canonical_json.is_empty()
+            || wire.capsule_package_canonical_json.len()
+                > PRIVATE_ORAM_OWNER_CAPSULE_MAX_CANONICAL_BYTES_V2
+        {
+            return Err(Status::resource_exhausted(
+                "private ORAM owner capsule install package is oversized",
+            ));
+        }
+        let install_request: PrivateOramOwnerCapsuleInstallRequestV2 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.install_request_canonical_json,
+            )?;
+        let coordinator_public_key: PrivateOramPeerRecoveryPublicKeyV1 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.coordinator_public_key_canonical_json,
+            )?;
+        let coordinator_signature: PrivateOramPeerRecoverySignatureV2 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.coordinator_signature_canonical_json,
+            )?;
+        if install_request.owner_peer_id != self.toc.this_peer_id
+            || identity.peer_id() != self.toc.this_peer_id
+            || install_request.coordinator_peer_id == install_request.owner_peer_id
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM owner capsule install target peer is invalid",
+            ));
+        }
+        let signer_pair = self
+            .consensus_state
+            .private_oram_peer_recovery_signer_pair_pin(
+                install_request.owner_peer_id,
+                install_request.coordinator_peer_id,
+            )
+            .map_err(Status::from)?;
+        if identity.public_key() != signer_pair.owner().signer()
+            || &coordinator_public_key != signer_pair.coordinator().signer()
+            || signer_pair.owner().registry_generation()
+                != install_request.activation_registry_generation
+            || signer_pair.coordinator().registry_generation()
+                != install_request.activation_registry_generation
+            || signer_pair.owner().manifest_digest() != install_request.activation_manifest_digest
+            || signer_pair.coordinator().manifest_digest()
+                != install_request.activation_manifest_digest
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM owner capsule install identity does not match authority pin",
+            ));
+        }
+        let _verified_request = validate_private_oram_owner_capsule_install_request_signature_v2(
+            &coordinator_public_key,
+            &install_request,
+            &wire.capsule_package_canonical_json,
+            &coordinator_signature,
+        )
+        .map_err(|_| {
+            Status::invalid_argument(
+                "private ORAM owner capsule install request authentication failed",
+            )
+        })?;
+
+        let _replication_lock = self.private_oram_replication_lock.lock().await;
+        let receipt = private_oram_recovery::do_install_private_oram_owner_recovery_capsule_v2(
+            &self.toc,
+            &self.settings,
+            &self.consensus_state,
+            &install_request,
+            &wire.capsule_package_canonical_json,
+        )
+        .await
+        .map_err(Status::from)?;
+        let signer_pair_after = self
+            .consensus_state
+            .private_oram_peer_recovery_signer_pair_pin(
+                install_request.owner_peer_id,
+                install_request.coordinator_peer_id,
+            )
+            .map_err(Status::from)?;
+        if signer_pair_after != signer_pair
+            || identity.public_key() != signer_pair_after.owner().signer()
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM owner capsule install authority changed during installation",
+            ));
+        }
+        let receipt_canonical_json = encode_private_oram_owner_recovery_capsule_install_receipt_v2(
+            &receipt,
+        )
+        .map_err(|_| Status::internal("private ORAM owner capsule receipt encoding failed"))?;
+        let install_response: PrivateOramOwnerCapsuleInstallResponseV2 =
+            private_oram_owner_capsule_install_response_v2(
+                &install_request,
+                &receipt_canonical_json,
+                receipt.receipt_digest().to_string(),
+            )
+            .map_err(|_| Status::internal("private ORAM owner capsule response failed"))?;
+        let owner_signature = identity
+            .sign_owner_capsule_install_response(
+                &install_request,
+                &install_response,
+                &receipt_canonical_json,
+            )
+            .map_err(|_| Status::internal("private ORAM owner capsule response signing failed"))?;
+        let attestation_statement = private_oram_owner_capsule_install_attestation_statement_v2(
+            &install_request,
+            &receipt_canonical_json,
+            receipt.receipt_digest().to_string(),
+        )
+        .map_err(|_| Status::internal("private ORAM owner capsule attestation failed"))?;
+        let owner_install_attestation = identity
+            .sign_owner_capsule_install_attestation(&attestation_statement)
+            .map_err(|_| {
+                Status::internal("private ORAM owner capsule attestation signing failed")
+            })?;
+        let owner_install_attestation_canonical_json =
+            encode_private_oram_owner_capsule_install_attestation_v2(&owner_install_attestation)
+                .map_err(|_| {
+                    Status::internal("private ORAM owner capsule attestation encoding failed")
+                })?;
+        let install_response_canonical_json = serde_json::to_vec(&install_response)
+            .map_err(|_| Status::internal("private ORAM owner capsule response encoding failed"))?;
+        let owner_public_key_canonical_json = serde_json::to_vec(identity.public_key())
+            .map_err(|_| Status::internal("private ORAM owner capsule response encoding failed"))?;
+        let owner_signature_canonical_json = serde_json::to_vec(&owner_signature)
+            .map_err(|_| Status::internal("private ORAM owner capsule response encoding failed"))?;
+        let total_response_bytes = receipt_canonical_json
+            .len()
+            .checked_add(install_response_canonical_json.len())
+            .and_then(|length| length.checked_add(owner_public_key_canonical_json.len()))
+            .and_then(|length| length.checked_add(owner_signature_canonical_json.len()))
+            .and_then(|length| length.checked_add(owner_install_attestation_canonical_json.len()))
+            .ok_or_else(|| Status::internal("private ORAM owner capsule response is oversized"))?;
+        if receipt_canonical_json.len() > PRIVATE_ORAM_OWNER_CAPSULE_RECEIPT_MAX_CANONICAL_BYTES_V2
+            || install_response_canonical_json.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES
+            || owner_public_key_canonical_json.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES
+            || owner_signature_canonical_json.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES
+            || owner_install_attestation_canonical_json.len()
+                > PRIVATE_ORAM_OWNER_CAPSULE_ATTESTATION_MAX_CANONICAL_BYTES_V2
+            || total_response_bytes > PRIVATE_ORAM_OWNER_CAPSULE_RECEIPT_MAX_CANONICAL_BYTES_V2 * 5
+        {
+            return Err(Status::internal(
+                "private ORAM owner capsule response is oversized",
+            ));
+        }
+        Ok(Response::new(
+            InstallPrivateOramOwnerRecoveryCapsuleV2Response {
+                receipt_canonical_json,
+                install_response_canonical_json,
+                owner_public_key_canonical_json,
+                owner_signature_canonical_json,
+                owner_install_attestation_canonical_json,
+            },
+        ))
+    }
+
+    async fn prestage_private_oram_mutation_owner_v2(
+        &self,
+        request: Request<tonic::Streaming<PrivateOramInstallChunk>>,
+    ) -> Result<Response<PrestagePrivateOramMutationOwnerV2Response>, Status> {
+        let identity = self.private_oram_peer_identity.as_ref().ok_or_else(|| {
+            Status::failed_precondition("private ORAM mutation V2 is not configured")
+        })?;
+        let _stream_slot = timeout(
+            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+            self.private_oram_install_stream_slots.acquire(),
+        )
+        .await
+        .map_err(|_| Status::deadline_exceeded("private ORAM install stream wait timed out"))?
+        .map_err(|_| Status::unavailable("private ORAM install stream is unavailable"))?;
+        let wire: PrestagePrivateOramMutationOwnerV2Request = decode_private_oram_install_stream(
+            request.into_inner(),
+            PRIVATE_ORAM_INSTALL_STREAM_IDLE_TIMEOUT,
+            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+        )
+        .await?;
+        if wire.prestage_package_canonical_json.is_empty()
+            || wire.prestage_package_canonical_json.len()
+                > PRIVATE_ORAM_OWNER_PRESTAGE_MAX_CANONICAL_BYTES_V2
+            || wire.reservation_challenge_canonical_json.is_empty()
+            || wire.reservation_challenge_canonical_json.len()
+                > PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_MAX_JSON_BYTES
+        {
+            return Err(Status::resource_exhausted(
+                "private ORAM owner pre-stage package is oversized",
+            ));
+        }
+        let prestage_request: PrivateOramOwnerPrestageRequestV2 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.prestage_request_canonical_json,
+            )?;
+        let reservation_challenge: PrivateOramOwnerReservationPrepareChallengeV1 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.reservation_challenge_canonical_json,
+            )?;
+        let prestage_package =
+            decode_private_oram_owner_prestage_package_v2(&wire.prestage_package_canonical_json)
+                .map_err(|_| {
+                    Status::invalid_argument("private ORAM owner pre-stage package is invalid")
+                })?;
+        let coordinator_public_key: PrivateOramPeerRecoveryPublicKeyV1 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.coordinator_public_key_canonical_json,
+            )?;
+        let coordinator_signature: PrivateOramPeerRecoverySignatureV2 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.coordinator_signature_canonical_json,
+            )?;
+        if prestage_request.owner_peer_id != self.toc.this_peer_id
+            || identity.peer_id() != self.toc.this_peer_id
+            || prestage_request.coordinator_peer_id == prestage_request.owner_peer_id
+            || reservation_challenge.owner_peer_id != prestage_request.owner_peer_id
+            || reservation_challenge.collection_id != prestage_request.collection_id
+            || reservation_challenge.reserved_terminal_intent_key != prestage_request.intent_key
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM owner pre-stage target peer is invalid",
+            ));
+        }
+        let signer_pair = self
+            .consensus_state
+            .private_oram_peer_recovery_signer_pair_pin(
+                prestage_request.owner_peer_id,
+                prestage_request.coordinator_peer_id,
+            )
+            .map_err(Status::from)?;
+        if identity.public_key() != signer_pair.owner().signer()
+            || &coordinator_public_key != signer_pair.coordinator().signer()
+            || signer_pair.owner().registry_generation()
+                != prestage_request.activation_registry_generation
+            || signer_pair.coordinator().registry_generation()
+                != prestage_request.activation_registry_generation
+            || signer_pair.owner().manifest_digest() != prestage_request.activation_manifest_digest
+            || signer_pair.coordinator().manifest_digest()
+                != prestage_request.activation_manifest_digest
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM owner pre-stage identity does not match authority pin",
+            ));
+        }
+        let verified_request = validate_private_oram_owner_prestage_request_signature_v2(
+            &coordinator_public_key,
+            &prestage_request,
+            &wire.prestage_package_canonical_json,
+            &coordinator_signature,
+        )
+        .map_err(|_| {
+            Status::invalid_argument("private ORAM owner pre-stage authentication failed")
+        })?;
+        let disposition = self
+            .consensus_state
+            .private_oram_mutation_v3_reservation_challenge_disposition(
+                &storage::content_manager::consensus_ops::PrivateOramMutationKey {
+                    collection_id: reservation_challenge.collection_id.clone(),
+                },
+                &reservation_challenge,
+            )
+            .map_err(Status::from)?
+            .filter(|disposition| {
+                disposition.kind()
+                    == storage::content_manager::consensus_manager::PrivateOramReservationChallengeDispositionKindV3::Finalized
+            })
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    "private ORAM owner pre-stage reservation is not finalized",
+                )
+            })?;
+        let _replication_lock = self.private_oram_replication_lock.lock().await;
+        private_oram_mutation::resolve_private_oram_owner_reservation_v3(
+            &self.toc,
+            &self.settings,
+            &self.consensus_state,
+            identity,
+            &prestage_package.collection_name,
+            &prestage_package.vector_name,
+            &prestage_package.owner_signing_key_id,
+            &reservation_challenge,
+        )
+        .await
+        .map_err(Status::from)?;
+        let receipt = private_oram_mutation::install_private_oram_owner_prestage_v2(
+            &self.toc,
+            &self.settings,
+            &self.consensus_state,
+            &verified_request,
+            &wire.prestage_package_canonical_json,
+        )
+        .await
+        .map_err(Status::from)?;
+        let reservation_resolution_receipt =
+            private_oram_mutation::confirm_private_oram_owner_installed_reservation_v3(
+                &self.toc,
+                &self.settings,
+                &self.consensus_state,
+                identity,
+                &prestage_package.collection_name,
+                &prestage_package.vector_name,
+                &prestage_package.owner_signing_key_id,
+                &reservation_challenge,
+                &receipt,
+            )
+            .await
+            .map_err(Status::from)?;
+        let signer_pair_after = self
+            .consensus_state
+            .private_oram_peer_recovery_signer_pair_pin(
+                prestage_request.owner_peer_id,
+                prestage_request.coordinator_peer_id,
+            )
+            .map_err(Status::from)?;
+        if signer_pair_after != signer_pair
+            || identity.public_key() != signer_pair_after.owner().signer()
+            || self
+                .consensus_state
+                .private_oram_mutation_v3_reservation_challenge_disposition(
+                    &storage::content_manager::consensus_ops::PrivateOramMutationKey {
+                        collection_id: reservation_challenge.collection_id.clone(),
+                    },
+                    &reservation_challenge,
+                )
+                .map_err(Status::from)?
+                .as_ref()
+                != Some(&disposition)
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM owner pre-stage authority changed during installation",
+            ));
+        }
+        let receipt_canonical_json = encode_private_oram_owner_prestage_receipt_v2(&receipt)
+            .map_err(|_| {
+                Status::internal("private ORAM owner pre-stage receipt encoding failed")
+            })?;
+        let prestage_response: PrivateOramOwnerPrestageResponseV2 =
+            private_oram_owner_prestage_response_v2(
+                &prestage_request,
+                &receipt_canonical_json,
+                receipt.receipt_digest().to_string(),
+            )
+            .map_err(|_| Status::internal("private ORAM owner pre-stage response failed"))?;
+        let owner_signature = identity
+            .sign_owner_prestage_response(
+                &prestage_request,
+                &prestage_response,
+                &receipt_canonical_json,
+            )
+            .map_err(|_| Status::internal("private ORAM owner pre-stage signing failed"))?;
+        let attestation_statement = private_oram_owner_prestage_attestation_statement_v2(
+            &prestage_request,
+            &prestage_response,
+        )
+        .map_err(|_| Status::internal("private ORAM owner pre-stage attestation failed"))?;
+        let owner_attestation = identity
+            .sign_owner_prestage_attestation(&attestation_statement)
+            .map_err(|_| Status::internal("private ORAM owner pre-stage attestation failed"))?;
+        let owner_prestage_attestation_canonical_json =
+            encode_private_oram_owner_prestage_attestation_v2(&owner_attestation).map_err(
+                |_| Status::internal("private ORAM owner pre-stage attestation encoding failed"),
+            )?;
+        let prestage_response_canonical_json =
+            serde_json::to_vec(&prestage_response).map_err(|_| {
+                Status::internal("private ORAM owner pre-stage response encoding failed")
+            })?;
+        let owner_public_key_canonical_json =
+            serde_json::to_vec(identity.public_key()).map_err(|_| {
+                Status::internal("private ORAM owner pre-stage response encoding failed")
+            })?;
+        let owner_signature_canonical_json =
+            serde_json::to_vec(&owner_signature).map_err(|_| {
+                Status::internal("private ORAM owner pre-stage response encoding failed")
+            })?;
+        let reservation_resolution_receipt_canonical_json =
+            encode_signed_private_oram_owner_reservation_resolution_receipt_v1(
+                &reservation_resolution_receipt,
+            )
+            .map_err(|_| {
+                Status::internal(
+                    "private ORAM owner reservation completion receipt encoding failed",
+                )
+            })?;
+        let total = receipt_canonical_json
+            .len()
+            .checked_add(prestage_response_canonical_json.len())
+            .and_then(|length| length.checked_add(owner_public_key_canonical_json.len()))
+            .and_then(|length| length.checked_add(owner_signature_canonical_json.len()))
+            .and_then(|length| length.checked_add(owner_prestage_attestation_canonical_json.len()))
+            .and_then(|length| {
+                length.checked_add(reservation_resolution_receipt_canonical_json.len())
+            })
+            .ok_or_else(|| {
+                Status::internal("private ORAM owner pre-stage response is oversized")
+            })?;
+        if receipt_canonical_json.len() > PRIVATE_ORAM_OWNER_PRESTAGE_RECEIPT_MAX_CANONICAL_BYTES_V2
+            || owner_prestage_attestation_canonical_json.len()
+                > PRIVATE_ORAM_OWNER_PRESTAGE_ATTESTATION_MAX_CANONICAL_BYTES_V2
+            || reservation_resolution_receipt_canonical_json.len()
+                > PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_MAX_JSON_BYTES
+            || total > PRIVATE_ORAM_OWNER_PRESTAGE_RECEIPT_MAX_CANONICAL_BYTES_V2 * 7
+        {
+            return Err(Status::internal(
+                "private ORAM owner pre-stage response is oversized",
+            ));
+        }
+        Ok(Response::new(PrestagePrivateOramMutationOwnerV2Response {
+            receipt_canonical_json,
+            prestage_response_canonical_json,
+            owner_public_key_canonical_json,
+            owner_signature_canonical_json,
+            owner_prestage_attestation_canonical_json,
+            reservation_resolution_receipt_canonical_json,
+        }))
+    }
+
+    async fn adopt_private_oram_mutation_owner_v2(
+        &self,
+        request: Request<AdoptPrivateOramMutationOwnerV2Request>,
+    ) -> Result<Response<AdoptPrivateOramMutationOwnerV2Response>, Status> {
+        let identity = self.private_oram_peer_identity.as_ref().ok_or_else(|| {
+            Status::failed_precondition("private ORAM mutation V2 is not configured")
+        })?;
+        let wire = request.into_inner();
+        for encoded in [
+            &wire.adoption_request_canonical_json,
+            &wire.parent_canonical_json,
+            &wire.coordinator_public_key_canonical_json,
+            &wire.coordinator_signature_canonical_json,
+        ] {
+            if encoded.is_empty() || encoded.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES {
+                return Err(Status::resource_exhausted(
+                    "private ORAM owner adoption request is oversized",
+                ));
+            }
+        }
+        let adoption_request: PrivateOramOwnerAdoptionRequestV1 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.adoption_request_canonical_json,
+            )?;
+        let parent = decode_private_oram_owner_prepare_parent_v2(&wire.parent_canonical_json)
+            .map_err(|_| {
+                Status::invalid_argument("private ORAM owner adoption parent is invalid")
+            })?;
+        let coordinator_public_key: PrivateOramPeerRecoveryPublicKeyV1 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.coordinator_public_key_canonical_json,
+            )?;
+        let coordinator_signature: PrivateOramPeerRecoverySignatureV2 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.coordinator_signature_canonical_json,
+            )?;
+        let parent_len = u64::try_from(wire.parent_canonical_json.len()).map_err(|_| {
+            Status::invalid_argument("private ORAM owner adoption parent is invalid")
+        })?;
+        let parent_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(&wire.parent_canonical_json));
+        if adoption_request.owner_peer_id != self.toc.this_peer_id
+            || identity.peer_id() != self.toc.this_peer_id
+            || adoption_request.coordinator_peer_id == adoption_request.owner_peer_id
+            || adoption_request.parent_canonical_len != parent_len
+            || adoption_request.parent_canonical_sha256 != parent_sha256
+            || parent.owner_peer_id() != adoption_request.owner_peer_id
+            || parent.parent_descriptor_digest() != adoption_request.parent_descriptor_digest
+            || parent.parent_lease_acquired_record_digest()
+                != adoption_request.parent_lease_acquired_record_digest
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM owner adoption context is invalid",
+            ));
+        }
+        let signer_pair = self
+            .consensus_state
+            .private_oram_peer_recovery_signer_pair_pin(
+                adoption_request.owner_peer_id,
+                adoption_request.coordinator_peer_id,
+            )
+            .map_err(Status::from)?;
+        if identity.public_key() != signer_pair.owner().signer()
+            || &coordinator_public_key != signer_pair.coordinator().signer()
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM owner adoption identity does not match authority pin",
+            ));
+        }
+        let verified_request = validate_private_oram_owner_adoption_request_signature_v1(
+            &coordinator_public_key,
+            &adoption_request,
+            &coordinator_signature,
+        )
+        .map_err(|_| {
+            Status::invalid_argument("private ORAM owner adoption authentication failed")
+        })?;
+
+        let _replication_lock = self.private_oram_replication_lock.lock().await;
+        let evidence = private_oram_mutation::adopt_private_oram_mutation_owner_v2(
+            &self.toc,
+            &self.settings,
+            &self.consensus_state,
+            &verified_request,
+            &parent,
+        )
+        .await
+        .map_err(Status::from)?;
+        let signer_pair_after = self
+            .consensus_state
+            .private_oram_peer_recovery_signer_pair_pin(
+                adoption_request.owner_peer_id,
+                adoption_request.coordinator_peer_id,
+            )
+            .map_err(Status::from)?;
+        if signer_pair_after != signer_pair
+            || identity.public_key() != signer_pair_after.owner().signer()
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM owner adoption authority changed",
+            ));
+        }
+
+        let evidence_canonical_json = encode_private_oram_owner_prepared_evidence_v2(&evidence)
+            .map_err(|_| {
+                Status::internal("private ORAM owner adoption evidence encoding failed")
+            })?;
+        let adoption_response = PrivateOramOwnerAdoptionResponseV1 {
+            version: PRIVATE_ORAM_OWNER_ADOPTION_PROTOCOL_VERSION_V1,
+            challenge_nonce: adoption_request.challenge_nonce.clone(),
+            owner_peer_id: adoption_request.owner_peer_id,
+            parent_descriptor_digest: adoption_request.parent_descriptor_digest.clone(),
+            parent_lease_acquired_record_digest: adoption_request
+                .parent_lease_acquired_record_digest
+                .clone(),
+            journal_descriptor_digest: evidence.journal_descriptor_digest().to_string(),
+            evidence_canonical_sha256: BASE64URL_NOPAD
+                .encode(&Sha256::digest(&evidence_canonical_json)),
+            evidence_canonical_len: evidence_canonical_json.len() as u64,
+        };
+        let owner_signature = identity
+            .sign_owner_adoption_response(
+                &adoption_request,
+                &adoption_response,
+                &evidence_canonical_json,
+            )
+            .map_err(|_| Status::internal("private ORAM owner adoption signing failed"))?;
+        let adoption_response_canonical_json = serde_json::to_vec(&adoption_response)
+            .map_err(|_| Status::internal("private ORAM owner adoption encoding failed"))?;
+        let owner_public_key_canonical_json = serde_json::to_vec(identity.public_key())
+            .map_err(|_| Status::internal("private ORAM owner adoption encoding failed"))?;
+        let owner_signature_canonical_json = serde_json::to_vec(&owner_signature)
+            .map_err(|_| Status::internal("private ORAM owner adoption encoding failed"))?;
+        let total = evidence_canonical_json
+            .len()
+            .checked_add(adoption_response_canonical_json.len())
+            .and_then(|length| length.checked_add(owner_public_key_canonical_json.len()))
+            .and_then(|length| length.checked_add(owner_signature_canonical_json.len()))
+            .ok_or_else(|| Status::internal("private ORAM owner adoption response is oversized"))?;
+        if total > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES * 4 {
+            return Err(Status::internal(
+                "private ORAM owner adoption response is oversized",
+            ));
+        }
+        Ok(Response::new(AdoptPrivateOramMutationOwnerV2Response {
+            evidence_canonical_json,
+            adoption_response_canonical_json,
+            owner_public_key_canonical_json,
+            owner_signature_canonical_json,
+        }))
+    }
+
+    async fn prepare_private_oram_mutation_owner_reservation_v3(
+        &self,
+        request: Request<PreparePrivateOramMutationOwnerReservationV3Request>,
+    ) -> Result<Response<PreparePrivateOramMutationOwnerReservationV3Response>, Status> {
+        let identity = self.private_oram_peer_identity.as_ref().ok_or_else(|| {
+            Status::failed_precondition("private ORAM mutation V3 is not configured")
+        })?;
+        let wire = request.into_inner();
+        if wire.collection_name.is_empty()
+            || wire.collection_name.len() > 255
+            || wire.vector_name.is_empty()
+            || wire.vector_name.len() > 255
+            || wire.owner_signing_key_id.is_empty()
+            || wire.owner_signing_key_id.len() > 256
+            || wire.challenge_canonical_json.is_empty()
+            || wire.challenge_canonical_json.len()
+                > PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_MAX_JSON_BYTES
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM owner reservation prepare request is invalid",
+            ));
+        }
+        let challenge: PrivateOramOwnerReservationPrepareChallengeV1 =
+            decode_canonical_private_oram_owner_recovery_json(&wire.challenge_canonical_json)?;
+        if challenge.owner_peer_id != self.toc.this_peer_id
+            || identity.peer_id() != self.toc.this_peer_id
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM owner reservation prepare target peer is invalid",
+            ));
+        }
+        let key = storage::content_manager::consensus_ops::PrivateOramMutationKey {
+            collection_id: challenge.collection_id.clone(),
+        };
+        let context = self
+            .consensus_state
+            .private_oram_mutation_v3_owner_reservation_prepare_contexts(&key)
+            .map_err(Status::from)?
+            .into_iter()
+            .find(|candidate| candidate.challenge().owner_peer_id == self.toc.this_peer_id)
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    "private ORAM owner reservation challenge is not committed",
+                )
+            })?;
+        if context.challenge() != &challenge
+            || identity
+                .owner_cleanup_signer()
+                .map_err(|_| Status::internal("private ORAM owner identity is unavailable"))?
+                != *context.expected_owner_signer()
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM owner reservation challenge does not match committed authority",
+            ));
+        }
+        let signer_pin = self
+            .consensus_state
+            .private_oram_peer_recovery_signer_pin(self.toc.this_peer_id)
+            .map_err(Status::from)?;
+        if signer_pin.signer() != identity.public_key() {
+            return Err(Status::failed_precondition(
+                "private ORAM owner reservation identity does not match authority pin",
+            ));
+        }
+
+        let _replication_lock = self.private_oram_replication_lock.lock().await;
+        let prepare = private_oram_mutation::prepare_private_oram_owner_reservation_v3(
+            &self.toc,
+            &self.settings,
+            &self.consensus_state,
+            identity,
+            &wire.collection_name,
+            &wire.vector_name,
+            &wire.owner_signing_key_id,
+            &context,
+        )
+        .await
+        .map_err(Status::from)?;
+        let exact_after = self
+            .consensus_state
+            .private_oram_mutation_v3_owner_reservation_prepare_contexts(&key)
+            .map_err(Status::from)?
+            .into_iter()
+            .find(|candidate| candidate.challenge().owner_peer_id == self.toc.this_peer_id)
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    "private ORAM owner reservation challenge changed during prepare",
+                )
+            })?;
+        if exact_after != context {
+            return Err(Status::failed_precondition(
+                "private ORAM owner reservation challenge changed during prepare",
+            ));
+        }
+        let prepare_canonical_json = encode_private_oram_owner_reservation_prepare_v1(&prepare)
+            .map_err(|_| {
+                Status::internal("private ORAM owner reservation prepare encoding failed")
+            })?;
+        let owner_public_key_canonical_json = serde_json::to_vec(identity.public_key())
+            .map_err(|_| Status::internal("private ORAM owner reservation key encoding failed"))?;
+        if prepare_canonical_json.len() > PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_MAX_JSON_BYTES
+            || owner_public_key_canonical_json.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES
+            || prepare_canonical_json
+                .len()
+                .checked_add(owner_public_key_canonical_json.len())
+                .is_none_or(|total| {
+                    total > PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_MAX_JSON_BYTES * 2
+                })
+        {
+            return Err(Status::internal(
+                "private ORAM owner reservation prepare response is oversized",
+            ));
+        }
+        Ok(Response::new(
+            PreparePrivateOramMutationOwnerReservationV3Response {
+                prepare_canonical_json,
+                owner_public_key_canonical_json,
+            },
+        ))
+    }
+
+    async fn resolve_private_oram_mutation_owner_reservation_v3(
+        &self,
+        request: Request<ResolvePrivateOramMutationOwnerReservationV3Request>,
+    ) -> Result<Response<ResolvePrivateOramMutationOwnerReservationV3Response>, Status> {
+        let identity = self.private_oram_peer_identity.as_ref().ok_or_else(|| {
+            Status::failed_precondition("private ORAM mutation V3 is not configured")
+        })?;
+        let wire = request.into_inner();
+        if wire.collection_name.is_empty()
+            || wire.collection_name.len() > 255
+            || wire.vector_name.is_empty()
+            || wire.vector_name.len() > 255
+            || wire.owner_signing_key_id.is_empty()
+            || wire.owner_signing_key_id.len() > 256
+            || wire.challenge_canonical_json.is_empty()
+            || wire.challenge_canonical_json.len()
+                > PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_MAX_JSON_BYTES
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM owner reservation resolution request is invalid",
+            ));
+        }
+        let challenge: PrivateOramOwnerReservationPrepareChallengeV1 =
+            decode_canonical_private_oram_owner_recovery_json(&wire.challenge_canonical_json)?;
+        if challenge.owner_peer_id != self.toc.this_peer_id
+            || identity.peer_id() != self.toc.this_peer_id
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM owner reservation resolution target peer is invalid",
+            ));
+        }
+        let key = storage::content_manager::consensus_ops::PrivateOramMutationKey {
+            collection_id: challenge.collection_id.clone(),
+        };
+        let disposition = self
+            .consensus_state
+            .private_oram_mutation_v3_reservation_challenge_disposition(&key, &challenge)
+            .map_err(Status::from)?
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    "private ORAM owner reservation resolution is not committed",
+                )
+            })?;
+        let _replication_lock = self.private_oram_replication_lock.lock().await;
+        let signed_resolution_receipt = if wire.recover_completion {
+            Some(
+                private_oram_mutation::recover_private_oram_owner_reservation_completion_v3(
+                    &self.toc,
+                    &self.settings,
+                    &self.consensus_state,
+                    identity,
+                    &wire.collection_name,
+                    &wire.vector_name,
+                    &wire.owner_signing_key_id,
+                    &challenge,
+                )
+                .await
+                .map_err(Status::from)?,
+            )
+        } else {
+            private_oram_mutation::resolve_private_oram_owner_reservation_v3(
+                &self.toc,
+                &self.settings,
+                &self.consensus_state,
+                identity,
+                &wire.collection_name,
+                &wire.vector_name,
+                &wire.owner_signing_key_id,
+                &challenge,
+            )
+            .await
+            .map_err(Status::from)?
+        };
+        if self
+            .consensus_state
+            .private_oram_mutation_v3_reservation_challenge_disposition(&key, &challenge)
+            .map_err(Status::from)?
+            .as_ref()
+            != Some(&disposition)
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM owner reservation resolution authority changed",
+            ));
+        }
+        let resolution_receipt_canonical_json = signed_resolution_receipt
+            .as_ref()
+            .map(encode_signed_private_oram_owner_reservation_resolution_receipt_v1)
+            .transpose()
+            .map_err(|_| {
+                Status::internal("private ORAM owner reservation resolution encoding failed")
+            })?
+            .unwrap_or_default();
+        if resolution_receipt_canonical_json.len()
+            > PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_MAX_JSON_BYTES
+        {
+            return Err(Status::internal(
+                "private ORAM owner reservation resolution response is oversized",
+            ));
+        }
+        Ok(Response::new(
+            ResolvePrivateOramMutationOwnerReservationV3Response {
+                resolved: true,
+                resolution_receipt_canonical_json,
+            },
         ))
     }
 
