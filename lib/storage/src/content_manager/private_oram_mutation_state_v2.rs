@@ -490,6 +490,23 @@ pub(super) enum PrivateOramMutationPointResolutionEvidenceV2 {
     },
 }
 
+/// Binds every per-index prepare digest for one owner to the exact owner journal that produced it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PrivateOramMutationOwnerJournalEvidenceV2 {
+    pub(super) owner_peer_id: PeerId,
+    pub(super) journal_descriptor_digest: String,
+}
+
+impl Debug for PrivateOramMutationOwnerJournalEvidenceV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramMutationOwnerJournalEvidenceV2")
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("journal_descriptor_digest", &"[redacted]")
+            .finish()
+    }
+}
+
 impl Debug for PrivateOramMutationPointResolutionEvidenceV2 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -508,6 +525,7 @@ pub(super) struct PrivateOramMutationJournalStateV2 {
     pub(super) phase: PrivateOramMutationJournalPhaseV2,
     pub(super) origin: PrivateOramMutationStateOriginV2,
     pub(super) predecessor: PrivateOramMutationStatePredecessorV2,
+    pub(super) owner_journals: Vec<PrivateOramMutationOwnerJournalEvidenceV2>,
     pub(super) owner_prepares: Vec<PrivateOramMutationOwnerPrepareEvidenceV1>,
     pub(super) point_stage: Option<PrivateOramMutationPointStageEvidenceV2>,
     pub(super) decision: Option<PrivateOramMutationDecisionEvidenceV2>,
@@ -525,6 +543,7 @@ impl Debug for PrivateOramMutationJournalStateV2 {
             .field("phase", &self.phase)
             .field("origin", &self.origin)
             .field("predecessor", &self.predecessor)
+            .field("owner_journal_count", &self.owner_journals.len())
             .field("owner_prepare_count", &self.owner_prepares.len())
             .field("has_point_stage", &self.point_stage.is_some())
             .field("decision", &self.decision)
@@ -672,6 +691,7 @@ pub(super) fn validate_private_oram_mutation_state_v2_structure(
         || state.sequence != rank
         || !matches!(state.origin, PrivateOramMutationStateOriginV2::FreshV2)
         || !is_sha256_digest(&state.record_digest)
+        || (rank >= 2) == state.owner_journals.is_empty()
         || (rank >= 2) == state.owner_prepares.is_empty()
         || (rank >= 3) != state.point_stage.is_some()
         || (rank >= 4) != state.decision.is_some()
@@ -682,6 +702,7 @@ pub(super) fn validate_private_oram_mutation_state_v2_structure(
         return Err(PrivateOramMutationJournalError::Corrupt);
     }
     if rank >= 2 {
+        validate_owner_journals(descriptor, &state.owner_journals)?;
         validate_owner_prepares(descriptor, &state.owner_prepares)?;
     }
     if let Some(point_stage) = &state.point_stage {
@@ -780,6 +801,34 @@ fn validate_point_stage_v2(
     };
     if mutation.point_operation_kind != kind || mutation.point_operation_digest != digest {
         return Err(PrivateOramMutationJournalError::InvalidTransition);
+    }
+    Ok(())
+}
+
+fn validate_owner_journals(
+    descriptor: &PrivateOramMutationJournalDescriptorV1,
+    evidence: &[PrivateOramMutationOwnerJournalEvidenceV2],
+) -> Result<(), PrivateOramMutationJournalError> {
+    let expected_owner_peer_ids = descriptor
+        .owner_requirements
+        .iter()
+        .map(|requirement| requirement.peer_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if evidence.len() != expected_owner_peer_ids.len()
+        || evidence
+            .windows(2)
+            .any(|pair| pair[0].owner_peer_id >= pair[1].owner_peer_id)
+    {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    }
+    for (owner, expected_owner_peer_id) in evidence.iter().zip(expected_owner_peer_ids) {
+        if owner.owner_peer_id != expected_owner_peer_id
+            || !is_sha256_digest(&owner.journal_descriptor_digest)
+        {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
     }
     Ok(())
 }
@@ -924,6 +973,11 @@ fn validate_terminal_batch_v2(
         return Err(PrivateOramMutationJournalError::InvalidTransition);
     }
     for (owner, expected_peer_id) in batch.owners.iter().zip(expected_peers) {
+        let prepared_owner_journal = state
+            .owner_journals
+            .iter()
+            .find(|prepared| prepared.owner_peer_id == expected_peer_id)
+            .ok_or(PrivateOramMutationJournalError::InvalidTransition)?;
         let (expected_consensus_authority, expected_reconciliation_authority) =
             expected_owner_recovery_authority_digest_v2(
                 descriptor,
@@ -936,6 +990,7 @@ fn validate_terminal_batch_v2(
             || owner.parent_descriptor_digest != descriptor.descriptor_digest
             || owner.decision_authority_record_digest != expected_consensus_authority
             || owner.reconciliation_authority_digest != expected_reconciliation_authority
+            || owner.journal_descriptor_digest != prepared_owner_journal.journal_descriptor_digest
             || !is_sha256_digest(&owner.journal_descriptor_digest)
             || !is_sha256_digest(&owner.prepared_state_digest)
             || !is_sha256_digest(&owner.terminal_record_digest)
@@ -1259,6 +1314,7 @@ fn canonical_state_chain_v2(
         candidate.phase = phase;
         candidate.predecessor = predecessor;
         if sequence < 2 {
+            candidate.owner_journals.clear();
             candidate.owner_prepares.clear();
         }
         if sequence < 3 {
@@ -1293,6 +1349,7 @@ pub(super) fn initial_private_oram_mutation_state_v2(
         phase: PrivateOramMutationJournalPhaseV2::LeaseAcquired,
         origin: PrivateOramMutationStateOriginV2::FreshV2,
         predecessor: PrivateOramMutationStatePredecessorV2::Genesis,
+        owner_journals: Vec::new(),
         owner_prepares: Vec::new(),
         point_stage: None,
         decision: None,
@@ -1389,6 +1446,11 @@ fn state_record_digest_v2(
     hasher.update([state.phase.sequence() as u8]);
     hash_origin(&mut hasher, &state.origin)?;
     hash_predecessor(&mut hasher, &state.predecessor)?;
+    hash_len(&mut hasher, state.owner_journals.len())?;
+    for owner in &state.owner_journals {
+        hasher.update(owner.owner_peer_id.to_be_bytes());
+        hash_digest(&mut hasher, &owner.journal_descriptor_digest)?;
+    }
     hash_len(&mut hasher, state.owner_prepares.len())?;
     for prepared in &state.owner_prepares {
         hasher.update(prepared.peer_id.to_be_bytes());
