@@ -609,16 +609,21 @@ while reading so concurrent growth cannot force an unbounded allocation.
 Generic JSON decoding remains streaming to avoid a second descriptor-sized raw
 buffer. An exact pending retry always re-runs immutable record publication,
 including destination and source-directory fsync, before moving the pointer.
-The writer remains inactive. Raw `OwnersPrepared`, V2 parent, and decision-authority
-minting entry points are test-only until typed live owner prepare evidence is
-connected. A consensus-persisted monotonic history watermark is required to
-detect rollback of an otherwise valid local prefix, and `active`,
-`state_records`, and `temp` must be pinned and accessed relative to directory
-descriptors. Positive local terminal integration, point publish/abort with an
-exact all-active-replica roster and authenticated readback,
-compare-and-delete abort, point-write exclusion, cleanup, and typed lease clear
-are also activation gates. The raw receipt test path is not an activation
-substitute.
+The V2 parent writer is active only behind the dedicated V2 mutation route and
+the cluster mutation-format activation floor. Raw parent/evidence constructors
+remain private or test-only; production admission consumes live validated owner
+prepare evidence. The parent history watermark is persisted in the activated
+consensus aggregate, and every local sequence advance must be reflected by the
+next exact watermark CAS before another terminal side effect can run. Parent
+`active`, `state_records`, `temp`, cleanup marker, and terminal archive operations
+use pinned descriptor-relative namespaces on Linux and fail closed elsewhere.
+
+The activated strict subset supports only
+`result_privacy=private_payload_oram_required` with a no-server point record.
+`ids_visible` mutation is rejected before admission and again during restart
+resume. Therefore the visible-point all-replica publish/abort protocol is not an
+activation dependency for this subset and remains unavailable rather than being
+approximated through ordinary Qdrant point APIs.
 
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
@@ -633,40 +638,87 @@ reconcile a candidate that was already exposed. The typed point-stage token
 proves the Prepared child point artifact, and the paired owner journal can now
 prove a structurally and durably installed Prepared artifact to crate-private
 callers.
-It can also persist a terminal record once the future restart/terminal bridge
-consumes the live adapter's exact paired canonical-state authority. Parent owner
-prepare/finalize digests remain coordination evidence: child Prepared rebinding
-does not turn them into terminal authority, and the future bridge must still
-retain typed parent state plus authenticated peer identity. Cleanup
-must durably remove mutable child/point artifacts, compact the parent into an
-immutable reconciliation witness, and clear the consensus mutation lease as
-the final authority release. The witness makes a crash before or after lease
-clear distinguishable and can be garbage-collected after the exact clear
-receipt is observed. The generic lease CAS currently validates only the shape
-of its reconciliation digest; it is not cleanup proof and remains dormant.
-D3-B3-C must restrict clear submission to an internal coordinator holding the
-typed witness, then use a Raft barrier and paired state-slot readback for an
-ambiguous response before allowing the next generation.
+The restart supervisor now consumes exact paired canonical-state authority. It
+fetches remote terminals over signer-pinned authenticated peer transport,
+reconfirms the exact Raft slot after network I/O, recovers the local HNSW/result
+pair, and records sequence 4 through 7 one step at a time. The immutable original
+lease owner remains coordinator even when it is a follower; this version does
+not take over work when that peer is absent.
 
-All v2 implementation slices remain deliberately dormant. D0 and D1 provide
-the immutable manifest, signed state, ordered read transcript, append mutation,
-encrypted checkpoint, fixed-window Path ORAM transactions, and signed paired
-finalizer. D2 provides a dormant consensus state machine; D3-B1 provides the
-parent mutation journal; and D3-B2 provides the canonical invisible Prepared
-point stage. D3-B3-A2 provides the dormant `AbortDecided` consensus barrier,
-D3-B3-A3 provides the atomic parent-owner recovery authority foundation,
-D3-B3-B1 provides the server-safe owner-prepare validation contract, and the
-D3-B3-B2 slices provide the paired durable owner journal, dormant terminal
-record primitive, module-private canonical StoreInspector, and dormant live
-paired StoreAdapter without external evidence wiring. D3-B3-B3 adds the exact
-child Prepared rebind, storage-private canonical pair projection, dormant
-read-only four-state classifier, writer-wide canonical-store serialization, and
-pinned read-only live-parent authority. None adds a dispatcher proposal method
-or public route. Fd-relative child/store mutation, live parent mutation authority,
-partial-new roll-forward, typed terminal adapter, owner RPC evidence, abort/finalize execution,
-reconciliation-witness cleanup, state-aware search and lifecycle admission,
-and public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update APIs
-remain rejected throughout.
+Follower confirmation has an explicit local-applied barrier. The forwarded Raft
+confirmation returns the entry index applied by the calling node, and the
+reconcile snapshot is captured only after that node's persistent `last_applied`
+has reached the receipt. Terminal resume and archive/ack work are additionally
+serialized by collection key, so independently minted supervisor permits cannot
+race the same mutation while unrelated collections continue independently.
+
+Local cleanup is a quiescence claim, not a registry deletion. Claiming the exact
+generation blocks new jobs, sessions, and phase mutations, waits for the detached
+worker liveness guard to end, releases both paired sessions, and then returns an
+opaque quiesced-cleanup permit. A job observed in the same process may not vanish
+without a matching cleanup tombstone. Restart absence additionally requires the live
+peer identity capability that retains an exclusive storage-root identity-directory
+`flock` for the process lifetime. A paused predecessor therefore continues to fence a
+replacement process; only process death releases the lock. The permit and tombstone
+bind collection, mutation ID, immutable owner, generation, process incarnation, and
+the exact descriptor/terminal/witness/evidence cleanup claim. A capability for another
+collection or same-numbered generation is not interchangeable.
+Session open reservations, session installation, cleanup claims, and final tombstone
+installation share one registry linearization point. An outstanding reservation or
+active session rejects cleanup; a cleanup claim rejects a later install; and the final
+tombstone transition rechecks that no reservation, session, or append job is visible.
+The deterministic registration-versus-cleanup regression covers both winning orders.
+
+At sequence 7, storage derives an opaque cleanup expectation from the terminal
+watermark, decided lease, consensus state, owner terminal evidence, and point
+resolution evidence. The only allowed order is:
+
+```text
+Raft cleanup witness
+  -> release process-local paired sessions
+  -> fsync cleanup_complete_v2.json
+  -> Raft clear-pending
+  -> exact-generation clear and tombstone
+  -> no-replace terminal namespace archive
+  -> Raft clear acknowledgement
+```
+
+New admission stays blocked through cleared-pending acknowledgement. The
+terminal archive is retained for audit and exact replay; owner recovery capsules
+are also retained until a separate consensus-backed physical-GC policy is
+activated. The generic lease CAS is not cleanup authority and is not used by the
+V2 terminal coordinator.
+
+The cleanup marker and archive receipt use immutable no-replace publication:
+bounded canonical temp write, file fsync, rename, both affected directory fsyncs,
+and exact installed-byte validation. Archive source identity and the complete
+generation/tombstone binding are checked before rename, and the archive root is
+fsynced before acknowledgement authority is returned. The archive destination is
+then reopened and required to have the same device/inode as the pinned pre-rename
+source; the old active name must be absent and canonical terminal contents are
+revalidated before receipt publication. A failure after rename but before directory
+sync is indeterminate; exact retry validates the installed value and completes
+durability. Acknowledged recovery and terminal certificates remain
+attached until the next admission atomically converts them into a retained GC
+obligation; incomplete or non-acknowledged material blocks reservation.
+
+If the immutable coordinator remains absent for 300 seconds while the same foreign
+generation is pending, the durable protocol state remains `Pending` and the
+operational status becomes `Blocked: ImmutableCoordinatorUnavailable`. This is an
+availability condition, not takeover authority, and does not make the whole node
+unready. Consensus or reconciliation failures still produce a readiness-failing
+blocked state.
+
+V2 D0-D4 are connected for the strict single-writer, fixed-capacity append
+subset: signed manifest/state/mutation contracts, fixed-window Path ORAM client
+transactions, owner reservation and prestage, collection-wide consensus apply,
+dedicated REST/internal transport, restart terminal reconciliation, and cleanup
+are all present. Normal Qdrant upsert/update and ordinary search remain rejected.
+Production release still requires the V2-E Linux multi-process crash matrix,
+leader/supervisor concurrency E2E, complete snapshot/WAL leakage scans,
+performance benchmarks, and operational backup/restore drills. Coordinator
+takeover, dynamic resize/update/delete, physical evidence GC, and true
+multi-writer remain outside V2.
 
 The append contract carries ciphertext hashes and commitments, not raw bucket
 bodies. The owner-prepare wire package supplies those encrypted bodies, and the

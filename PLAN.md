@@ -639,6 +639,19 @@ v2 최소 범위:
 - single logical writer, fixed padded mutation budget, client WAL
 - update, delete, tree resize, online capacity expansion, true multi-writer는 비목표
 
+현재 상태(2026-08-14):
+
+- strict `private_payload_oram_required`, no-server point record, single logical writer 범위의
+  V2 mutation data path는 public REST session/read/append/status/close, V3 owner reservation,
+  recovery-capsule prestage/adoption, collection-wide consensus apply, seq1-7 terminal resume,
+  cleanup witness, local cleanup marker, exact clear, terminal archive와 clear acknowledgement까지
+  연결됐다.
+- `ids_visible` mutation은 admission 및 durable-resume 양쪽에서 fail closed 한다. Visible point
+  publish/abort authority는 V2 범위에서 활성화하지 않는다.
+- 구현 완료와 production release는 구분한다. Coordinator takeover, acknowledged archive/capsule의
+  물리 GC, Linux multi-process kill/failpoint matrix, latency/bandwidth benchmark와 운영 restore drill은
+  V2-E release gate에 남아 있다.
+
 보안 불변식:
 
 - Qdrant는 client RK, vector/query plaintext, node/neighbor id, point token,
@@ -1387,39 +1400,71 @@ Signed fields:
   `Indeterminate`로 분류한다. Empty payload는 dormant staged-frame V1에 production deployment 이력이
   없다는 전제 아래 `None` 하나만 canonical하게 허용하며 pre-activation fixture는 activation 전에
   폐기하거나 명시적으로 migration해야 한다.
-- 남음(D3-C2-ParentStateWriter): Positive local terminal은 실제 local paired recovery outcome과
-  같은 coordinator transaction에서 기록하고, remote terminal은 authenticated peer identity를
-  결합한 internal RPC evidence를 소비해야 한다. Typed live owner-prepare bridge가 없어서 raw
-  OwnersPrepared writer, V2 point-stage parent mint, decision-authority mint는 production build에
-  노출하지 않는다. Consensus에 monotonic parent-history watermark를 넣는 rollback pin과
-  active/records/temp의 fd-relative namespace pinning은 아직 activation gate다.
-- 남음(D3-C2-PointResolutionCoordinator): Visible point는 topology reservation 아래 exact
-  all-Active `(shard_id, peer_id)` roster를 전후로 고정하고 peer-authenticated InsertOnly publish와
-  exact semantic readback으로만 receipt authority를 만들어야 한다. Abort에는 WAL-atomic
-  compare-semantic-digest delete, ordinary point-write exclusion, roster freshness binding이 필요하다.
-  기존 public consistency update/retrieve는 replica failure와 provenance를 숨기므로 이 authority로
-  사용할 수 없다.
-- 남음(D3-B3-C): Exact new면 remote-before-local finalize와 point publish를 재개하고,
-  `AbortDecided`면 remote/local owner와 point stage를 exact-old로 abort한다. Mutable child와
-  point artifact를 durable cleanup한 뒤 parent를 immutable reconciliation witness로
-  compact하고, consensus mutation lease clear를 마지막 authority release로 수행한다.
-  Generic lease CAS의 caller-supplied reconciliation digest는 cleanup 증거가 아니므로
-  typed witness를 받은 internal coordinator만 clear를 제출한다. Clear 응답 유실은 Raft
-  barrier 뒤 한 guard에서 읽은 exact clear receipt로 판정하고, 다음 generation admission은
-  판정 완료까지 직렬화하며 witness는 이후 GC한다.
+- 완료(D3-C2-TerminalCoordinator): Original lease owner가 follower여도 exact slot 확인 Raft
+  operation을 먼저 commit하고 한 persistent read에서 state, slot, parent watermark, recovery
+  certificate, activation locator와 cleanup lifecycle을 캡처한다. Opaque resume facade는 seq3-7을
+  한 단계씩만 진행하고, 각 local record가 다음 side effect 전에 consensus parent watermark에
+  반영되도록 강제한다. Remote terminal은 configured signer pair와 authenticated peer transport를
+  검증한 뒤 fresh authority로 다시 확인하며, local terminal은 paired HNSW/result recovery를 같은
+  signed mutation context에서 수행한다.
+- 완료(D3-C2-NoServerPointResolution): Strict V2는 no-server point record만 sequence 7로
+  resolve한다. `ids_visible`은 admission과 restart resume 모두에서 side effect 전에 거부한다.
+  Visible point publish/abort의 all-Active replica roster와 authenticated semantic readback은 이
+  provider의 활성 범위가 아니며, 향후 별도 protocol 없이는 열지 않는다.
+- 완료(D3-B3-C-StrictCleanup): Sequence 7 terminal watermark, exact decided lease, consensus
+  state와 owner/point terminal evidence에서 domain-separated cleanup expectation을 만든다. Raft
+  cleanup witness 뒤 process-local paired session을 해제하고 `cleanup_complete_v2.json`을 fsync한
+  다음 clear-pending과 exact-generation clear만 허용한다. Cleared-pending tombstone에서만 opaque
+  archive permit을 만들고 `active`를 no-replace terminal archive로 이동/검증/fsync한 뒤 clear
+  acknowledgement를 제출한다. Acknowledgement 전에는 다음 generation admission이 계속 막히며,
+  terminal archive와 recovery capsule 물리 GC는 보존 정책상 V2-E 이후로 미룬다.
+- 완료(D3-B3-C-LocalApplyBarrier): Follower가 leader에 exact-slot confirmation을 전달한 경우에도
+  confirmation entry의 local apply receipt/index를 받은 뒤에만 persistent snapshot을 읽는다.
+  Snapshot의 `last_applied`가 receipt보다 뒤인지 같은 read guard에서 확인하므로 committed-but-local-
+  stale authority로 filesystem 또는 remote side effect를 시작하지 않는다.
+- 완료(D3-B3-C-ExecutionQuiescence): Terminal resume와 archive/ack coordinator는 collection key별
+  process mutex로 직렬화된다. Cleanup은 exact generation을 claim해 새 session/job 획득과 phase
+  mutation을 막고 worker liveness 종료를 기다린 뒤 paired session을 해제한다. 같은 process에서
+  관찰했던 job이 tombstone 없이 사라지면 fail closed하고, restart 뒤 처음 보는 absence만 restart
+  quiescence로 인정한다. Restart absence는 storage-root peer identity directory의 process-lifetime
+  exclusive `flock`을 보유한 identity capability가 있어야만 인정한다. Quiescence permit과 tombstone은
+  collection, mutation ID, immutable owner, generation, process incarnation과 exact cleanup evidence
+  digest 전체에 묶이며 cross-key/same-generation 재사용을 거부한다. Session open reservation/install과
+  cleanup claim/final tombstone은 같은 registry mutex에서 선형화된다. Reservation이나 active session이
+  먼저 보이면 cleanup이 거부되고, cleanup claim이 먼저 보이면 install이 거부되며, final tombstone
+  직전에도 reservation/session/job 부재를 다시 확인한다.
+- 완료(D3-B3-C-AtomicPublication): Cleanup marker와 terminal archive receipt는 private temp file의
+  bounded canonical write/file fsync, `RENAME_NOREPLACE`, destination/temp parent-directory fsync,
+  exact installed-byte reread 순서로 publish한다. Archive는 rename 전에 exact source generation,
+  descriptor, terminal record, cleanup marker와 tombstone binding을 재검증하고 root directory를
+  fsync한다. Rename 뒤에는 destination directory를 다시 열어 pre-rename source FD와 `(dev, ino)`가
+  같은지, active source 이름이 사라졌는지, canonical terminal bytes가 같은지 확인한 뒤에만 receipt를
+  publish한다. Rename 뒤 directory fsync 전 failpoint와 exact retry가 marker/receipt 모두에서
+  수렴하는 regression으로 고정됐다.
+- 완료(D3-B3-C-ImmutableOwnerOperations): Original lease owner가 300초 동안 동일 foreign pending
+  generation으로 관찰되면 durable protocol은 `Pending`을 유지하되 operational status는
+  `Blocked: ImmutableCoordinatorUnavailable`로 전환한다. 이 상태는 takeover를 허용하지 않으며
+  node-wide readiness를 실패시키지 않는다. Consensus/reconcile failure의 `Blocked`는 계속 readiness를
+  실패시킨다.
+- 완료(D3-B3-C-NextAdmissionGCTransfer): Clear acknowledgement 뒤 남은 exact recovery/terminal
+  certificate pair는 다음 reservation 동안 보존되고 admission에서 acknowledged GC obligation으로
+  원자적으로 이전된다. Partial certificate, pending tombstone, mismatched generation은 reservation
+  전에 fail closed한다.
 
 #### V2-D4: Dedicated API activation
 
-- Public route는 collection-wide
+- 완료: Public route는 collection-wide
   `/collections/{collection}/private-oram/v2/mutation/{open,append,status,close}`로
-  분리하고 mutation/session id와 encrypted bodies를 URL/log에 넣지 않는다.
-- Route는 serde allocation 전에 hard request-body/updated-bucket count 상한을
-  적용하고, ciphertext body의 SHA-256/commitment가 signed refs와 일치하는지
-  prepare 전에 검증한다.
-- Internal gRPC는 prepare/finalize/abort/inspect를 하나의 paired mutation 단위로
-  제공한다. 기존 index별 writeback RPC를 순차 호출해 atomicity를 흉내 내지 않는다.
-- Mutation lease나 partial finalize가 있으면 private search, ordinary point read,
-  snapshot, transfer/reshard와 lifecycle operation을 fail closed 한다.
+  분리됐고, mutation/session id와 encrypted bodies를 URL/log에 넣지 않는다. REST `u64`는
+  canonical decimal string으로 encode/decode한다.
+- 완료: Route별 finite JSON body, fixed read/write budget, ciphertext hash/commitment와 signed
+  owner-prepare 검증을 admission 전에 수행한다. Detached append job은 bounded registry를 쓰고,
+  terminal ownership을 supervisor에 넘긴 뒤 cleanup witness에서 underlying session을 해제한다.
+- 완료: Internal gRPC는 owner reservation prepare/resolve, prestage/adopt와 authenticated terminal
+  recovery를 paired mutation identity에 결합한다. Existing index별 generic writeback은 V2
+  collection-wide consensus mutation을 대신할 수 없다.
+- 완료: Active mutation/recovery/session은 private search, ordinary point mutation,
+  snapshot, transfer/reshard와 lifecycle operation의 기존 fail-closed guard를 유지한다.
 
 #### V2-D5: Recovery, leakage and process gates
 
@@ -1434,6 +1479,33 @@ Signed fields:
   무관하게 고정되는지 leakage fixture로 고정한다.
 - Legacy consensus snapshot에는 v2 field가 없어도 load되고, v2 snapshot은 pending
   mutation 없이 complete state/receipt만 round-trip하는지 검증한다.
+
+현재 검증:
+
+- Exact authority confirmation과 rejected-entry apply cursor, seq3-7 one-step resume,
+  cleanup marker replay, stale clear, duplicate active/archive namespace, symlink archive와
+  idempotent archive/acknowledgement가 unit regression으로 고정됐다.
+- Local-applied-index barrier, same-key supervisor serialization, cross-key 독립 진행, exact-generation
+  cleanup quiescence, same-process job loss rejection/restart absence replay, marker/archive post-rename
+  fault convergence, immutable-owner bounded blocked status와 acknowledged terminal material의 다음
+  admission GC transfer가 regression으로 고정됐다.
+- 별도 test-binary process가 peer identity lock을 잡은 상태에서 `SIGSTOP`해도 두 번째 process의
+  restart-absence 진입이 거부되고, `SIGKILL` 뒤에만 새 process가 lock을 획득하는 회귀가 통과했다.
+  Cleanup permit은 collection/mutation/owner/generation/process-incarnation/claim digest 각 불일치를
+  독립적으로 거부한다.
+- `cleanup_linearizes_against_open_reservation_and_session_install`은 outstanding open reservation이
+  cleanup을 막고, cleanup claim 뒤 install이 실패하며, exact job 없는 active session도 restart absence를
+  막는 두 경쟁 순서를 결정적으로 검증한다.
+- `cargo test -p storage --lib` 전체 386개가 2026-08-14 기준 통과했다. 이 결과는 deterministic
+  state-machine/filesystem fault coverage이며 실제 kernel/process power-loss 인증을 대체하지 않는다.
+- `cargo test --bin qdrant` 전체 927개도 같은 최종 구현 기준 통과했다.
+- `cargo check --workspace --all-targets`도 Python edge encrypted-payload unsupported projection과
+  HNSW append-rewrite error projection을 포함한 최종 worktree에서 통과했다.
+- Log projection은 private ORAM path/bucket/proof/position-map/stash/plaintext aliases를
+  redaction하고, snapshot recovery error는 client recovery-state aliases를 노출하지 않는다.
+- 남은 release gate는 terminal Qdrant process를 fsync/rename/Raft 경계마다 kill하는 multi-process
+  matrix, 두 supervisor/leader-change concurrency E2E, disk-full/permission/fsync injection과
+  end-to-end snapshot/WAL binary sentinel scan이다.
 
 완료 조건:
 
