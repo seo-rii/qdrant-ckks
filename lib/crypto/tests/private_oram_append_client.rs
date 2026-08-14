@@ -4248,6 +4248,152 @@ fn paired_mutation_finalizer_signs_and_self_validates_the_exact_pending_artifact
     assert!(
         serde_json::from_value::<PrivateOramAppendOwnerPrepareV1>(unknown_client_field).is_err()
     );
+
+    let durable_observations =
+        private_oram_owner_prestage_read_observations_v2(&observed_read_transcripts).unwrap();
+    let reconstructed = reconstruct_private_oram_owner_prestage_read_transcripts_v2(
+        &owner_prepare,
+        &durable_observations,
+    )
+    .unwrap();
+    assert_eq!(reconstructed, observed_read_transcripts);
+    let durable_json = serde_json::to_string(&durable_observations).unwrap();
+    assert!(!durable_json.contains("ordered_leaf_labels"));
+    assert!(!durable_json.contains("\"paths\""));
+
+    let mut tampered_path = owner_prepare.clone();
+    let tree_height = usize::try_from(durable_observations[0].tree_height).unwrap();
+    let leaf_ref =
+        &mut tampered_path.mutation_bundle.mutation.writebacks[0].updated_buckets[tree_height];
+    let leaf_base = (1_u64 << durable_observations[0].tree_height) - 1;
+    leaf_ref.bucket_id = if leaf_ref.bucket_id == leaf_base {
+        leaf_base + 1
+    } else {
+        leaf_base
+    };
+    assert!(
+        reconstruct_private_oram_owner_prestage_read_transcripts_v2(
+            &tampered_path,
+            &durable_observations,
+        )
+        .is_err()
+    );
+
+    let mutation = &owner_prepare.mutation_bundle.mutation;
+    let owner_roster = vec![11, 12];
+    let owner_roster_digest = private_oram_owner_prestage_roster_digest_v2(&owner_roster).unwrap();
+    let package = PrivateOramOwnerPrestagePackageV2 {
+        version: PRIVATE_ORAM_OWNER_PRESTAGE_PROTOCOL_VERSION_V2,
+        collection_name: "docs".to_string(),
+        collection_id: mutation.collection_id.clone(),
+        mutation_id: mutation.mutation_id.clone(),
+        mutation_digest: private_oram_append_mutation_v1_digest(mutation).unwrap(),
+        transition_digest: digest(220),
+        base_record_digest: digest(221),
+        expected_aggregate_digest: digest(222),
+        lease_generation: 4,
+        writer_fence: mutation.writer_fence,
+        coordinator_peer_id: 11,
+        owner_peer_id: 12,
+        vector_name: "text".to_string(),
+        owner_signing_key_id: mutation.owner_signing_key_id.clone(),
+        activation_registry_generation: 3,
+        activation_manifest_digest: digest(223),
+        parent_descriptor_digest: digest(224),
+        parent_lease_acquired_record_digest: digest(225),
+        owner_peer_ids: owner_roster,
+        owner_roster_digest,
+        immutable_manifest: manifest_bundle.clone(),
+        owner_prepare: owner_prepare.clone(),
+        durable_read_observations: durable_observations,
+        staged_insert_frame_b64: None,
+    };
+    let package_bytes = encode_private_oram_owner_prestage_package_v2(&package).unwrap();
+    assert_eq!(
+        decode_private_oram_owner_prestage_package_v2(&package_bytes).unwrap(),
+        package
+    );
+    let request = private_oram_owner_prestage_request_v2(
+        BASE64URL_NOPAD.encode(&[7_u8; 16]),
+        &package,
+        &package_bytes,
+    )
+    .unwrap();
+    let request_signature =
+        sign_private_oram_owner_prestage_request_v2(&key_pair, 9, &request).unwrap();
+    let peer_public_key = private_oram_peer_recovery_public_key_v1(&key_pair, 9).unwrap();
+    let verified_request = validate_private_oram_owner_prestage_request_signature_v2(
+        &peer_public_key,
+        &request,
+        &package_bytes,
+        &request_signature,
+    )
+    .unwrap();
+    validate_private_oram_owner_prestage_package_for_request_v2(
+        &verified_request,
+        &package,
+        &package_bytes,
+    )
+    .unwrap();
+    let mut changed_package_bytes = package_bytes.clone();
+    let last = changed_package_bytes.last_mut().unwrap();
+    *last ^= 1;
+    assert_eq!(
+        validate_private_oram_owner_prestage_request_signature_v2(
+            &peer_public_key,
+            &request,
+            &changed_package_bytes,
+            &request_signature,
+        )
+        .unwrap_err(),
+        PrivateOramOwnerPrestageError::PackageMismatch
+    );
+
+    let receipt_bytes = br#"{"receipt":"durable"}"#;
+    let response =
+        private_oram_owner_prestage_response_v2(&request, receipt_bytes, digest(226)).unwrap();
+    let response_signature = sign_private_oram_owner_prestage_response_v2(
+        &key_pair,
+        9,
+        &request,
+        &response,
+        receipt_bytes,
+    )
+    .unwrap();
+    let _verified_response = validate_private_oram_owner_prestage_response_signature_v2(
+        &peer_public_key,
+        &request,
+        &response,
+        receipt_bytes,
+        &response_signature,
+    )
+    .unwrap();
+    assert!(
+        validate_private_oram_owner_prestage_response_signature_v2(
+            &peer_public_key,
+            &request,
+            &response,
+            br#"{"receipt":"changed"}"#,
+            &response_signature,
+        )
+        .is_err()
+    );
+    let statement =
+        private_oram_owner_prestage_attestation_statement_v2(&request, &response).unwrap();
+    let attestation =
+        sign_private_oram_owner_prestage_attestation_v2(&key_pair, 9, &statement).unwrap();
+    let attestation_bytes =
+        encode_private_oram_owner_prestage_attestation_v2(&attestation).unwrap();
+    let decoded_attestation =
+        decode_private_oram_owner_prestage_attestation_v2(&attestation_bytes).unwrap();
+    let _verified_attestation = validate_private_oram_owner_prestage_attestation_for_signer_v2(
+        &decoded_attestation,
+        &peer_public_key,
+    )
+    .unwrap();
+    let debug = format!("{package:?} {verified_request:?} {decoded_attestation:?}");
+    assert!(!debug.contains(&mutation.mutation_id));
+    assert!(!debug.contains(&package_bytes.escape_ascii().to_string()));
 }
 
 #[test]

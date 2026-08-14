@@ -580,7 +580,8 @@ impl Debug for PrivateOramAppendWritebackDigestInput<'_> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PrivateOramObservedReadTranscriptV1 {
     pub collection_id: String,
     pub manifest_digest: String,

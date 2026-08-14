@@ -1187,9 +1187,12 @@ mod tests {
             target_peer_id: 13,
             target_peer_uri_digest: authority.peer_pin(13).unwrap().peer_uri_digest.clone(),
             membership_generation: 7,
+            required_consensus_wire_protocol: crate::PRIVATE_ORAM_CONSENSUS_WIRE_PROTOCOL_VERSION,
             expected_current_term: 5,
             expected_hard_commit: 101,
             expected_last_applied: 101,
+            expected_last_log_index: 101,
+            expected_pending_conf_index: 0,
             expected_commit_entry_term: 4,
             expected_configuration_digest: try_private_oram_consensus_configuration_digest_v1(
                 configuration,
@@ -1220,9 +1223,15 @@ mod tests {
                 .expected_runtime_capability_fingerprint
                 .clone(),
             membership_generation: challenge.membership_generation,
+            supported_consensus_wire_protocol_min:
+                crate::PRIVATE_ORAM_CONSENSUS_WIRE_PROTOCOL_VERSION,
+            supported_consensus_wire_protocol_max:
+                crate::PRIVATE_ORAM_CONSENSUS_WIRE_PROTOCOL_VERSION,
             observed_current_term: challenge.expected_current_term,
             observed_hard_commit: challenge.expected_hard_commit,
             observed_last_applied: challenge.expected_last_applied,
+            observed_last_log_index: challenge.expected_last_log_index,
+            observed_pending_conf_index: challenge.expected_pending_conf_index,
             observed_commit_entry_term: challenge.expected_commit_entry_term,
             observed_configuration_digest: challenge.expected_configuration_digest.clone(),
             pin_registry_generation: challenge.pin_registry_generation,

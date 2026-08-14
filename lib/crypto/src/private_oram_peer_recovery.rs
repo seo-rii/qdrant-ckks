@@ -1,6 +1,7 @@
 use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
+use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,6 +19,11 @@ pub const PRIVATE_ORAM_PEER_RECOVERY_SIGNATURE_VERSION: u16 = 1;
 pub const PRIVATE_ORAM_PEER_RECOVERY_SIGNATURE_ALGORITHM: &str = "ed25519";
 pub const PRIVATE_ORAM_PEER_RECOVERY_TERMINAL_EVIDENCE_DIGEST_DOMAIN: &str =
     "qdrant-sec/private-oram-mutation-owner-terminal-evidence/v2";
+pub const PRIVATE_ORAM_OWNER_ADOPTION_REQUEST_SIGNATURE_DOMAIN_V1: &str =
+    "qdrant-sec/private-oram-owner-adoption-request-signature/v1";
+pub const PRIVATE_ORAM_OWNER_ADOPTION_RESPONSE_SIGNATURE_DOMAIN_V1: &str =
+    "qdrant-sec/private-oram-owner-adoption-response-signature/v1";
+pub const PRIVATE_ORAM_OWNER_ADOPTION_PROTOCOL_VERSION_V1: u16 = 1;
 
 const PRIVATE_ORAM_PEER_RECOVERY_CHALLENGE_BYTES: usize = 16;
 const PRIVATE_ORAM_PEER_RECOVERY_REQUIRED_INDEXES: usize = 2;
@@ -52,6 +58,8 @@ pub enum PrivateOramPeerRecoveryError {
     InvalidSignature,
     #[error("private ORAM peer recovery terminal evidence digest does not match")]
     TerminalEvidenceDigestMismatch,
+    #[error("private ORAM peer recovery secure randomness is unavailable")]
+    RandomnessUnavailable,
 }
 
 impl Debug for PrivateOramPeerRecoveryError {
@@ -60,6 +68,15 @@ impl Debug for PrivateOramPeerRecoveryError {
             .field(&self.to_string())
             .finish()
     }
+}
+
+pub fn new_private_oram_peer_recovery_challenge_nonce_v2()
+-> Result<String, PrivateOramPeerRecoveryError> {
+    let mut challenge = [0_u8; PRIVATE_ORAM_PEER_RECOVERY_CHALLENGE_BYTES];
+    SystemRandom::new()
+        .fill(&mut challenge)
+        .map_err(|_| PrivateOramPeerRecoveryError::RandomnessUnavailable)?;
+    Ok(BASE64URL_NOPAD.encode(&challenge))
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,6 +215,88 @@ pub struct PrivateOramPeerRecoverySignatureV2 {
     pub key_epoch: u64,
     pub key_id: String,
     pub sig: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateOramOwnerAdoptionRequestV1 {
+    pub version: u16,
+    pub challenge_nonce: String,
+    pub collection_name: String,
+    pub collection_id: String,
+    pub mutation_id: String,
+    pub mutation_digest: String,
+    pub transition_digest: String,
+    pub lease_generation: u64,
+    pub writer_fence: u64,
+    pub coordinator_peer_id: u64,
+    pub owner_peer_id: u64,
+    pub vector_name: String,
+    pub owner_signing_key_id: String,
+    pub intent_key: String,
+    pub package_sha256: String,
+    pub parent_descriptor_digest: String,
+    pub parent_lease_acquired_record_digest: String,
+    pub parent_canonical_sha256: String,
+    pub parent_canonical_len: u64,
+}
+
+impl Debug for PrivateOramOwnerAdoptionRequestV1 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramOwnerAdoptionRequestV1")
+            .field("version", &self.version)
+            .field("lease_generation", &self.lease_generation)
+            .field("writer_fence", &self.writer_fence)
+            .field("coordinator_peer_id", &self.coordinator_peer_id)
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("parent_canonical_len", &self.parent_canonical_len)
+            .field("challenge_nonce", &"[redacted]")
+            .field("collection_name", &"[redacted]")
+            .field("collection_id", &"[redacted]")
+            .field("mutation_id", &"[redacted]")
+            .field("intent_key", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateOramOwnerAdoptionResponseV1 {
+    pub version: u16,
+    pub challenge_nonce: String,
+    pub owner_peer_id: u64,
+    pub parent_descriptor_digest: String,
+    pub parent_lease_acquired_record_digest: String,
+    pub journal_descriptor_digest: String,
+    pub evidence_canonical_sha256: String,
+    pub evidence_canonical_len: u64,
+}
+
+impl Debug for PrivateOramOwnerAdoptionResponseV1 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramOwnerAdoptionResponseV1")
+            .field("version", &self.version)
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("evidence_canonical_len", &self.evidence_canonical_len)
+            .field("challenge_nonce", &"[redacted]")
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field("journal_descriptor_digest", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
+#[must_use]
+#[derive(Clone, PartialEq, Eq)]
+pub struct VerifiedPrivateOramOwnerAdoptionRequestV1 {
+    request: PrivateOramOwnerAdoptionRequestV1,
+}
+
+impl VerifiedPrivateOramOwnerAdoptionRequestV1 {
+    pub fn request(&self) -> &PrivateOramOwnerAdoptionRequestV1 {
+        &self.request
+    }
 }
 
 impl Debug for PrivateOramPeerRecoverySignatureV2 {
@@ -494,6 +593,282 @@ pub fn validate_private_oram_peer_recovery_signature_v2_shape(
     decode_base64url_32(&signature.key_id, "signature.key_id")?;
     decode_signature(&signature.sig)?;
     Ok(())
+}
+
+pub fn validate_private_oram_owner_adoption_request_v1(
+    request: &PrivateOramOwnerAdoptionRequestV1,
+) -> Result<(), PrivateOramPeerRecoveryError> {
+    if request.version != PRIVATE_ORAM_OWNER_ADOPTION_PROTOCOL_VERSION_V1 {
+        return Err(PrivateOramPeerRecoveryError::UnsupportedProtocolVersion(
+            request.version,
+        ));
+    }
+    decode_base64url_exact::<PRIVATE_ORAM_PEER_RECOVERY_CHALLENGE_BYTES>(
+        &request.challenge_nonce,
+        BASE64URL_NOPAD_16_BYTE_LEN,
+        "challenge_nonce",
+    )?;
+    validate_bounded_name(
+        &request.collection_name,
+        MAX_COLLECTION_NAME_BYTES,
+        "collection_name",
+    )?;
+    validate_resource_id(&request.collection_id, "collection_id")?;
+    validate_resource_id(&request.owner_signing_key_id, "owner_signing_key_id")?;
+    validate_resource_id(&request.intent_key, "intent_key")?;
+    validate_bounded_name(&request.vector_name, MAX_VECTOR_NAME_BYTES, "vector_name")?;
+    for (value, field) in [
+        (&request.mutation_id, "mutation_id"),
+        (&request.mutation_digest, "mutation_digest"),
+        (&request.transition_digest, "transition_digest"),
+        (&request.package_sha256, "package_sha256"),
+        (
+            &request.parent_descriptor_digest,
+            "parent_descriptor_digest",
+        ),
+        (
+            &request.parent_lease_acquired_record_digest,
+            "parent_lease_acquired_record_digest",
+        ),
+        (&request.parent_canonical_sha256, "parent_canonical_sha256"),
+    ] {
+        decode_base64url_32(value, field)?;
+    }
+    if request.lease_generation == 0
+        || request.writer_fence == 0
+        || request.lease_generation != request.writer_fence
+        || request.coordinator_peer_id == 0
+        || request.owner_peer_id == 0
+        || request.coordinator_peer_id == request.owner_peer_id
+        || request.parent_canonical_len == 0
+        || request.parent_canonical_len > 64 * 1024
+    {
+        return Err(PrivateOramPeerRecoveryError::InvalidField(
+            "owner_adoption_request",
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_private_oram_owner_adoption_response_v1(
+    request: &PrivateOramOwnerAdoptionRequestV1,
+    response: &PrivateOramOwnerAdoptionResponseV1,
+    evidence_canonical_json: &[u8],
+) -> Result<(), PrivateOramPeerRecoveryError> {
+    validate_private_oram_owner_adoption_request_v1(request)?;
+    if response.version != PRIVATE_ORAM_OWNER_ADOPTION_PROTOCOL_VERSION_V1
+        || response.challenge_nonce != request.challenge_nonce
+        || response.owner_peer_id != request.owner_peer_id
+        || response.parent_descriptor_digest != request.parent_descriptor_digest
+        || response.parent_lease_acquired_record_digest
+            != request.parent_lease_acquired_record_digest
+        || response.evidence_canonical_len
+            != u64::try_from(evidence_canonical_json.len())
+                .map_err(|_| PrivateOramPeerRecoveryError::InvalidField("evidence_canonical_len"))?
+        || response.evidence_canonical_len == 0
+        || response.evidence_canonical_len > 64 * 1024
+    {
+        return Err(PrivateOramPeerRecoveryError::ResponseContextMismatch(
+            "owner_adoption_response",
+        ));
+    }
+    decode_base64url_32(
+        &response.journal_descriptor_digest,
+        "journal_descriptor_digest",
+    )?;
+    decode_base64url_32(
+        &response.evidence_canonical_sha256,
+        "evidence_canonical_sha256",
+    )?;
+    if response.evidence_canonical_sha256 != sha256_base64url(evidence_canonical_json) {
+        return Err(PrivateOramPeerRecoveryError::ResponseContextMismatch(
+            "evidence_canonical_sha256",
+        ));
+    }
+    Ok(())
+}
+
+pub fn sign_private_oram_owner_adoption_request_v1(
+    key_pair: &Ed25519KeyPair,
+    key_epoch: u64,
+    request: &PrivateOramOwnerAdoptionRequestV1,
+) -> Result<PrivateOramPeerRecoverySignatureV2, PrivateOramPeerRecoveryError> {
+    let public_key = private_oram_peer_recovery_public_key_v1(key_pair, key_epoch)?;
+    let message = private_oram_owner_adoption_request_signature_message_v1(request, &public_key)?;
+    Ok(peer_signature(key_pair, public_key, &message))
+}
+
+pub fn validate_private_oram_owner_adoption_request_signature_v1(
+    public_key: &PrivateOramPeerRecoveryPublicKeyV1,
+    request: &PrivateOramOwnerAdoptionRequestV1,
+    signature: &PrivateOramPeerRecoverySignatureV2,
+) -> Result<VerifiedPrivateOramOwnerAdoptionRequestV1, PrivateOramPeerRecoveryError> {
+    let public_key_bytes = validate_private_oram_peer_recovery_public_key_v1(public_key)?;
+    validate_private_oram_peer_recovery_signature_v2_shape(signature)?;
+    validate_signature_matches_public_key(signature, public_key)?;
+    let message = private_oram_owner_adoption_request_signature_message_v1(request, public_key)?;
+    verify_peer_signature(public_key_bytes, signature, &message)?;
+    Ok(VerifiedPrivateOramOwnerAdoptionRequestV1 {
+        request: request.clone(),
+    })
+}
+
+pub fn sign_private_oram_owner_adoption_response_v1(
+    key_pair: &Ed25519KeyPair,
+    key_epoch: u64,
+    request: &PrivateOramOwnerAdoptionRequestV1,
+    response: &PrivateOramOwnerAdoptionResponseV1,
+    evidence_canonical_json: &[u8],
+) -> Result<PrivateOramPeerRecoverySignatureV2, PrivateOramPeerRecoveryError> {
+    let public_key = private_oram_peer_recovery_public_key_v1(key_pair, key_epoch)?;
+    let message = private_oram_owner_adoption_response_signature_message_v1(
+        request,
+        response,
+        evidence_canonical_json,
+        &public_key,
+    )?;
+    Ok(peer_signature(key_pair, public_key, &message))
+}
+
+pub fn validate_private_oram_owner_adoption_response_signature_v1(
+    public_key: &PrivateOramPeerRecoveryPublicKeyV1,
+    request: &PrivateOramOwnerAdoptionRequestV1,
+    response: &PrivateOramOwnerAdoptionResponseV1,
+    evidence_canonical_json: &[u8],
+    signature: &PrivateOramPeerRecoverySignatureV2,
+) -> Result<(), PrivateOramPeerRecoveryError> {
+    let public_key_bytes = validate_private_oram_peer_recovery_public_key_v1(public_key)?;
+    validate_private_oram_peer_recovery_signature_v2_shape(signature)?;
+    validate_signature_matches_public_key(signature, public_key)?;
+    let message = private_oram_owner_adoption_response_signature_message_v1(
+        request,
+        response,
+        evidence_canonical_json,
+        public_key,
+    )?;
+    verify_peer_signature(public_key_bytes, signature, &message)
+}
+
+fn private_oram_owner_adoption_request_signature_message_v1(
+    request: &PrivateOramOwnerAdoptionRequestV1,
+    public_key: &PrivateOramPeerRecoveryPublicKeyV1,
+) -> Result<Vec<u8>, PrivateOramPeerRecoveryError> {
+    validate_private_oram_owner_adoption_request_v1(request)?;
+    validate_private_oram_peer_recovery_public_key_v1(public_key)?;
+    let mut message = Vec::new();
+    try_push_domain(
+        &mut message,
+        PRIVATE_ORAM_OWNER_ADOPTION_REQUEST_SIGNATURE_DOMAIN_V1.as_bytes(),
+    )?;
+    push_owner_adoption_request(&mut message, request)?;
+    push_peer_public_key(&mut message, public_key)?;
+    Ok(message)
+}
+
+fn private_oram_owner_adoption_response_signature_message_v1(
+    request: &PrivateOramOwnerAdoptionRequestV1,
+    response: &PrivateOramOwnerAdoptionResponseV1,
+    evidence_canonical_json: &[u8],
+    public_key: &PrivateOramPeerRecoveryPublicKeyV1,
+) -> Result<Vec<u8>, PrivateOramPeerRecoveryError> {
+    validate_private_oram_owner_adoption_response_v1(request, response, evidence_canonical_json)?;
+    validate_private_oram_peer_recovery_public_key_v1(public_key)?;
+    let mut message = Vec::new();
+    try_push_domain(
+        &mut message,
+        PRIVATE_ORAM_OWNER_ADOPTION_RESPONSE_SIGNATURE_DOMAIN_V1.as_bytes(),
+    )?;
+    push_owner_adoption_request(&mut message, request)?;
+    push_u16(&mut message, response.version);
+    try_push_str(&mut message, &response.challenge_nonce)?;
+    push_u64(&mut message, response.owner_peer_id);
+    try_push_str(&mut message, &response.parent_descriptor_digest)?;
+    try_push_str(&mut message, &response.parent_lease_acquired_record_digest)?;
+    try_push_str(&mut message, &response.journal_descriptor_digest)?;
+    try_push_str(&mut message, &response.evidence_canonical_sha256)?;
+    push_u64(&mut message, response.evidence_canonical_len);
+    push_peer_public_key(&mut message, public_key)?;
+    Ok(message)
+}
+
+fn push_owner_adoption_request(
+    message: &mut Vec<u8>,
+    request: &PrivateOramOwnerAdoptionRequestV1,
+) -> Result<(), PrivateOramPeerRecoveryError> {
+    push_u16(message, request.version);
+    try_push_str(message, &request.challenge_nonce)?;
+    try_push_str(message, &request.collection_name)?;
+    try_push_str(message, &request.collection_id)?;
+    try_push_str(message, &request.mutation_id)?;
+    try_push_str(message, &request.mutation_digest)?;
+    try_push_str(message, &request.transition_digest)?;
+    push_u64(message, request.lease_generation);
+    push_u64(message, request.writer_fence);
+    push_u64(message, request.coordinator_peer_id);
+    push_u64(message, request.owner_peer_id);
+    try_push_str(message, &request.vector_name)?;
+    try_push_str(message, &request.owner_signing_key_id)?;
+    try_push_str(message, &request.intent_key)?;
+    try_push_str(message, &request.package_sha256)?;
+    try_push_str(message, &request.parent_descriptor_digest)?;
+    try_push_str(message, &request.parent_lease_acquired_record_digest)?;
+    try_push_str(message, &request.parent_canonical_sha256)?;
+    push_u64(message, request.parent_canonical_len);
+    Ok(())
+}
+
+fn push_peer_public_key(
+    message: &mut Vec<u8>,
+    public_key: &PrivateOramPeerRecoveryPublicKeyV1,
+) -> Result<(), PrivateOramPeerRecoveryError> {
+    push_u16(message, PRIVATE_ORAM_PEER_RECOVERY_SIGNATURE_VERSION);
+    push_u16(message, public_key.version);
+    try_push_str(message, &public_key.alg)?;
+    push_u64(message, public_key.key_epoch);
+    try_push_str(message, &public_key.key_id)?;
+    try_push_str(message, &public_key.public_key)
+}
+
+fn peer_signature(
+    key_pair: &Ed25519KeyPair,
+    public_key: PrivateOramPeerRecoveryPublicKeyV1,
+    message: &[u8],
+) -> PrivateOramPeerRecoverySignatureV2 {
+    PrivateOramPeerRecoverySignatureV2 {
+        version: PRIVATE_ORAM_PEER_RECOVERY_SIGNATURE_VERSION,
+        alg: public_key.alg,
+        key_epoch: public_key.key_epoch,
+        key_id: public_key.key_id,
+        sig: BASE64URL_NOPAD.encode(key_pair.sign(message).as_ref()),
+    }
+}
+
+fn validate_signature_matches_public_key(
+    signature: &PrivateOramPeerRecoverySignatureV2,
+    public_key: &PrivateOramPeerRecoveryPublicKeyV1,
+) -> Result<(), PrivateOramPeerRecoveryError> {
+    if signature.alg != public_key.alg
+        || signature.key_epoch != public_key.key_epoch
+        || signature.key_id != public_key.key_id
+    {
+        return Err(PrivateOramPeerRecoveryError::SignatureKeyMismatch);
+    }
+    Ok(())
+}
+
+fn verify_peer_signature(
+    public_key_bytes: [u8; 32],
+    signature: &PrivateOramPeerRecoverySignatureV2,
+    message: &[u8],
+) -> Result<(), PrivateOramPeerRecoveryError> {
+    let signature_bytes = decode_signature(&signature.sig)?;
+    UnparsedPublicKey::new(&ED25519, public_key_bytes)
+        .verify(message, &signature_bytes)
+        .map_err(|_| PrivateOramPeerRecoveryError::InvalidSignature)
+}
+
+fn sha256_base64url(bytes: &[u8]) -> String {
+    BASE64URL_NOPAD.encode(&Sha256::digest(bytes))
 }
 
 pub fn try_private_oram_peer_recovery_response_signature_message_v2(
@@ -814,6 +1189,18 @@ mod tests {
         terminal.terminal_evidence_digest =
             try_private_oram_peer_recovery_terminal_evidence_digest_v2(request, &terminal).unwrap();
         terminal
+    }
+
+    #[test]
+    fn peer_recovery_challenge_nonce_uses_fresh_fixed_width_randomness() {
+        let first = new_private_oram_peer_recovery_challenge_nonce_v2().unwrap();
+        let second = new_private_oram_peer_recovery_challenge_nonce_v2().unwrap();
+
+        assert_eq!(first.len(), BASE64URL_NOPAD_16_BYTE_LEN);
+        assert_eq!(BASE64URL_NOPAD.decode(first.as_bytes()).unwrap().len(), 16);
+        assert_eq!(second.len(), BASE64URL_NOPAD_16_BYTE_LEN);
+        assert_eq!(BASE64URL_NOPAD.decode(second.as_bytes()).unwrap().len(), 16);
+        assert_ne!(first, second);
     }
 
     #[test]
@@ -1164,6 +1551,104 @@ mod tests {
             &public_key.public_key,
             &public_key.key_id,
             &signature.sig,
+        ] {
+            assert!(!rendered.contains(sentinel));
+        }
+    }
+
+    #[test]
+    fn owner_adoption_signatures_bind_parent_and_evidence() {
+        let coordinator = deterministic_key_pair(31);
+        let owner = deterministic_key_pair(32);
+        let coordinator_public = private_oram_peer_recovery_public_key_v1(&coordinator, 1).unwrap();
+        let owner_public = private_oram_peer_recovery_public_key_v1(&owner, 1).unwrap();
+        let request = PrivateOramOwnerAdoptionRequestV1 {
+            version: PRIVATE_ORAM_OWNER_ADOPTION_PROTOCOL_VERSION_V1,
+            challenge_nonce: BASE64URL_NOPAD
+                .encode(&[7; PRIVATE_ORAM_PEER_RECOVERY_CHALLENGE_BYTES]),
+            collection_name: "docs".to_string(),
+            collection_id: "collection-a".to_string(),
+            mutation_id: digest(1),
+            mutation_digest: digest(2),
+            transition_digest: digest(3),
+            lease_generation: 7,
+            writer_fence: 7,
+            coordinator_peer_id: 11,
+            owner_peer_id: 12,
+            vector_name: "text".to_string(),
+            owner_signing_key_id: "owner-key".to_string(),
+            intent_key: "intent-key".to_string(),
+            package_sha256: digest(4),
+            parent_descriptor_digest: digest(5),
+            parent_lease_acquired_record_digest: digest(6),
+            parent_canonical_sha256: digest(7),
+            parent_canonical_len: 512,
+        };
+        let request_signature =
+            sign_private_oram_owner_adoption_request_v1(&coordinator, 1, &request).unwrap();
+        let _verified_request = validate_private_oram_owner_adoption_request_signature_v1(
+            &coordinator_public,
+            &request,
+            &request_signature,
+        )
+        .unwrap();
+
+        let evidence = br#"{"owner_peer_id":12}"#;
+        let response = PrivateOramOwnerAdoptionResponseV1 {
+            version: PRIVATE_ORAM_OWNER_ADOPTION_PROTOCOL_VERSION_V1,
+            challenge_nonce: request.challenge_nonce.clone(),
+            owner_peer_id: request.owner_peer_id,
+            parent_descriptor_digest: request.parent_descriptor_digest.clone(),
+            parent_lease_acquired_record_digest: request
+                .parent_lease_acquired_record_digest
+                .clone(),
+            journal_descriptor_digest: digest(8),
+            evidence_canonical_sha256: sha256_base64url(evidence),
+            evidence_canonical_len: evidence.len() as u64,
+        };
+        let response_signature =
+            sign_private_oram_owner_adoption_response_v1(&owner, 1, &request, &response, evidence)
+                .unwrap();
+        validate_private_oram_owner_adoption_response_signature_v1(
+            &owner_public,
+            &request,
+            &response,
+            evidence,
+            &response_signature,
+        )
+        .unwrap();
+
+        let mut substituted_parent = request.clone();
+        substituted_parent.parent_descriptor_digest = digest(9);
+        assert!(
+            validate_private_oram_owner_adoption_request_signature_v1(
+                &coordinator_public,
+                &substituted_parent,
+                &request_signature,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_private_oram_owner_adoption_response_signature_v1(
+                &owner_public,
+                &request,
+                &response,
+                br#"{"owner_peer_id":13}"#,
+                &response_signature,
+            )
+            .is_err()
+        );
+
+        let rendered =
+            format!("{request:?} {response:?} {request_signature:?} {response_signature:?}");
+        for sentinel in [
+            &request.challenge_nonce,
+            &request.collection_id,
+            &request.mutation_id,
+            &request.parent_descriptor_digest,
+            &response.evidence_canonical_sha256,
+            &request_signature.sig,
+            &response_signature.sig,
         ] {
             assert!(!rendered.contains(sentinel));
         }

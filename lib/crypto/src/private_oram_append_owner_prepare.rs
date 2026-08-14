@@ -26,6 +26,10 @@ use crate::private_result_oram::{
     PrivateResultOramBucket, PrivateResultOramBucketAeadBaseContext, PrivateResultOramError,
     private_result_oram_bucket_ciphertext_bytes, validate_private_result_upload_bucket,
 };
+use crate::{
+    PrivateOramDurableReadObservationV2, VerifiedPrivateOramOwnerPrestageRequestV2,
+    reconstruct_private_oram_owner_prestage_read_transcripts_v2,
+};
 
 pub const PRIVATE_ORAM_APPEND_OWNER_PREPARE_V1_VERSION: u16 = 1;
 
@@ -483,9 +487,10 @@ pub fn validate_private_oram_append_owner_prepare_v1(
         .iter()
         .map(|evidence| evidence.transcript.clone())
         .collect::<Vec<_>>();
-    validate_private_oram_append_mutation_v1(
+    validate_private_oram_append_owner_prepare_with_observed_v2(
         manifest_bundle,
-        &prepare.mutation_bundle,
+        prepare,
+        &observed_read_transcripts,
         PrivateOramAppendValidationContext {
             expected_collection_id: context.expected_collection_id,
             expected_manifest_digest: context.expected_manifest_digest,
@@ -502,7 +507,163 @@ pub fn validate_private_oram_append_owner_prepare_v1(
             max_mutation_ttl_secs: context.max_mutation_ttl_secs,
             public_key: context.public_key,
         },
-    )?;
+    )
+}
+
+/// Revalidates one durable owner package after authenticating its coordinator-signed pre-stage
+/// request. Callers cannot construct the verified request without passing signature validation.
+pub fn validate_private_oram_append_owner_prepare_from_verified_prestage_v2(
+    manifest_bundle: &PrivateOramImmutableManifestBundleV2,
+    prepare: &PrivateOramAppendOwnerPrepareV1,
+    durable_read_observations: &[PrivateOramDurableReadObservationV2],
+    verified_request: &VerifiedPrivateOramOwnerPrestageRequestV2,
+    context: PrivateOramAppendOwnerPrestageValidationContextV2<'_>,
+) -> Result<PrivateOramValidatedOwnerPrepareV1, PrivateOramAppendOwnerPrepareError> {
+    let request = verified_request.request();
+    let mutation = &prepare.mutation_bundle.mutation;
+    if request.collection_id != mutation.collection_id
+        || request.mutation_id != mutation.mutation_id
+        || request.mutation_digest != private_oram_append_mutation_v1_digest(mutation)?
+        || request.writer_fence != mutation.writer_fence
+        || request.collection_id != context.expected_collection_id
+        || request.writer_fence != context.expected_writer_fence
+        || durable_read_observations.len() != prepare.indexes.len()
+    {
+        return Err(PrivateOramAppendOwnerPrepareError::InvalidInput(
+            "verified_prestage",
+        ));
+    }
+    let observed_read_transcripts = reconstruct_private_oram_owner_prestage_read_transcripts_v2(
+        prepare,
+        durable_read_observations,
+    )
+    .map_err(|_| PrivateOramAppendOwnerPrepareError::InvalidInput("durable_read_observations"))?;
+    validate_private_oram_append_owner_prepare_with_observed_v2(
+        manifest_bundle,
+        prepare,
+        &observed_read_transcripts,
+        PrivateOramAppendValidationContext {
+            expected_collection_id: context.expected_collection_id,
+            expected_manifest_digest: context.expected_manifest_digest,
+            expected_owner_signing_key_id: context.expected_owner_signing_key_id,
+            expected_layout_generation: context.expected_layout_generation,
+            expected_layout_digest: context.expected_layout_digest,
+            expected_writer_lease_digest: context.expected_writer_lease_digest,
+            expected_writer_fence: context.expected_writer_fence,
+            expected_state_sequence: context.expected_state_sequence,
+            expected_old_state_digest: context.expected_old_state_digest,
+            expected_visible_point_record: context.expected_visible_point_record,
+            observed_read_transcripts: &observed_read_transcripts,
+            now_unix: context.now_unix,
+            max_mutation_ttl_secs: context.max_mutation_ttl_secs,
+            public_key: context.public_key,
+        },
+    )
+}
+
+/// Revalidates the owner-prepare material retained in an admitted recovery envelope.
+///
+/// The envelope's canonical package hash and admission binding are validated by the consensus
+/// layer before this function is called. This function reconstructs the omitted path labels and
+/// applies the same manifest, signature, writeback, point, and fixed-budget checks as live
+/// pre-staging without requiring the expired transport challenge.
+pub fn validate_private_oram_append_owner_prepare_from_durable_recovery_v2(
+    manifest_bundle: &PrivateOramImmutableManifestBundleV2,
+    prepare: &PrivateOramAppendOwnerPrepareV1,
+    durable_read_observations: &[PrivateOramDurableReadObservationV2],
+    context: PrivateOramAppendOwnerPrestageValidationContextV2<'_>,
+) -> Result<PrivateOramValidatedOwnerPrepareV1, PrivateOramAppendOwnerPrepareError> {
+    let mutation = &prepare.mutation_bundle.mutation;
+    if mutation.collection_id != context.expected_collection_id
+        || mutation.writer_fence != context.expected_writer_fence
+        || durable_read_observations.len() != prepare.indexes.len()
+    {
+        return Err(PrivateOramAppendOwnerPrepareError::InvalidInput(
+            "durable_recovery",
+        ));
+    }
+    let observed_read_transcripts = reconstruct_private_oram_owner_prestage_read_transcripts_v2(
+        prepare,
+        durable_read_observations,
+    )
+    .map_err(|_| PrivateOramAppendOwnerPrepareError::InvalidInput("durable_read_observations"))?;
+    validate_private_oram_append_owner_prepare_with_observed_v2(
+        manifest_bundle,
+        prepare,
+        &observed_read_transcripts,
+        PrivateOramAppendValidationContext {
+            expected_collection_id: context.expected_collection_id,
+            expected_manifest_digest: context.expected_manifest_digest,
+            expected_owner_signing_key_id: context.expected_owner_signing_key_id,
+            expected_layout_generation: context.expected_layout_generation,
+            expected_layout_digest: context.expected_layout_digest,
+            expected_writer_lease_digest: context.expected_writer_lease_digest,
+            expected_writer_fence: context.expected_writer_fence,
+            expected_state_sequence: context.expected_state_sequence,
+            expected_old_state_digest: context.expected_old_state_digest,
+            expected_visible_point_record: context.expected_visible_point_record,
+            observed_read_transcripts: &observed_read_transcripts,
+            now_unix: context.now_unix,
+            max_mutation_ttl_secs: context.max_mutation_ttl_secs,
+            public_key: context.public_key,
+        },
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PrivateOramAppendOwnerPrestageValidationContextV2<'a> {
+    pub expected_collection_id: &'a str,
+    pub expected_manifest_digest: &'a str,
+    pub expected_owner_signing_key_id: &'a str,
+    pub expected_layout_generation: u64,
+    pub expected_layout_digest: &'a str,
+    pub expected_writer_lease_digest: &'a str,
+    pub expected_writer_fence: u64,
+    pub expected_state_sequence: u64,
+    pub expected_old_state_digest: &'a str,
+    pub expected_visible_point_record: Option<PrivateOramVisiblePointRecordV1<'a>>,
+    pub now_unix: u64,
+    pub max_mutation_ttl_secs: u64,
+    pub public_key: &'a [u8],
+}
+
+impl Debug for PrivateOramAppendOwnerPrestageValidationContextV2<'_> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramAppendOwnerPrestageValidationContextV2")
+            .field("expected_writer_fence", &self.expected_writer_fence)
+            .field("expected_state_sequence", &self.expected_state_sequence)
+            .field("now_unix", &self.now_unix)
+            .field("max_mutation_ttl_secs", &self.max_mutation_ttl_secs)
+            .finish_non_exhaustive()
+    }
+}
+
+fn validate_private_oram_append_owner_prepare_with_observed_v2(
+    manifest_bundle: &PrivateOramImmutableManifestBundleV2,
+    prepare: &PrivateOramAppendOwnerPrepareV1,
+    observed_read_transcripts: &[PrivateOramObservedReadTranscriptV1],
+    context: PrivateOramAppendValidationContext<'_>,
+) -> Result<PrivateOramValidatedOwnerPrepareV1, PrivateOramAppendOwnerPrepareError> {
+    if prepare.version != PRIVATE_ORAM_APPEND_OWNER_PREPARE_V1_VERSION
+        || prepare.indexes.len() != manifest_bundle.manifest.indexes.len()
+        || prepare.indexes.is_empty()
+        || observed_read_transcripts.len() != prepare.indexes.len()
+        || context.observed_read_transcripts != observed_read_transcripts
+    {
+        return Err(PrivateOramAppendOwnerPrepareError::InvalidInput("prepare"));
+    }
+    let total_bucket_count = prepare.indexes.iter().try_fold(0usize, |count, index| {
+        count.checked_add(index.ordered_encrypted_buckets.len())
+    });
+    if total_bucket_count
+        .is_none_or(|count| count == 0 || count > PRIVATE_ORAM_APPEND_MAX_TOTAL_BUCKET_REFS)
+    {
+        return Err(PrivateOramAppendOwnerPrepareError::InvalidInput(
+            "ordered_encrypted_buckets",
+        ));
+    }
+    validate_private_oram_append_mutation_v1(manifest_bundle, &prepare.mutation_bundle, context)?;
 
     let mutation = &prepare.mutation_bundle.mutation;
     let mut validated_indexes = Vec::with_capacity(prepare.indexes.len());
@@ -515,7 +676,7 @@ pub fn validate_private_oram_append_owner_prepare_v1(
             .zip(&mutation.new_state.state.indexes)
             .zip(&mutation.writebacks)
             .zip(&prepare.indexes)
-            .zip(&observed_read_transcripts)
+            .zip(observed_read_transcripts)
     {
         if index_prepare.ordered_encrypted_buckets.kind() != manifest_index.kind()
             || index_prepare.ordered_encrypted_buckets.kind() != writeback.kind
