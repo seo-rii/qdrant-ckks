@@ -10,7 +10,8 @@ mod startup;
 mod tonic;
 mod tracing;
 
-use std::io::Error;
+use std::io::{Error, Read};
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
@@ -29,6 +30,12 @@ use collection::profiling::interface::init_requests_profile_collector;
 use collection::shards::channel_service::ChannelService;
 use consensus::Consensus;
 use fs_err as fs;
+use qdrant_sec::{
+    PrivateOramActivationAuthorityBundleV1, PrivateOramActivationAuthorityTrustAnchorV1,
+    PrivateOramPeerRecoveryPublicKeyV1,
+};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use slog::Drain;
 use startup::setup_panic_hook;
 use storage::content_manager::consensus::operation_sender::OperationSender;
@@ -54,6 +61,12 @@ use crate::common::helpers::{
     load_tls_client_config,
 };
 use crate::common::inference::service::InferenceService;
+use crate::common::private_oram_mutation_supervisor::{
+    initialize_private_oram_mutation_supervisor_v2, supervise_private_oram_mutations_v2,
+};
+use crate::common::private_oram_peer_identity::{
+    PrivateOramPeerIdentityOpenPolicy, PrivateOramPeerRecoveryIdentity,
+};
 use crate::common::telemetry::TelemetryCollector;
 use crate::common::telemetry_reporting::TelemetryReporter;
 use crate::greeting::welcome;
@@ -141,6 +154,90 @@ struct Args {
     ///             It'll also compact consensus WAL to force snapshot
     #[arg(long, action, default_value_t = false)]
     reinit: bool,
+
+    /// Create or inspect this peer's private ORAM signing identity and exit.
+    #[arg(long, action, default_value_t = false)]
+    bootstrap_private_oram_peer_identity: bool,
+}
+
+const PRIVATE_ORAM_ACTIVATION_BUNDLE_MAX_BYTES: u64 = 1024 * 1024;
+
+struct PrivateOramMutationV2Startup {
+    trust_anchor: PrivateOramActivationAuthorityTrustAnchorV1,
+    authority_bundle: PrivateOramActivationAuthorityBundleV1,
+}
+
+#[derive(Serialize)]
+struct PrivateOramPeerIdentityBootstrapOutput<'a> {
+    peer_id: u64,
+    public_key: &'a PrivateOramPeerRecoveryPublicKeyV1,
+    binary_capability_digest: String,
+    runtime_capability_fingerprint: String,
+}
+
+fn read_bounded_canonical_json<T>(path: &Path, max_bytes: u64) -> anyhow::Result<T>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max_bytes {
+        anyhow::bail!("private ORAM activation authority bundle file is invalid");
+    }
+    let capacity = usize::try_from(metadata.len())?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| anyhow::anyhow!("private ORAM activation authority bundle is oversized"))?;
+    file.take(max_bytes + 1).read_to_end(&mut bytes)?;
+    if bytes.len() != capacity || bytes.len() as u64 > max_bytes {
+        anyhow::bail!("private ORAM activation authority bundle file changed while reading");
+    }
+    let value: T = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("private ORAM activation authority bundle is invalid"))?;
+    if serde_json::to_vec(&value)? != bytes {
+        anyhow::bail!("private ORAM activation authority bundle is not canonical JSON");
+    }
+    Ok(value)
+}
+
+fn private_oram_mutation_v2_startup(
+    settings: &Settings,
+) -> anyhow::Result<Option<PrivateOramMutationV2Startup>> {
+    let Some(config) = settings
+        .cluster
+        .consensus
+        .private_oram_mutation_v2_activation
+        .as_ref()
+    else {
+        return Ok(None);
+    };
+    if !settings.cluster.enabled {
+        anyhow::bail!("private ORAM mutation V2 activation requires cluster mode");
+    }
+    let trust_anchor = PrivateOramActivationAuthorityTrustAnchorV1::from_external_configuration(
+        config.authority.clone(),
+        config.cluster_identity_digest.clone(),
+        config.cluster_first_voter_peer_id,
+    )
+    .map_err(|_| anyhow::anyhow!("private ORAM activation trust anchor is invalid"))?;
+    let authority_bundle: PrivateOramActivationAuthorityBundleV1 = read_bounded_canonical_json(
+        &config.authority_bundle_path,
+        PRIVATE_ORAM_ACTIVATION_BUNDLE_MAX_BYTES,
+    )?;
+    let required_binary_capability_digest =
+        &authority_bundle.manifest.required_binary_capability_digest;
+    if required_binary_capability_digest
+        != &crate::common::crypto::private_oram_mutation_v2_binary_capability_digest()
+        && required_binary_capability_digest
+            != &crate::common::crypto::private_oram_mutation_v3_binary_capability_digest()
+    {
+        anyhow::bail!("private ORAM activation authority requires a different binary capability");
+    }
+    Ok(Some(PrivateOramMutationV2Startup {
+        trust_anchor,
+        authority_bundle,
+    }))
 }
 
 fn main() -> anyhow::Result<()> {
@@ -241,6 +338,30 @@ fn main() -> anyhow::Result<()> {
 
     fs::create_dir_all(&settings.storage.storage_path)?;
 
+    if args.bootstrap_private_oram_peer_identity {
+        let peer_id = settings.cluster.peer_id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "--bootstrap-private-oram-peer-identity requires cluster.peer_id to be configured"
+            )
+        })?;
+        let identity = PrivateOramPeerRecoveryIdentity::open_or_create(
+            &settings.storage.storage_path,
+            peer_id,
+            PrivateOramPeerIdentityOpenPolicy::BootstrapUnpinned,
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let output = PrivateOramPeerIdentityBootstrapOutput {
+            peer_id,
+            public_key: identity.public_key(),
+            binary_capability_digest:
+                crate::common::crypto::private_oram_mutation_v3_binary_capability_digest(),
+            runtime_capability_fingerprint:
+                crate::common::crypto::crypto_runtime_capability_fingerprint(&settings),
+        };
+        println!("{}", serde_json::to_string(&output)?);
+        return Ok(());
+    }
+
     // Check if the filesystem is compatible with Qdrant
     let mmaps_working;
     match check_fs_info(&settings.storage.storage_path) {
@@ -299,13 +420,50 @@ fn main() -> anyhow::Result<()> {
         args.bootstrap
     };
 
+    let private_oram_mutation_v2_startup = private_oram_mutation_v2_startup(&settings)?;
+
     // Saved state of the consensus.
-    let persistent_consensus_state = Persistent::load_or_init(
-        &settings.storage.storage_path,
-        bootstrap.is_none(),
-        args.reinit,
-        settings.cluster.peer_id,
-    )?;
+    let persistent_consensus_state = match private_oram_mutation_v2_startup.as_ref() {
+        Some(activation) => Persistent::load_or_init_with_private_oram_mutation_v2_activation(
+            &settings.storage.storage_path,
+            bootstrap.is_none(),
+            args.reinit,
+            settings.cluster.peer_id,
+            &activation.trust_anchor,
+            &activation.authority_bundle,
+        )?,
+        None => Persistent::load_or_init(
+            &settings.storage.storage_path,
+            bootstrap.is_none(),
+            args.reinit,
+            settings.cluster.peer_id,
+        )?,
+    };
+    let private_oram_peer_identity = private_oram_mutation_v2_startup
+        .as_ref()
+        .map(|activation| {
+            let peer_id = persistent_consensus_state.this_peer_id();
+            let signer = activation
+                .authority_bundle
+                .manifest
+                .peers
+                .iter()
+                .find(|peer| peer.peer_id == peer_id)
+                .map(|peer| &peer.signer)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "private ORAM activation authority does not pin this peer identity"
+                    )
+                })?;
+            PrivateOramPeerRecoveryIdentity::open_or_create(
+                &settings.storage.storage_path,
+                peer_id,
+                PrivateOramPeerIdentityOpenPolicy::RequirePinned(signer),
+            )
+            .map(Arc::new)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+        })
+        .transpose()?;
     reconcile_private_oram_external_recovery_installs(&settings.storage.storage_path, |key| {
         persistent_consensus_state.private_oram_external_recovery(key)
     })
@@ -535,12 +693,29 @@ fn main() -> anyhow::Result<()> {
             telemetry_collector.clone(),
             tonic_telemetry_collector.clone(),
             toc_arc.clone(),
+            private_oram_peer_identity.clone(),
             runtime_handle.clone(),
             args.reinit,
         )
         .map_err(|err| anyhow::anyhow!("Can't initialize consensus: {err}"))?;
 
         handles.push(handle);
+
+        if let Some(identity) = private_oram_peer_identity.clone() {
+            initialize_private_oram_mutation_supervisor_v2();
+            let supervisor_consensus = consensus_state.clone();
+            let supervisor_dispatcher = dispatcher_arc.clone();
+            let supervisor_settings = Arc::new(settings.clone());
+            let _private_oram_mutation_supervisor = runtime_handle.spawn(async move {
+                supervisor_consensus.is_leader_established.await_ready();
+                supervise_private_oram_mutations_v2(
+                    supervisor_dispatcher,
+                    supervisor_settings,
+                    identity,
+                )
+                .await;
+            });
+        }
 
         let toc_arc_clone = toc_arc.clone();
         let consensus_state_clone = consensus_state.clone();
@@ -642,6 +817,7 @@ fn main() -> anyhow::Result<()> {
         let dispatcher_arc = dispatcher_arc.clone();
         let telemetry_collector = telemetry_collector.clone();
         let settings = settings.clone();
+        let private_oram_peer_identity = private_oram_peer_identity.clone();
         let handle = thread::Builder::new()
             .name("web".to_string())
             .spawn(move || {
@@ -653,6 +829,7 @@ fn main() -> anyhow::Result<()> {
                         health_checker,
                         settings,
                         logger_handle,
+                        private_oram_peer_identity,
                     ),
                 )
             })

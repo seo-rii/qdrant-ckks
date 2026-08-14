@@ -16,13 +16,14 @@ use collection::shards::transfer::ShardTransfer;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
-    PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramCommitBucketRef,
-    PrivateResultOramCommitSignatureInput, PrivateResultOramManifest,
-    PrivateResultOramManifestValidationContext, PrivateResultOramMerkleProof,
-    PrivateResultOramReadBucketsSignatureInput, PrivateResultOramSignature,
-    PrivateResultOramSignatureVerification, PrivateResultOramUploadBundle,
-    private_result_oram_bucket_ciphertext_bytes, private_result_oram_fixed_writeback_bucket_budget,
-    private_result_oram_writeback_digest, validate_private_result_oram_commit_signature,
+    PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramBucketValidationContext,
+    PrivateResultOramCommitBucketRef, PrivateResultOramCommitSignatureInput,
+    PrivateResultOramManifest, PrivateResultOramManifestValidationContext,
+    PrivateResultOramMerkleProof, PrivateResultOramReadBucketsSignatureInput,
+    PrivateResultOramSignature, PrivateResultOramSignatureVerification,
+    PrivateResultOramUploadBundle, private_result_oram_bucket_ciphertext_bytes,
+    private_result_oram_fixed_writeback_bucket_budget, private_result_oram_writeback_digest,
+    validate_private_result_oram_bucket_shape, validate_private_result_oram_commit_signature,
     validate_private_result_oram_manifest, validate_private_result_oram_manifest_signature_shape,
     validate_private_result_oram_read_buckets_signature,
 };
@@ -262,6 +263,13 @@ struct PrivateResultOramSession {
     max_bucket_ciphertext_bytes: usize,
     manifest: PrivateResultOramManifest,
     commit_in_progress: bool,
+    owner: PrivateResultOramSessionOwner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PrivateResultOramSessionOwner {
+    Standalone,
+    PairedMutation,
 }
 
 impl Debug for PrivateResultOramSession {
@@ -278,6 +286,7 @@ impl Debug for PrivateResultOramSession {
             .field("max_bucket_ciphertext_bytes", &"[redacted]")
             .field("manifest", &"[redacted]")
             .field("commit_in_progress", &"[redacted]")
+            .field("owner", &self.owner)
             .finish()
     }
 }
@@ -301,6 +310,11 @@ impl PrivateResultOramSessionRegistry {
         let session = self.sessions.get(session_id).ok_or_else(|| {
             StorageError::bad_request("private result ORAM session is missing or expired")
         })?;
+        if session.owner != PrivateResultOramSessionOwner::Standalone {
+            return Err(StorageError::bad_request(
+                "private result ORAM session belongs to a different protocol",
+            ));
+        }
         if !self
             .active_writer_by_collection
             .get(&session.collection_id)
@@ -388,12 +402,18 @@ impl PrivateResultOramSessionRegistry {
         self.open(session, now_unix)
     }
 
-    fn close(&mut self, collection_id: &str, session_id: &str, now_unix: u64) -> bool {
+    fn close_owned(
+        &mut self,
+        collection_id: &str,
+        session_id: &str,
+        now_unix: u64,
+        expected_owner: PrivateResultOramSessionOwner,
+    ) -> bool {
         self.expire(now_unix);
         if self
             .sessions
             .get(session_id)
-            .is_some_and(|session| session.commit_in_progress)
+            .is_some_and(|session| session.commit_in_progress || session.owner != expected_owner)
         {
             return false;
         }
@@ -412,6 +432,46 @@ impl PrivateResultOramSessionRegistry {
             self.sessions.insert(session_id.to_string(), session);
         }
         false
+    }
+
+    fn close(&mut self, collection_id: &str, session_id: &str, now_unix: u64) -> bool {
+        self.close_owned(
+            collection_id,
+            session_id,
+            now_unix,
+            PrivateResultOramSessionOwner::Standalone,
+        )
+    }
+
+    fn release_paired(
+        &mut self,
+        collection_id: &str,
+        session_id: &str,
+        now_unix: u64,
+    ) -> StorageResult<()> {
+        self.expire(now_unix);
+        let Some(session) = self.sessions.get(session_id) else {
+            return Ok(());
+        };
+        if session.owner != PrivateResultOramSessionOwner::PairedMutation
+            || session.collection_id != collection_id
+            || session.commit_in_progress
+        {
+            return Err(StorageError::bad_request(
+                "private result ORAM paired session release is invalid",
+            ));
+        }
+        if !self.close_owned(
+            collection_id,
+            session_id,
+            now_unix,
+            PrivateResultOramSessionOwner::PairedMutation,
+        ) {
+            return Err(StorageError::service_error(
+                "private result ORAM paired session release failed",
+            ));
+        }
+        Ok(())
     }
 
     fn has_active_collection(&mut self, collection_id: &str, now_unix: u64) -> bool {
@@ -511,7 +571,30 @@ impl PrivateResultOramSessionRegistry {
         now_unix: u64,
         action: impl FnOnce(&mut PrivateResultOramSession) -> StorageResult<T>,
     ) -> StorageResult<T> {
-        let session = self.checked_session_mut(collection_id, session_id, now_unix, false)?;
+        self.with_session_mut_owned(
+            collection_id,
+            session_id,
+            now_unix,
+            PrivateResultOramSessionOwner::Standalone,
+            action,
+        )
+    }
+
+    fn with_session_mut_owned<T>(
+        &mut self,
+        collection_id: &str,
+        session_id: &str,
+        now_unix: u64,
+        expected_owner: PrivateResultOramSessionOwner,
+        action: impl FnOnce(&mut PrivateResultOramSession) -> StorageResult<T>,
+    ) -> StorageResult<T> {
+        let session = self.checked_session_mut_owned(
+            collection_id,
+            session_id,
+            now_unix,
+            false,
+            expected_owner,
+        )?;
         if session.commit_in_progress {
             return Err(StorageError::bad_request(
                 "private result ORAM session commit is already in progress",
@@ -624,6 +707,23 @@ impl PrivateResultOramSessionRegistry {
         now_unix: u64,
         allow_expired_commit: bool,
     ) -> StorageResult<&mut PrivateResultOramSession> {
+        self.checked_session_mut_owned(
+            collection_id,
+            session_id,
+            now_unix,
+            allow_expired_commit,
+            PrivateResultOramSessionOwner::Standalone,
+        )
+    }
+
+    fn checked_session_mut_owned(
+        &mut self,
+        collection_id: &str,
+        session_id: &str,
+        now_unix: u64,
+        allow_expired_commit: bool,
+        expected_owner: PrivateResultOramSessionOwner,
+    ) -> StorageResult<&mut PrivateResultOramSession> {
         self.expire(now_unix);
         let session = self.sessions.get_mut(session_id).ok_or_else(|| {
             StorageError::bad_request("private result ORAM session is missing or expired")
@@ -631,6 +731,11 @@ impl PrivateResultOramSessionRegistry {
         if session.collection_id != collection_id {
             return Err(StorageError::bad_request(
                 "private result ORAM session does not match collection",
+            ));
+        }
+        if session.owner != expected_owner {
+            return Err(StorageError::bad_request(
+                "private result ORAM session belongs to a different protocol",
             ));
         }
         if !self
@@ -703,6 +808,18 @@ pub(crate) fn private_result_oram_has_active_session(collection_id: &str) -> Sto
         .has_active_writer(collection_id)
 }
 
+pub(crate) fn release_private_result_oram_session_for_paired_mutation(
+    collection_id: &str,
+    session_id: &str,
+) -> StorageResult<()> {
+    validate_private_result_oram_session_id_shape(session_id)?;
+    let now_unix = current_unix_secs()?;
+    let mut registry = session_registry().lock().map_err(|_| {
+        StorageError::service_error("private result ORAM session registry poisoned")
+    })?;
+    registry.release_paired(collection_id, session_id, now_unix)
+}
+
 impl PrivateResultOramSession {
     fn response(&self) -> PrivateResultOramSessionResponse {
         PrivateResultOramSessionResponse {
@@ -716,7 +833,7 @@ impl PrivateResultOramSession {
     }
 }
 
-struct ResolvedPrivateResultOramContext {
+pub(crate) struct ResolvedPrivateResultOramContext {
     collection_path: std::path::PathBuf,
     collection_crypto_id: String,
     expected_key_id: String,
@@ -729,7 +846,19 @@ struct ResolvedPrivateResultOramContext {
 }
 
 impl ResolvedPrivateResultOramContext {
-    fn manifest_context<'a>(
+    pub(crate) fn collection_path(&self) -> &std::path::Path {
+        &self.collection_path
+    }
+
+    pub(crate) fn collection_crypto_id(&self) -> &str {
+        &self.collection_crypto_id
+    }
+
+    pub(crate) fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    pub(crate) fn manifest_context<'a>(
         &'a self,
         signature_key_id: &'a str,
     ) -> PrivateResultOramManifestValidationContext<'a> {
@@ -746,7 +875,7 @@ impl ResolvedPrivateResultOramContext {
         }
     }
 
-    fn validate_manifest_runtime_policy(
+    pub(crate) fn validate_manifest_runtime_policy(
         &self,
         manifest: &PrivateResultOramManifest,
     ) -> StorageResult<()> {
@@ -1045,6 +1174,7 @@ pub async fn do_open_private_result_oram_session(
         desired_epoch,
         fixed_budget,
         false,
+        PrivateResultOramSessionOwner::Standalone,
     )
     .await
 }
@@ -1068,6 +1198,31 @@ pub(crate) async fn do_open_private_result_oram_session_coordinated(
         desired_epoch,
         fixed_budget,
         true,
+        PrivateResultOramSessionOwner::Standalone,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn do_open_private_result_oram_session_for_paired_mutation(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    client_id: String,
+    desired_epoch: u64,
+    fixed_budget: bool,
+) -> StorageResult<PrivateResultOramSessionResponse> {
+    do_open_private_result_oram_session_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        client_id,
+        desired_epoch,
+        fixed_budget,
+        true,
+        PrivateResultOramSessionOwner::PairedMutation,
     )
     .await
 }
@@ -1082,6 +1237,7 @@ async fn do_open_private_result_oram_session_inner(
     desired_epoch: u64,
     fixed_budget: bool,
     coordinated_distributed: bool,
+    owner: PrivateResultOramSessionOwner,
 ) -> StorageResult<PrivateResultOramSessionResponse> {
     validate_private_result_oram_client_id_shape(&client_id)?;
     if is_strict(settings) && !fixed_budget {
@@ -1193,6 +1349,7 @@ async fn do_open_private_result_oram_session_inner(
         max_bucket_ciphertext_bytes,
         manifest,
         commit_in_progress: false,
+        owner,
     };
     let mut registry = session_registry().lock().map_err(|_| {
         StorageError::service_error("private result ORAM session registry poisoned")
@@ -1211,7 +1368,7 @@ async fn do_open_private_result_oram_session_inner(
         &expected_open_signature,
     ) {
         if let Ok(mut registry) = session_registry().lock() {
-            registry.close(&collection_crypto_id, &response.session_id, now_unix);
+            registry.close_owned(&collection_crypto_id, &response.session_id, now_unix, owner);
         }
         return Err(err);
     }
@@ -1315,7 +1472,27 @@ async fn do_upload_private_result_oram_buckets_inner(
     resolved.validate_manifest_runtime_policy(&manifest)?;
     let _upload_guard =
         begin_private_result_oram_upload_write_window(&resolved.collection_crypto_id)?;
+    let current_epoch = store
+        .read_current_epoch()
+        .map_err(private_result_oram_epoch_store_error)?;
+    if current_epoch.index_epoch != index_epoch || current_epoch.root_hash != root_hash {
+        return Err(StorageError::bad_request(
+            "private result ORAM bucket upload epoch/root does not match current manifest epoch",
+        ));
+    }
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest.oram)?;
+    for bucket in &buckets {
+        validate_private_result_oram_bucket_shape(
+            bucket,
+            PrivateResultOramBucketValidationContext {
+                expected_index_epoch: index_epoch,
+                bucket_count: manifest.bucket_count,
+                max_ciphertext_bytes,
+            },
+        )
+        .map_err(private_result_oram_error)?;
+        validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
+    }
     let bundle = PrivateResultOramUploadBundle {
         manifest,
         manifest_signature: signature,
@@ -1352,6 +1529,7 @@ pub async fn do_read_private_result_oram_buckets(
         bucket_ids,
         read_signature,
         false,
+        PrivateResultOramSessionOwner::Standalone,
     )
     .await
 }
@@ -1379,6 +1557,35 @@ pub(crate) async fn do_read_private_result_oram_buckets_coordinated(
         bucket_ids,
         read_signature,
         true,
+        PrivateResultOramSessionOwner::Standalone,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn do_read_private_result_oram_buckets_for_paired_mutation(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    session_id: &str,
+    index_epoch: u64,
+    root_hash: String,
+    bucket_ids: Vec<u64>,
+    read_signature: PrivateResultOramSignature,
+) -> StorageResult<PrivateResultOramReadBucketsResponse> {
+    do_read_private_result_oram_buckets_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        session_id,
+        index_epoch,
+        root_hash,
+        bucket_ids,
+        read_signature,
+        true,
+        PrivateResultOramSessionOwner::PairedMutation,
     )
     .await
 }
@@ -1395,6 +1602,7 @@ async fn do_read_private_result_oram_buckets_inner(
     bucket_ids: Vec<u64>,
     read_signature: PrivateResultOramSignature,
     coordinated_distributed: bool,
+    expected_owner: PrivateResultOramSessionOwner,
 ) -> StorageResult<PrivateResultOramReadBucketsResponse> {
     validate_private_result_oram_manifest_signature_shape(&read_signature)
         .map_err(private_result_oram_error)?;
@@ -1418,10 +1626,11 @@ async fn do_read_private_result_oram_buckets_inner(
     let mut registry = session_registry().lock().map_err(|_| {
         StorageError::service_error("private result ORAM session registry poisoned")
     })?;
-    registry.with_session_mut(
+    registry.with_session_mut_owned(
         &request_context.collection_crypto_id,
         session_id,
         now_unix,
+        expected_owner,
         |session| {
             request_context.validate_manifest_runtime_policy(&session.manifest)?;
             if session.index_epoch != index_epoch || session.root_hash != root_hash {
@@ -2249,10 +2458,26 @@ async fn resolve_private_result_oram_context(
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
-    let collection_crypto_id = config.stable_crypto_id(collection.name())?;
-    validate_collection_crypto_runtime_with_crypto_id(
+    resolve_private_result_oram_context_from_snapshot(
         settings,
         collection.name(),
+        collection.path(),
+        &config,
+        signature_key_id,
+    )
+}
+
+pub(crate) fn resolve_private_result_oram_context_from_snapshot(
+    settings: &Settings,
+    collection_name: &str,
+    collection_path: &std::path::Path,
+    config: &CollectionConfigInternal,
+    signature_key_id: &str,
+) -> StorageResult<ResolvedPrivateResultOramContext> {
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    validate_collection_crypto_runtime_with_crypto_id(
+        settings,
+        collection_name,
         &collection_crypto_id,
         &config.params,
     )?;
@@ -2264,7 +2489,7 @@ async fn resolve_private_result_oram_context(
     let instance = private_result_oram_instance(settings, rule)?;
     let public_key = signature_public_key(instance, signature_key_id)?;
     Ok(ResolvedPrivateResultOramContext {
-        collection_path: collection.path().to_path_buf(),
+        collection_path: collection_path.to_path_buf(),
         ..manifest_context_from_runtime(&collection_crypto_id, instance, public_key)?
     })
 }
@@ -2768,7 +2993,7 @@ fn required_oram_params(instance: &CryptoInstanceConfig) -> StorageResult<OramPa
     })
 }
 
-fn max_bucket_ciphertext_bytes(oram: &OramParams) -> StorageResult<usize> {
+pub(crate) fn max_bucket_ciphertext_bytes(oram: &OramParams) -> StorageResult<usize> {
     let block_size = usize::try_from(oram.block_size_bytes).map_err(|_| {
         StorageError::bad_request("private result ORAM block_size_bytes is invalid")
     })?;
@@ -4355,6 +4580,50 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn paired_session_cannot_be_used_through_standalone_protocol() {
+        let now = 10;
+        let mut session = fixture_session("paired-session", 20);
+        session.owner = PrivateResultOramSessionOwner::PairedMutation;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry.open(session, now).unwrap();
+
+        for error in [
+            registry
+                .with_session_mut(
+                    "collection-private-result-test",
+                    "paired-session",
+                    now,
+                    |_| Ok(()),
+                )
+                .unwrap_err(),
+            registry
+                .begin_commit(
+                    "collection-private-result-test",
+                    "paired-session",
+                    now,
+                    |_| Ok(()),
+                )
+                .unwrap_err(),
+            registry
+                .consensus_lease_identity("paired-session", now)
+                .unwrap_err(),
+        ] {
+            let rendered = error.to_string();
+            assert!(rendered.contains("different protocol"));
+            assert_private_result_registry_error_redacts_ids(&rendered);
+        }
+        assert!(!registry.close("collection-private-result-test", "paired-session", now,));
+        assert!(registry.has_active_collection("collection-private-result-test", now));
+        registry
+            .release_paired("collection-private-result-test", "paired-session", now)
+            .unwrap();
+        registry
+            .release_paired("collection-private-result-test", "paired-session", now)
+            .unwrap();
+        assert!(!registry.has_active_collection("collection-private-result-test", now));
+    }
+
+    #[test]
     fn session_registry_atomically_converts_recovery_reservation_to_writer() {
         let now = 10;
         let session = fixture_session("recovered-session", 20);
@@ -5665,6 +5934,7 @@ mod private_result_oram_tests {
             max_bucket_ciphertext_bytes: 4096,
             manifest,
             commit_in_progress: false,
+            owner: PrivateResultOramSessionOwner::Standalone,
         }
     }
 

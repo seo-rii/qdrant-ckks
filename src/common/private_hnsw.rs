@@ -311,6 +311,13 @@ struct PrivateHnswSession {
     max_bucket_ciphertext_bytes: usize,
     manifest: PrivateHnswOramManifest,
     commit_in_progress: bool,
+    owner: PrivateHnswSessionOwner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PrivateHnswSessionOwner {
+    Standalone,
+    PairedMutation,
 }
 
 impl Debug for PrivateHnswSession {
@@ -330,6 +337,7 @@ impl Debug for PrivateHnswSession {
             .field("max_bucket_ciphertext_bytes", &"[redacted]")
             .field("manifest", &"[redacted]")
             .field("commit_in_progress", &"[redacted]")
+            .field("owner", &self.owner)
             .finish()
     }
 }
@@ -357,6 +365,11 @@ impl PrivateHnswSessionRegistry {
         if session.vector_name != vector_name {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM session does not match collection/vector",
+            ));
+        }
+        if session.owner != PrivateHnswSessionOwner::Standalone {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM session belongs to a different protocol",
             ));
         }
         let index_key = private_hnsw_index_key(&session.collection_id, vector_name);
@@ -441,18 +454,19 @@ impl PrivateHnswSessionRegistry {
         self.open(session, now_unix)
     }
 
-    fn close(
+    fn close_owned(
         &mut self,
         collection_id: &str,
         vector_name: &str,
         session_id: &str,
         now_unix: u64,
+        expected_owner: PrivateHnswSessionOwner,
     ) -> bool {
         self.expire(now_unix);
         if self
             .sessions
             .get(session_id)
-            .is_some_and(|session| session.commit_in_progress)
+            .is_some_and(|session| session.commit_in_progress || session.owner != expected_owner)
         {
             return false;
         }
@@ -472,6 +486,56 @@ impl PrivateHnswSessionRegistry {
             self.sessions.insert(session_id.to_string(), session);
         }
         false
+    }
+
+    fn close(
+        &mut self,
+        collection_id: &str,
+        vector_name: &str,
+        session_id: &str,
+        now_unix: u64,
+    ) -> bool {
+        self.close_owned(
+            collection_id,
+            vector_name,
+            session_id,
+            now_unix,
+            PrivateHnswSessionOwner::Standalone,
+        )
+    }
+
+    fn release_paired(
+        &mut self,
+        collection_id: &str,
+        vector_name: &str,
+        session_id: &str,
+        now_unix: u64,
+    ) -> StorageResult<()> {
+        self.expire(now_unix);
+        let Some(session) = self.sessions.get(session_id) else {
+            return Ok(());
+        };
+        if session.owner != PrivateHnswSessionOwner::PairedMutation
+            || session.collection_id != collection_id
+            || session.vector_name != vector_name
+            || session.commit_in_progress
+        {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM paired session release is invalid",
+            ));
+        }
+        if !self.close_owned(
+            collection_id,
+            vector_name,
+            session_id,
+            now_unix,
+            PrivateHnswSessionOwner::PairedMutation,
+        ) {
+            return Err(StorageError::service_error(
+                "private HNSW ORAM paired session release failed",
+            ));
+        }
+        Ok(())
     }
 
     fn has_active_collection(&mut self, collection_id: &str, now_unix: u64) -> bool {
@@ -586,8 +650,33 @@ impl PrivateHnswSessionRegistry {
         now_unix: u64,
         action: impl FnOnce(&mut PrivateHnswSession) -> StorageResult<T>,
     ) -> StorageResult<T> {
-        let session =
-            self.checked_session_mut(collection_id, vector_name, session_id, now_unix, false)?;
+        self.with_session_mut_owned(
+            collection_id,
+            vector_name,
+            session_id,
+            now_unix,
+            PrivateHnswSessionOwner::Standalone,
+            action,
+        )
+    }
+
+    fn with_session_mut_owned<T>(
+        &mut self,
+        collection_id: &str,
+        vector_name: &str,
+        session_id: &str,
+        now_unix: u64,
+        expected_owner: PrivateHnswSessionOwner,
+        action: impl FnOnce(&mut PrivateHnswSession) -> StorageResult<T>,
+    ) -> StorageResult<T> {
+        let session = self.checked_session_mut_owned(
+            collection_id,
+            vector_name,
+            session_id,
+            now_unix,
+            false,
+            expected_owner,
+        )?;
         if session.commit_in_progress {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM session commit is already in progress",
@@ -717,6 +806,25 @@ impl PrivateHnswSessionRegistry {
         now_unix: u64,
         allow_expired_commit: bool,
     ) -> StorageResult<&mut PrivateHnswSession> {
+        self.checked_session_mut_owned(
+            collection_id,
+            vector_name,
+            session_id,
+            now_unix,
+            allow_expired_commit,
+            PrivateHnswSessionOwner::Standalone,
+        )
+    }
+
+    fn checked_session_mut_owned(
+        &mut self,
+        collection_id: &str,
+        vector_name: &str,
+        session_id: &str,
+        now_unix: u64,
+        allow_expired_commit: bool,
+        expected_owner: PrivateHnswSessionOwner,
+    ) -> StorageResult<&mut PrivateHnswSession> {
         self.expire(now_unix);
         let session = self.sessions.get_mut(session_id).ok_or_else(|| {
             StorageError::bad_request("private HNSW ORAM session is missing or expired")
@@ -724,6 +832,11 @@ impl PrivateHnswSessionRegistry {
         if session.collection_id != collection_id || session.vector_name != vector_name {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM session does not match collection/vector",
+            ));
+        }
+        if session.owner != expected_owner {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM session belongs to a different protocol",
             ));
         }
         let index_key = private_hnsw_index_key(collection_id, vector_name);
@@ -803,6 +916,19 @@ pub(crate) fn private_hnsw_has_active_session(
         .has_active_writer(collection_id, vector_name)
 }
 
+pub(crate) fn release_private_hnsw_session_for_paired_mutation(
+    collection_id: &str,
+    vector_name: &str,
+    session_id: &str,
+) -> StorageResult<()> {
+    validate_private_hnsw_session_id_shape(session_id)?;
+    let now_unix = current_unix_secs()?;
+    let mut registry = session_registry()
+        .lock()
+        .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
+    registry.release_paired(collection_id, vector_name, session_id, now_unix)
+}
+
 impl PrivateHnswSession {
     fn response(&self) -> PrivateHnswSessionResponse {
         PrivateHnswSessionResponse {
@@ -817,7 +943,7 @@ impl PrivateHnswSession {
     }
 }
 
-struct ResolvedPrivateHnswContext {
+pub(crate) struct ResolvedPrivateHnswContext {
     collection_path: std::path::PathBuf,
     collection_crypto_id: String,
     vector_name: String,
@@ -880,7 +1006,19 @@ impl Drop for PrivateHnswUploadGuard {
 }
 
 impl ResolvedPrivateHnswContext {
-    fn manifest_context<'a>(
+    pub(crate) fn collection_path(&self) -> &std::path::Path {
+        &self.collection_path
+    }
+
+    pub(crate) fn collection_crypto_id(&self) -> &str {
+        &self.collection_crypto_id
+    }
+
+    pub(crate) fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    pub(crate) fn manifest_context<'a>(
         &'a self,
         signature_key_id: &'a str,
     ) -> PrivateHnswManifestValidationContext<'a> {
@@ -900,7 +1038,7 @@ impl ResolvedPrivateHnswContext {
         }
     }
 
-    fn validate_manifest_runtime_policy(
+    pub(crate) fn validate_manifest_runtime_policy(
         &self,
         manifest: &PrivateHnswOramManifest,
     ) -> StorageResult<()> {
@@ -1412,6 +1550,7 @@ pub async fn do_open_private_hnsw_session(
         fixed_budget,
         result_privacy,
         false,
+        PrivateHnswSessionOwner::Standalone,
     )
     .await
 }
@@ -1439,6 +1578,35 @@ pub(crate) async fn do_open_private_hnsw_session_coordinated(
         fixed_budget,
         result_privacy,
         true,
+        PrivateHnswSessionOwner::Standalone,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn do_open_private_hnsw_session_for_paired_mutation(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    client_id: String,
+    desired_epoch: u64,
+    fixed_budget: bool,
+    result_privacy: ResultPrivacyMode,
+) -> StorageResult<PrivateHnswSessionResponse> {
+    do_open_private_hnsw_session_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        client_id,
+        desired_epoch,
+        fixed_budget,
+        result_privacy,
+        true,
+        PrivateHnswSessionOwner::PairedMutation,
     )
     .await
 }
@@ -1455,6 +1623,7 @@ async fn do_open_private_hnsw_session_inner(
     fixed_budget: bool,
     result_privacy: ResultPrivacyMode,
     coordinated_distributed: bool,
+    owner: PrivateHnswSessionOwner,
 ) -> StorageResult<PrivateHnswSessionResponse> {
     validate_private_hnsw_client_id_shape(&client_id)?;
     if is_strict(settings) && !fixed_budget {
@@ -1581,6 +1750,7 @@ async fn do_open_private_hnsw_session_inner(
         max_bucket_ciphertext_bytes,
         manifest,
         commit_in_progress: false,
+        owner,
     };
     let mut registry = session_registry()
         .lock()
@@ -1599,11 +1769,12 @@ async fn do_open_private_hnsw_session_inner(
         &expected_open_signature,
     ) {
         if let Ok(mut registry) = session_registry().lock() {
-            registry.close(
+            registry.close_owned(
                 &collection_crypto_id,
                 vector_name,
                 &response.session_id,
                 now_unix,
+                owner,
             );
         }
         return Err(err);
@@ -1656,6 +1827,7 @@ pub async fn do_read_private_hnsw_paths(
         padding,
         client_signature,
         false,
+        PrivateHnswSessionOwner::Standalone,
     )
     .await
 }
@@ -1687,6 +1859,39 @@ pub(crate) async fn do_read_private_hnsw_paths_coordinated(
         padding,
         client_signature,
         true,
+        PrivateHnswSessionOwner::Standalone,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn do_read_private_hnsw_paths_for_paired_mutation(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    session_id: &str,
+    index_epoch: u64,
+    root_hash: &str,
+    paths: Vec<String>,
+    padding: PrivateHnswReadPadding,
+    client_signature: PrivateHnswClientSignature,
+) -> StorageResult<PrivateHnswReadPathsResponse> {
+    do_read_private_hnsw_paths_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        session_id,
+        index_epoch,
+        root_hash,
+        paths,
+        padding,
+        client_signature,
+        true,
+        PrivateHnswSessionOwner::PairedMutation,
     )
     .await
 }
@@ -1705,6 +1910,7 @@ async fn do_read_private_hnsw_paths_inner(
     padding: PrivateHnswReadPadding,
     client_signature: PrivateHnswClientSignature,
     coordinated_distributed: bool,
+    expected_owner: PrivateHnswSessionOwner,
 ) -> StorageResult<PrivateHnswReadPathsResponse> {
     validate_client_signature_shape(&client_signature)?;
     validate_private_hnsw_session_id_shape(session_id)?;
@@ -1728,11 +1934,12 @@ async fn do_read_private_hnsw_paths_inner(
     let mut registry = session_registry()
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
-    registry.with_session_mut(
+    registry.with_session_mut_owned(
         &request_context.collection_crypto_id,
         vector_name,
         session_id,
         now_unix,
+        expected_owner,
         |session| {
             request_context.validate_manifest_runtime_context(&session.manifest)?;
             if session.index_epoch != index_epoch || session.root_hash != root_hash {
@@ -2584,10 +2791,28 @@ async fn resolve_private_hnsw_context(
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
-    let collection_crypto_id = config.stable_crypto_id(collection.name())?;
-    validate_collection_crypto_runtime_with_crypto_id(
+    resolve_private_hnsw_context_from_snapshot(
         settings,
         collection.name(),
+        collection.path(),
+        &config,
+        vector_name,
+        signature_key_id,
+    )
+}
+
+pub(crate) fn resolve_private_hnsw_context_from_snapshot(
+    settings: &Settings,
+    collection_name: &str,
+    collection_path: &std::path::Path,
+    config: &CollectionConfigInternal,
+    vector_name: &str,
+    signature_key_id: &str,
+) -> StorageResult<ResolvedPrivateHnswContext> {
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    validate_collection_crypto_runtime_with_crypto_id(
+        settings,
+        collection_name,
         &collection_crypto_id,
         &config.params,
     )?;
@@ -2605,7 +2830,7 @@ async fn resolve_private_hnsw_context(
         has_private_result_oram_binding(settings, &encryption),
     )?;
     Ok(ResolvedPrivateHnswContext {
-        collection_path: collection.path().to_path_buf(),
+        collection_path: collection_path.to_path_buf(),
         public_key: signature_public_key(instance, signature_key_id)?,
         ..runtime_context
     })
@@ -3365,7 +3590,9 @@ fn ensure_private_hnsw_read_proof_matches_buckets(
     Ok(())
 }
 
-fn max_bucket_ciphertext_bytes(manifest: &PrivateHnswOramManifest) -> StorageResult<usize> {
+pub(crate) fn max_bucket_ciphertext_bytes(
+    manifest: &PrivateHnswOramManifest,
+) -> StorageResult<usize> {
     let block_size = usize::try_from(manifest.oram.block_size_bytes).map_err(|_| {
         StorageError::bad_request("private HNSW ORAM block_size_bytes exceeds usize")
     })?;
@@ -6031,6 +6258,7 @@ mod private_hnsw_tests {
             max_bucket_ciphertext_bytes: 4096,
             manifest,
             commit_in_progress: false,
+            owner: PrivateHnswSessionOwner::Standalone,
         }
     }
 
@@ -6479,6 +6707,44 @@ mod private_hnsw_tests {
         assert_private_hnsw_registry_error_redacts_ids(&rendered);
         assert!(registry.close("collection-uuid-1", "text", "session-1", now));
         assert!(!registry.has_active_collection("collection-uuid-1", now));
+        assert!(!registry.has_active_index("collection-uuid-1", "text", now));
+    }
+
+    #[test]
+    fn paired_session_cannot_be_used_through_standalone_protocol() {
+        let now = 10;
+        let mut session = fixture_session("paired-session", 20);
+        session.owner = PrivateHnswSessionOwner::PairedMutation;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry.open(session, now).unwrap();
+
+        for error in [
+            registry
+                .with_session_mut("collection-uuid-1", "text", "paired-session", now, |_| {
+                    Ok(())
+                })
+                .unwrap_err(),
+            registry
+                .begin_commit("collection-uuid-1", "text", "paired-session", now, |_| {
+                    Ok(())
+                })
+                .unwrap_err(),
+            registry
+                .consensus_lease_identity("text", "paired-session", now)
+                .unwrap_err(),
+        ] {
+            let rendered = error.to_string();
+            assert!(rendered.contains("different protocol"));
+            assert_private_hnsw_registry_error_redacts_ids(&rendered);
+        }
+        assert!(!registry.close("collection-uuid-1", "text", "paired-session", now,));
+        assert!(registry.has_active_index("collection-uuid-1", "text", now));
+        registry
+            .release_paired("collection-uuid-1", "text", "paired-session", now)
+            .unwrap();
+        registry
+            .release_paired("collection-uuid-1", "text", "paired-session", now)
+            .unwrap();
         assert!(!registry.has_active_index("collection-uuid-1", "text", now));
     }
 

@@ -1,8 +1,9 @@
-//! Dormant process-local signer storage for private ORAM peer recovery.
+//! Process-local signer storage and lifetime fence for private ORAM peer recovery.
 //!
 //! Temporary frame buffers are zeroized, but `ring` key objects and the kernel page cache are not
-//! covered by that guarantee. This module must remain disconnected from production RPC and
-//! consensus paths until process-incarnation fencing and an irreversible activation barrier exist.
+//! covered by that guarantee. Activated V2 startup retains an exclusive identity-directory lock
+//! through this object's lifetime, so another process using the same storage root cannot infer
+//! restart absence while this incarnation remains alive.
 
 #![allow(
     clippy::disallowed_methods,
@@ -19,13 +20,32 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Component, Path};
 
+use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
-    PrivateOramPeerRecoveryPublicKeyV1, PrivateOramPeerRecoveryRequestV2,
-    PrivateOramPeerRecoverySignatureV2, PrivateOramPeerRecoveryTerminalV2,
-    private_oram_peer_recovery_public_key_v1, sign_private_oram_peer_recovery_response_v2,
+    PrivateOramOwnerAdoptionRequestV1, PrivateOramOwnerAdoptionResponseV1,
+    PrivateOramOwnerCapsuleInstallAttestationStatementV2,
+    PrivateOramOwnerCapsuleInstallAttestationV2, PrivateOramOwnerCapsuleInstallRequestV2,
+    PrivateOramOwnerCapsuleInstallResponseV2, PrivateOramOwnerCleanupSignerV1,
+    PrivateOramOwnerLifecycleStateV1, PrivateOramOwnerPrestageAttestationStatementV2,
+    PrivateOramOwnerPrestageAttestationV2, PrivateOramOwnerPrestageRequestV2,
+    PrivateOramOwnerPrestageResponseV2, PrivateOramOwnerReservationPrepareChallengeV1,
+    PrivateOramOwnerReservationPrepareV1, PrivateOramOwnerReservationResolutionReceiptV1,
+    PrivateOramPeerActivationChallengeV1, PrivateOramPeerActivationObservationV1,
+    PrivateOramPeerActivationSignedAckV1, PrivateOramPeerRecoveryPublicKeyV1,
+    PrivateOramPeerRecoveryRequestV2, PrivateOramPeerRecoverySignatureV2,
+    PrivateOramPeerRecoveryTerminalV2, SignedPrivateOramOwnerReservationResolutionReceiptV1,
+    private_oram_owner_cleanup_signer_v1, private_oram_peer_recovery_public_key_v1,
+    sign_private_oram_owner_adoption_request_v1, sign_private_oram_owner_adoption_response_v1,
+    sign_private_oram_owner_capsule_install_attestation_v2,
+    sign_private_oram_owner_capsule_install_request_v2,
+    sign_private_oram_owner_capsule_install_response_v2,
+    sign_private_oram_owner_prestage_attestation_v2, sign_private_oram_owner_prestage_request_v2,
+    sign_private_oram_owner_prestage_response_v2, sign_private_oram_owner_reservation_prepare_v1,
+    sign_private_oram_owner_reservation_resolution_receipt_v1,
+    sign_private_oram_peer_activation_ack_v1, sign_private_oram_peer_recovery_response_v2,
     validate_private_oram_peer_recovery_public_key_v1,
 };
-use ring::rand::SystemRandom;
+use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::Ed25519KeyPair;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -85,6 +105,8 @@ pub(crate) struct PrivateOramPeerRecoveryIdentity {
     key_pair: Ed25519KeyPair,
     public_key: PrivateOramPeerRecoveryPublicKeyV1,
     peer_id: u64,
+    process_incarnation: String,
+    storage_root: File,
     directory_lock: File,
 }
 
@@ -214,11 +236,17 @@ impl PrivateOramPeerRecoveryIdentity {
             },
         };
         validate_identity_directory_binding(&storage_root, &directory_lock)?;
+        let mut process_incarnation = [0_u8; 32];
+        SystemRandom::new()
+            .fill(&mut process_incarnation)
+            .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)?;
 
         Ok(Self {
             key_pair: loaded.key_pair,
             public_key: loaded.public_key,
             peer_id,
+            process_incarnation: BASE64URL_NOPAD.encode(&process_incarnation),
+            storage_root,
             directory_lock,
         })
     }
@@ -229,6 +257,85 @@ impl PrivateOramPeerRecoveryIdentity {
 
     pub(crate) fn peer_id(&self) -> u64 {
         self.peer_id
+    }
+
+    pub(crate) fn process_incarnation(&self) -> &str {
+        &self.process_incarnation
+    }
+
+    pub(crate) fn require_process_lifetime_fence(
+        &self,
+        expected_peer_id: u64,
+    ) -> Result<&str, PrivateOramPeerIdentityError> {
+        if self.peer_id != expected_peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        // The private descriptor is locked before construction and cannot be replaced by callers.
+        // Rebinding it here proves this exact live object still names the secured storage root.
+        validate_identity_directory_binding(&self.storage_root, &self.directory_lock)?;
+        Ok(&self.process_incarnation)
+    }
+
+    pub(crate) fn owner_cleanup_signer(
+        &self,
+    ) -> Result<PrivateOramOwnerCleanupSignerV1, PrivateOramPeerIdentityError> {
+        private_oram_owner_cleanup_signer_v1(&self.key_pair, self.public_key.key_epoch)
+            .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_reservation_prepare(
+        &self,
+        challenge: PrivateOramOwnerReservationPrepareChallengeV1,
+        observed_lifecycle_state: PrivateOramOwnerLifecycleStateV1,
+        local_terminal_generation: u64,
+        durable_fence_record_digest: String,
+    ) -> Result<PrivateOramOwnerReservationPrepareV1, PrivateOramPeerIdentityError> {
+        if challenge.owner_peer_id != self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_owner_reservation_prepare_v1(
+            &self.key_pair,
+            challenge,
+            observed_lifecycle_state,
+            local_terminal_generation,
+            durable_fence_record_digest,
+            self.owner_cleanup_signer()?,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_reservation_resolution(
+        &self,
+        receipt: PrivateOramOwnerReservationResolutionReceiptV1,
+    ) -> Result<SignedPrivateOramOwnerReservationResolutionReceiptV1, PrivateOramPeerIdentityError>
+    {
+        if receipt.owner_peer_id != self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_owner_reservation_resolution_receipt_v1(
+            &self.key_pair,
+            receipt,
+            self.owner_cleanup_signer()?,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_activation_ack(
+        &self,
+        challenge: &PrivateOramPeerActivationChallengeV1,
+        observation: PrivateOramPeerActivationObservationV1,
+    ) -> Result<PrivateOramPeerActivationSignedAckV1, PrivateOramPeerIdentityError> {
+        if challenge.target_peer_id != self.peer_id || observation.responder_peer_id != self.peer_id
+        {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_peer_activation_ack_v1(
+            &self.key_pair,
+            self.public_key.key_epoch,
+            challenge,
+            observation,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
     }
 
     pub(crate) fn sign_response(
@@ -244,6 +351,138 @@ impl PrivateOramPeerRecoveryIdentity {
             self.public_key.key_epoch,
             request,
             terminal,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_capsule_install_request(
+        &self,
+        request: &PrivateOramOwnerCapsuleInstallRequestV2,
+    ) -> Result<PrivateOramPeerRecoverySignatureV2, PrivateOramPeerIdentityError> {
+        if request.coordinator_peer_id != self.peer_id || request.owner_peer_id == self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_owner_capsule_install_request_v2(
+            &self.key_pair,
+            self.public_key.key_epoch,
+            request,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_capsule_install_response(
+        &self,
+        request: &PrivateOramOwnerCapsuleInstallRequestV2,
+        response: &PrivateOramOwnerCapsuleInstallResponseV2,
+        receipt_canonical_json: &[u8],
+    ) -> Result<PrivateOramPeerRecoverySignatureV2, PrivateOramPeerIdentityError> {
+        if request.owner_peer_id != self.peer_id || response.owner_peer_id != self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_owner_capsule_install_response_v2(
+            &self.key_pair,
+            self.public_key.key_epoch,
+            request,
+            response,
+            receipt_canonical_json,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_capsule_install_attestation(
+        &self,
+        statement: &PrivateOramOwnerCapsuleInstallAttestationStatementV2,
+    ) -> Result<PrivateOramOwnerCapsuleInstallAttestationV2, PrivateOramPeerIdentityError> {
+        if statement.owner_peer_id != self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_owner_capsule_install_attestation_v2(
+            &self.key_pair,
+            self.public_key.key_epoch,
+            statement,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_adoption_request(
+        &self,
+        request: &PrivateOramOwnerAdoptionRequestV1,
+    ) -> Result<PrivateOramPeerRecoverySignatureV2, PrivateOramPeerIdentityError> {
+        if request.coordinator_peer_id != self.peer_id || request.owner_peer_id == self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_owner_adoption_request_v1(
+            &self.key_pair,
+            self.public_key.key_epoch,
+            request,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_adoption_response(
+        &self,
+        request: &PrivateOramOwnerAdoptionRequestV1,
+        response: &PrivateOramOwnerAdoptionResponseV1,
+        evidence_canonical_json: &[u8],
+    ) -> Result<PrivateOramPeerRecoverySignatureV2, PrivateOramPeerIdentityError> {
+        if request.owner_peer_id != self.peer_id || response.owner_peer_id != self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_owner_adoption_response_v1(
+            &self.key_pair,
+            self.public_key.key_epoch,
+            request,
+            response,
+            evidence_canonical_json,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_prestage_request(
+        &self,
+        request: &PrivateOramOwnerPrestageRequestV2,
+    ) -> Result<PrivateOramPeerRecoverySignatureV2, PrivateOramPeerIdentityError> {
+        if request.coordinator_peer_id != self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_owner_prestage_request_v2(
+            &self.key_pair,
+            self.public_key.key_epoch,
+            request,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_prestage_response(
+        &self,
+        request: &PrivateOramOwnerPrestageRequestV2,
+        response: &PrivateOramOwnerPrestageResponseV2,
+        receipt_canonical_json: &[u8],
+    ) -> Result<PrivateOramPeerRecoverySignatureV2, PrivateOramPeerIdentityError> {
+        if request.owner_peer_id != self.peer_id || response.owner_peer_id != self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_owner_prestage_response_v2(
+            &self.key_pair,
+            self.public_key.key_epoch,
+            request,
+            response,
+            receipt_canonical_json,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_prestage_attestation(
+        &self,
+        statement: &PrivateOramOwnerPrestageAttestationStatementV2,
+    ) -> Result<PrivateOramOwnerPrestageAttestationV2, PrivateOramPeerIdentityError> {
+        if statement.owner_peer_id != self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_owner_prestage_attestation_v2(
+            &self.key_pair,
+            self.public_key.key_epoch,
+            statement,
         )
         .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
     }
@@ -889,13 +1128,20 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     use std::path::PathBuf;
+    use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
+        PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_VERSION_V1,
         PRIVATE_ORAM_PEER_RECOVERY_PROTOCOL_VERSION, PrivateOramIndexKindV2,
-        PrivateOramPeerRecoveryRequestV2, PrivateOramPeerRecoveryTerminalIndexV2,
-        PrivateOramPeerRecoveryTerminalKindV2, PrivateOramPeerRecoveryTerminalV2,
+        PrivateOramOwnerReservationPrepareChallengeV1, PrivateOramPeerRecoveryRequestV2,
+        PrivateOramPeerRecoveryTerminalIndexV2, PrivateOramPeerRecoveryTerminalKindV2,
+        PrivateOramPeerRecoveryTerminalV2, private_oram_mutation_protocol_capability_digest_v2,
+        private_oram_owner_lifecycle_genesis_state_v1,
         try_private_oram_peer_recovery_terminal_evidence_digest_v2,
+        validate_private_oram_owner_reservation_prepare_v1,
         validate_private_oram_peer_recovery_response_signature_v2,
     };
     use tempfile::TempDir;
@@ -903,6 +1149,11 @@ mod tests {
     use super::*;
 
     const PEER_ID: u64 = 23;
+    const PROCESS_LOCK_TEST_ROLE: &str = "QDRANT_PRIVATE_ORAM_IDENTITY_LOCK_TEST_ROLE";
+    const PROCESS_LOCK_TEST_STORAGE: &str = "QDRANT_PRIVATE_ORAM_IDENTITY_LOCK_TEST_STORAGE";
+    const PROCESS_LOCK_TEST_READY: &str = "QDRANT_PRIVATE_ORAM_IDENTITY_LOCK_TEST_READY";
+    const PROCESS_LOCK_HELPER_NAME: &str =
+        "common::private_oram_peer_identity::tests::identity_process_lock_helper";
 
     fn identity_path(storage_path: &Path) -> PathBuf {
         storage_path
@@ -918,6 +1169,52 @@ mod tests {
 
     fn digest(value: u8) -> String {
         BASE64URL_NOPAD.encode(&[value; 32])
+    }
+
+    fn process_lock_test_command(role: &str, storage: &Path, ready: &Path) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg(PROCESS_LOCK_HELPER_NAME)
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(PROCESS_LOCK_TEST_ROLE, role)
+            .env(PROCESS_LOCK_TEST_STORAGE, storage)
+            .env(PROCESS_LOCK_TEST_READY, ready);
+        command
+    }
+
+    fn reservation_challenge() -> PrivateOramOwnerReservationPrepareChallengeV1 {
+        PrivateOramOwnerReservationPrepareChallengeV1 {
+            version: PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_VERSION_V1,
+            consensus_history_id_digest: digest(1),
+            raft_group_id_digest: digest(2),
+            collection_id: "collection-uuid-1".to_string(),
+            collection_lifetime_id_digest: digest(3),
+            collection_incarnation_digest: digest(4),
+            activation_anchor_digest: digest(5),
+            capability_epoch: 2,
+            protocol_capability_digest: private_oram_mutation_protocol_capability_digest_v2(),
+            membership_epoch: 101,
+            reservation_intent_digest: digest(6),
+            checkpoint_context_digest: digest(7),
+            committed_challenge_digest: digest(8),
+            challenge_applied_term: 4,
+            challenge_applied_index: 106,
+            attempt_id: digest(9),
+            challenge_nonce: BASE64URL_NOPAD.encode(&[10; 16]),
+            expected_checkpoint_record_digest: digest(11),
+            expected_checkpoint_sequence: 1,
+            expected_owner_target_digest: digest(12),
+            reserved_terminal_intent_key: digest(13),
+            owner_index: 0,
+            owner_count: 1,
+            owner_enrollment_id: digest(14),
+            owner_peer_id: PEER_ID,
+            owner_store_incarnation_digest: digest(15),
+            authority_registry_digest: digest(16),
+            owner_registry_digest: digest(17),
+        }
     }
 
     fn generated_frame(peer_id: u64) -> Zeroizing<Vec<u8>> {
@@ -1100,6 +1397,50 @@ mod tests {
     }
 
     #[test]
+    fn identity_signs_checkpoint_bound_owner_reservation_prepare() {
+        let storage = TempDir::new().unwrap();
+        let identity = PrivateOramPeerRecoveryIdentity::open_or_create(
+            storage.path(),
+            PEER_ID,
+            PrivateOramPeerIdentityOpenPolicy::BootstrapUnpinned,
+        )
+        .unwrap();
+        let challenge = reservation_challenge();
+        let lifecycle_state = private_oram_owner_lifecycle_genesis_state_v1(
+            challenge.owner_store_incarnation_digest.clone(),
+        )
+        .unwrap();
+        let prepare = identity
+            .sign_owner_reservation_prepare(
+                challenge.clone(),
+                lifecycle_state.clone(),
+                lifecycle_state.generation,
+                digest(18),
+            )
+            .unwrap();
+        let signer = identity.owner_cleanup_signer().unwrap();
+        let _verified = validate_private_oram_owner_reservation_prepare_v1(
+            &prepare,
+            &challenge,
+            &signer,
+            &lifecycle_state,
+        )
+        .unwrap();
+
+        let mut wrong_owner = challenge;
+        wrong_owner.owner_peer_id += 1;
+        assert_eq!(
+            identity.sign_owner_reservation_prepare(
+                wrong_owner,
+                lifecycle_state.clone(),
+                lifecycle_state.generation,
+                digest(18),
+            ),
+            Err(PrivateOramPeerIdentityError::PeerIdMismatch)
+        );
+    }
+
+    #[test]
     fn identity_lock_rejects_a_second_process_owner() {
         let storage = TempDir::new().unwrap();
         let identity = PrivateOramPeerRecoveryIdentity::open_or_create(
@@ -1121,6 +1462,86 @@ mod tests {
             ),
             Err(PrivateOramPeerIdentityError::IdentityLocked)
         ));
+        assert_eq!(
+            identity.require_process_lifetime_fence(PEER_ID).unwrap(),
+            identity.process_incarnation()
+        );
+        assert!(
+            identity
+                .require_process_lifetime_fence(PEER_ID + 1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn identity_process_lock_helper() {
+        let Ok(role) = std::env::var(PROCESS_LOCK_TEST_ROLE) else {
+            return;
+        };
+        let storage = PathBuf::from(std::env::var_os(PROCESS_LOCK_TEST_STORAGE).unwrap());
+        let ready = PathBuf::from(std::env::var_os(PROCESS_LOCK_TEST_READY).unwrap());
+        match role.as_str() {
+            "hold" => {
+                let _identity = PrivateOramPeerRecoveryIdentity::open_or_create(
+                    &storage,
+                    PEER_ID,
+                    PrivateOramPeerIdentityOpenPolicy::BootstrapUnpinned,
+                )
+                .unwrap();
+                fs::write(&ready, b"ready").unwrap();
+                thread::sleep(Duration::from_secs(60));
+            }
+            "expect-locked" => assert!(matches!(
+                PrivateOramPeerRecoveryIdentity::open_or_create(
+                    &storage,
+                    PEER_ID,
+                    PrivateOramPeerIdentityOpenPolicy::BootstrapUnpinned,
+                ),
+                Err(PrivateOramPeerIdentityError::IdentityLocked)
+            )),
+            "expect-acquired" => {
+                PrivateOramPeerRecoveryIdentity::open_or_create(
+                    &storage,
+                    PEER_ID,
+                    PrivateOramPeerIdentityOpenPolicy::BootstrapUnpinned,
+                )
+                .unwrap();
+            }
+            _ => panic!("unexpected process lock test role"),
+        }
+    }
+
+    #[test]
+    fn identity_lifetime_lock_fences_paused_and_dead_process_incarnations() {
+        let storage = TempDir::new().unwrap();
+        let ready = storage.path().join("holder.ready");
+        let mut holder = process_lock_test_command("hold", storage.path(), &ready)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let holder_ready = ready.exists();
+        // SAFETY: the child PID is live or kill returns an error that is asserted below.
+        let stopped = unsafe { nix::libc::kill(holder.id() as i32, nix::libc::SIGSTOP) } == 0;
+        let locked = process_lock_test_command("expect-locked", storage.path(), &ready)
+            .output()
+            .unwrap();
+        // SIGKILL releases the kernel flock even when the prior incarnation was paused.
+        let killed = unsafe { nix::libc::kill(holder.id() as i32, nix::libc::SIGKILL) } == 0;
+        let _ = holder.wait();
+        let acquired = process_lock_test_command("expect-acquired", storage.path(), &ready)
+            .output()
+            .unwrap();
+
+        assert!(holder_ready, "holder did not publish readiness");
+        assert!(stopped, "holder could not be paused");
+        assert!(locked.status.success(), "{:?}", locked.stderr);
+        assert!(killed, "holder could not be terminated");
+        assert!(acquired.status.success(), "{:?}", acquired.stderr);
     }
 
     #[test]

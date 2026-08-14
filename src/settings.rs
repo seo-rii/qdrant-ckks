@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::{env, fmt, io};
 
 use api::grpc::transport_channel_pool::{
@@ -9,6 +10,7 @@ use collection::operations::validation;
 use collection::shards::shard::PeerId;
 use common::flags::FeatureFlags;
 use config::{Config, ConfigError, Environment, File, FileFormat, Source};
+use qdrant_sec::PrivateOramActivationAuthorityPublicKeyV1;
 use serde::Deserialize;
 use storage::types::StorageConfig;
 use validator::{Validate, ValidationError, ValidationErrors};
@@ -213,6 +215,20 @@ pub struct ConsensusConfig {
     /// Compact WAL when it grows to enough applied entries
     #[serde(default = "default_compact_wal_entries")]
     pub compact_wal_entries: u64,
+    /// Externally anchored opt-in for the irreversible private ORAM mutation V2 protocol.
+    #[serde(default)]
+    #[validate(nested)]
+    pub private_oram_mutation_v2_activation: Option<PrivateOramMutationV2ActivationConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone, Validate)]
+pub struct PrivateOramMutationV2ActivationConfig {
+    pub authority: PrivateOramActivationAuthorityPublicKeyV1,
+    pub cluster_identity_digest: String,
+    #[validate(range(min = 1, max = MAX_PEER_ID))]
+    pub cluster_first_voter_peer_id: PeerId,
+    /// Canonical JSON containing the administrator-signed cumulative peer pin registry.
+    pub authority_bundle_path: PathBuf,
 }
 
 impl Default for ConsensusConfig {
@@ -223,6 +239,7 @@ impl Default for ConsensusConfig {
             bootstrap_timeout_sec: default_bootstrap_timeout_sec(),
             message_timeout_ticks: default_message_timeout_tics(),
             compact_wal_entries: default_compact_wal_entries(),
+            private_oram_mutation_v2_activation: None,
         }
     }
 }

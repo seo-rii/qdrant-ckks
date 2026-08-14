@@ -27,6 +27,7 @@ use tokio::time::sleep;
 use tonic::transport::{ClientTlsConfig, Uri};
 
 use crate::common::helpers;
+use crate::common::private_oram_peer_identity::PrivateOramPeerRecoveryIdentity;
 use crate::common::telemetry::TelemetryCollector;
 use crate::common::telemetry_ops::requests_telemetry::TonicTelemetryCollector;
 use crate::settings::{ConsensusConfig, Settings};
@@ -72,6 +73,7 @@ impl Consensus {
         telemetry_collector: Arc<tokio::sync::Mutex<TelemetryCollector>>,
         tonic_telemetry_collector: Arc<parking_lot::Mutex<TonicTelemetryCollector>>,
         toc: Arc<TableOfContent>,
+        private_oram_peer_identity: Option<Arc<PrivateOramPeerRecoveryIdentity>>,
         runtime: Handle,
         reinit: bool,
     ) -> anyhow::Result<JoinHandle<std::io::Result<()>>> {
@@ -164,6 +166,7 @@ impl Consensus {
                     telemetry_collector,
                     tonic_telemetry_collector,
                     settings,
+                    private_oram_peer_identity,
                     p2p_host,
                     p2p_port,
                     server_tls,
@@ -588,10 +591,12 @@ impl Consensus {
             // E.g., without this condition, if two nodes try to join cluster at the same time and
             // both conf-change requests are processed in the same batch, the second request would
             // be ignored and the node would fail to join.
-            let is_conf_change = matches!(
+            let is_serialization_barrier = matches!(
                 message,
                 Message::FromClient(
-                    ConsensusOperations::AddPeer { .. } | ConsensusOperations::RemovePeer(_)
+                    ConsensusOperations::AddPeer { .. }
+                        | ConsensusOperations::RemovePeer(_)
+                        | ConsensusOperations::ActivatePrivateOramMutationV2(_)
                 ),
             );
 
@@ -610,7 +615,7 @@ impl Consensus {
             events += 1;
             raft_messages += usize::from(is_raft_message);
 
-            if events >= RAFT_BATCH_SIZE || is_conf_change {
+            if events >= RAFT_BATCH_SIZE || is_serialization_barrier {
                 break;
             }
         }
@@ -631,6 +636,7 @@ impl Consensus {
     fn advance_node_impl(&mut self, message: Message) -> anyhow::Result<()> {
         match message {
             Message::FromClient(ConsensusOperations::AddPeer { peer_id, uri }) => {
+                self.ensure_private_oram_topology_proposal_allowed()?;
                 let existing_uris = self
                     .broker
                     .consensus_state
@@ -669,6 +675,7 @@ impl Consensus {
             }
 
             Message::FromClient(ConsensusOperations::RemovePeer(peer_id)) => {
+                self.ensure_private_oram_topology_proposal_allowed()?;
                 let mut change = ConfChangeV2::default();
 
                 change.set_changes(vec![raft_proto::new_conf_change_single(
@@ -683,6 +690,7 @@ impl Consensus {
             }
 
             Message::FromClient(ConsensusOperations::RequestSnapshot) => {
+                self.ensure_private_oram_activation_transition_allows_general_proposal()?;
                 self.node
                     .request_snapshot()
                     .context("failed to request snapshot")?;
@@ -692,7 +700,31 @@ impl Consensus {
                 self.node.report_snapshot(peer_id, status.into());
             }
 
+            Message::FromClient(ConsensusOperations::ActivatePrivateOramMutationV2(operation)) => {
+                let current_term = self.node.raft.term;
+                let last_log_index = self.node.store().last_index()?;
+                let last_applied_index = self.node.raft.raft_log.applied;
+                let pending_conf_index = self.node.raft.pending_conf_index;
+                self.broker
+                    .consensus_state
+                    .validate_private_oram_mutation_activation_proposal(
+                        &operation,
+                        current_term,
+                        last_log_index,
+                        last_applied_index,
+                        pending_conf_index,
+                    )?;
+                let consensus_operation =
+                    ConsensusOperations::ActivatePrivateOramMutationV2(operation);
+                let data = serde_cbor::to_vec(&consensus_operation)
+                    .context("failed to serialize private ORAM activation barrier")?;
+                self.node
+                    .propose(vec![], data)
+                    .context("failed to propose private ORAM activation barrier")?;
+            }
+
             Message::FromClient(operation) => {
+                self.ensure_private_oram_activation_transition_allows_general_proposal()?;
                 let data =
                     serde_cbor::to_vec(&operation).context("failed to serialize operation")?;
 
@@ -720,6 +752,48 @@ impl Consensus {
             }
         }
 
+        Ok(())
+    }
+
+    fn ensure_private_oram_activation_transition_allows_general_proposal(
+        &self,
+    ) -> anyhow::Result<()> {
+        let last_log_index = self.node.store().last_index()?;
+        if self
+            .broker
+            .consensus_state
+            .private_oram_mutation_activation_transition_pending(
+                self.node.raft.raft_log.applied,
+                last_log_index,
+            )?
+        {
+            return Err(anyhow!(
+                "ordinary consensus proposals are disabled while private ORAM mutation activation is in progress"
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_private_oram_topology_proposal_allowed(&self) -> anyhow::Result<()> {
+        if self
+            .broker
+            .consensus_state
+            .private_oram_mutation_format_floor_installed()
+        {
+            return Err(anyhow!(
+                "cluster topology changes are disabled after private ORAM mutation activation"
+            ));
+        }
+        let commit = self.node.store().hard_state().commit;
+        let last_log_index = self.node.store().last_index()?;
+        if commit != last_log_index
+            || self.node.raft.raft_log.applied != commit
+            || self.node.raft.pending_conf_index != 0
+        {
+            return Err(anyhow!(
+                "cluster topology change requires a fully applied stable Raft log"
+            ));
+        }
         Ok(())
     }
 
@@ -820,7 +894,25 @@ impl Consensus {
         let commit = store.hard_state().commit;
         let last_log_entry = store.last_index()?;
 
-        if commit != last_log_entry {
+        if self
+            .broker
+            .consensus_state
+            .private_oram_mutation_activation_transition_pending(
+                self.node.raft.raft_log.applied,
+                last_log_entry,
+            )?
+            || self
+                .broker
+                .consensus_state
+                .private_oram_mutation_format_floor_installed()
+        {
+            return Ok(false);
+        }
+
+        if commit != last_log_entry
+            || self.node.raft.raft_log.applied != commit
+            || self.node.raft.pending_conf_index != 0
+        {
             return Ok(false);
         }
 

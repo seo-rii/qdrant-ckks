@@ -13,6 +13,12 @@ pub mod private_hnsw;
 #[cfg(test)]
 pub(crate) mod private_hnsw_wire_fixture;
 #[cfg(target_os = "linux")]
+pub(crate) mod private_oram_mutation;
+#[cfg(target_os = "linux")]
+pub(crate) mod private_oram_mutation_session;
+#[cfg(target_os = "linux")]
+pub(crate) mod private_oram_mutation_supervisor;
+#[cfg(target_os = "linux")]
 #[allow(
     dead_code,
     reason = "peer recovery identity stays dormant until the consensus activation barrier exists"

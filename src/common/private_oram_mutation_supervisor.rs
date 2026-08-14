@@ -1,0 +1,513 @@
+use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Debug, Formatter};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::Duration;
+
+use collection::operations::verification::new_unchecked_verification_pass;
+use schemars::JsonSchema;
+use serde::Serialize;
+use storage::content_manager::consensus_ops::PrivateOramMutationKey;
+use storage::content_manager::errors::{StorageError, StorageResult};
+use storage::dispatcher::Dispatcher;
+
+use super::auth::Auth;
+use super::private_oram_mutation::reconcile_private_oram_admitted_to_ready_v2;
+use super::private_oram_mutation_session::{
+    current_unix_secs, private_oram_detached_job_exists_for_collection_v2,
+};
+use super::private_oram_peer_identity::PrivateOramPeerRecoveryIdentity;
+use super::private_oram_recovery::{
+    PrivateOramMutationTerminalResumeOutcomeV2,
+    archive_private_oram_mutation_before_acknowledgement_v2,
+    resume_private_oram_mutation_terminal_once_v2,
+};
+use crate::settings::Settings;
+
+const PRIVATE_ORAM_MUTATION_SUPERVISOR_INTERVAL: Duration = Duration::from_secs(5);
+const PRIVATE_ORAM_MUTATION_SUPERVISOR_MAX_CANDIDATES: usize = 1_024;
+const PRIVATE_ORAM_MUTATION_IMMUTABLE_OWNER_STALL_SECS: u64 = 300;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PrivateOramMutationSupervisorStateV2 {
+    Disabled,
+    Starting,
+    Ready,
+    Pending,
+    Blocked,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PrivateOramMutationSupervisorBlockReasonV2 {
+    ConsensusUnavailable,
+    ReconcileFailure,
+    ImmutableCoordinatorUnavailable,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub(crate) struct PrivateOramMutationSupervisorStatusV2 {
+    pub state: PrivateOramMutationSupervisorStateV2,
+    pub generation: u64,
+    pub inspected: u32,
+    pub reconciled: u32,
+    pub process_local_pending: u32,
+    pub owned_elsewhere: u32,
+    pub awaiting_cleanup: u32,
+    pub immutable_coordinator_unavailable: u32,
+    pub oldest_foreign_pending_age_secs: u64,
+    pub failed: u32,
+    pub block_reason: Option<PrivateOramMutationSupervisorBlockReasonV2>,
+    pub last_scan_unix: u64,
+}
+
+impl Debug for PrivateOramMutationSupervisorStatusV2 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramMutationSupervisorStatusV2")
+            .field("state", &self.state)
+            .field("generation", &self.generation)
+            .field("inspected", &self.inspected)
+            .field("reconciled", &self.reconciled)
+            .field("process_local_pending", &self.process_local_pending)
+            .field("owned_elsewhere", &self.owned_elsewhere)
+            .field("awaiting_cleanup", &self.awaiting_cleanup)
+            .field(
+                "immutable_coordinator_unavailable",
+                &self.immutable_coordinator_unavailable,
+            )
+            .field(
+                "oldest_foreign_pending_age_secs",
+                &self.oldest_foreign_pending_age_secs,
+            )
+            .field("failed", &self.failed)
+            .field("block_reason", &self.block_reason)
+            .field("last_scan_unix", &self.last_scan_unix)
+            .finish()
+    }
+}
+
+impl Default for PrivateOramMutationSupervisorStatusV2 {
+    fn default() -> Self {
+        Self {
+            state: PrivateOramMutationSupervisorStateV2::Disabled,
+            generation: 0,
+            inspected: 0,
+            reconciled: 0,
+            process_local_pending: 0,
+            owned_elsewhere: 0,
+            awaiting_cleanup: 0,
+            immutable_coordinator_unavailable: 0,
+            oldest_foreign_pending_age_secs: 0,
+            failed: 0,
+            block_reason: None,
+            last_scan_unix: 0,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct PrivateOramForeignOwnerObservationV2 {
+    key: PrivateOramMutationKey,
+    owner_peer_id: u64,
+    generation: u64,
+}
+
+fn classify_foreign_owner_stalls_v2(
+    first_seen: &mut HashMap<PrivateOramForeignOwnerObservationV2, u64>,
+    observed: &HashSet<PrivateOramForeignOwnerObservationV2>,
+    now_unix: u64,
+    stall_secs: u64,
+) -> (u32, u64) {
+    first_seen.retain(|observation, _| observed.contains(observation));
+    let mut blocked = 0_u32;
+    let mut oldest_age = 0_u64;
+    for observation in observed {
+        let observed_since = *first_seen.entry(observation.clone()).or_insert(now_unix);
+        let age = now_unix.saturating_sub(observed_since);
+        oldest_age = oldest_age.max(age);
+        if age >= stall_secs {
+            blocked = blocked.saturating_add(1);
+        }
+    }
+    (blocked, oldest_age)
+}
+
+fn update_foreign_owner_stalls_v2(
+    observed: &HashSet<PrivateOramForeignOwnerObservationV2>,
+    now_unix: u64,
+) -> StorageResult<(u32, u64)> {
+    static FIRST_SEEN: OnceLock<Mutex<HashMap<PrivateOramForeignOwnerObservationV2, u64>>> =
+        OnceLock::new();
+    let mut first_seen = FIRST_SEEN
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| {
+            StorageError::service_error(
+                "private ORAM mutation foreign-owner observation registry poisoned",
+            )
+        })?;
+    Ok(classify_foreign_owner_stalls_v2(
+        &mut first_seen,
+        observed,
+        now_unix,
+        PRIVATE_ORAM_MUTATION_IMMUTABLE_OWNER_STALL_SECS,
+    ))
+}
+
+pub(crate) fn initialize_private_oram_mutation_supervisor_v2() {
+    if let Ok(mut status) = supervisor_status().write()
+        && status.state == PrivateOramMutationSupervisorStateV2::Disabled
+    {
+        status.state = PrivateOramMutationSupervisorStateV2::Starting;
+    }
+}
+
+pub(crate) fn private_oram_mutation_supervisor_ready_v2() -> bool {
+    let status = private_oram_mutation_supervisor_status_v2();
+    private_oram_mutation_supervisor_status_is_ready_v2(&status)
+}
+
+fn private_oram_mutation_supervisor_status_is_ready_v2(
+    status: &PrivateOramMutationSupervisorStatusV2,
+) -> bool {
+    matches!(
+        status.state,
+        PrivateOramMutationSupervisorStateV2::Disabled
+            | PrivateOramMutationSupervisorStateV2::Ready
+            | PrivateOramMutationSupervisorStateV2::Pending
+    ) || status.block_reason
+        == Some(PrivateOramMutationSupervisorBlockReasonV2::ImmutableCoordinatorUnavailable)
+}
+
+pub(crate) fn private_oram_mutation_supervisor_status_v2() -> PrivateOramMutationSupervisorStatusV2
+{
+    supervisor_status().read().map(|status| *status).unwrap_or(
+        PrivateOramMutationSupervisorStatusV2 {
+            state: PrivateOramMutationSupervisorStateV2::Blocked,
+            failed: 1,
+            block_reason: Some(PrivateOramMutationSupervisorBlockReasonV2::ReconcileFailure),
+            ..PrivateOramMutationSupervisorStatusV2::default()
+        },
+    )
+}
+
+pub(crate) async fn supervise_private_oram_mutations_v2(
+    dispatcher: Arc<Dispatcher>,
+    settings: Arc<Settings>,
+    identity: Arc<PrivateOramPeerRecoveryIdentity>,
+) {
+    let mut interval = tokio::time::interval(PRIVATE_ORAM_MUTATION_SUPERVISOR_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        let previous = private_oram_mutation_supervisor_status_v2();
+        let next_generation = previous.generation.saturating_add(1);
+        let status = match dispatcher.consensus_state() {
+            Some(_) => match reconcile_private_oram_mutations_once_v2(
+                dispatcher.as_ref(),
+                settings.as_ref(),
+                identity.as_ref(),
+                next_generation,
+            )
+            .await
+            {
+                Ok(status) => status,
+                Err(_) => PrivateOramMutationSupervisorStatusV2 {
+                    state: PrivateOramMutationSupervisorStateV2::Blocked,
+                    block_reason: Some(
+                        PrivateOramMutationSupervisorBlockReasonV2::ReconcileFailure,
+                    ),
+                    generation: next_generation,
+                    failed: 1,
+                    last_scan_unix: current_unix_secs().unwrap_or_default(),
+                    ..PrivateOramMutationSupervisorStatusV2::default()
+                },
+            },
+            None => PrivateOramMutationSupervisorStatusV2 {
+                state: PrivateOramMutationSupervisorStateV2::Blocked,
+                block_reason: Some(
+                    PrivateOramMutationSupervisorBlockReasonV2::ConsensusUnavailable,
+                ),
+                generation: next_generation,
+                failed: 1,
+                last_scan_unix: current_unix_secs().unwrap_or_default(),
+                ..PrivateOramMutationSupervisorStatusV2::default()
+            },
+        };
+        if let Ok(mut current) = supervisor_status().write() {
+            *current = status;
+        }
+    }
+}
+
+async fn reconcile_private_oram_mutations_once_v2(
+    dispatcher: &Dispatcher,
+    settings: &Settings,
+    identity: &PrivateOramPeerRecoveryIdentity,
+    generation: u64,
+) -> StorageResult<PrivateOramMutationSupervisorStatusV2> {
+    let consensus = dispatcher.consensus_state().ok_or_else(|| {
+        StorageError::service_error("private ORAM mutation supervisor requires distributed mode")
+    })?;
+    let keys = dispatcher.active_private_oram_mutation_keys()?;
+    let pending_acknowledgements =
+        dispatcher.private_oram_mutation_pending_acknowledgement_keys()?;
+    let candidate_count = keys
+        .len()
+        .checked_add(pending_acknowledgements.len())
+        .ok_or_else(|| {
+            StorageError::service_error("private ORAM mutation supervisor candidate limit exceeded")
+        })?;
+    if candidate_count > PRIVATE_ORAM_MUTATION_SUPERVISOR_MAX_CANDIDATES {
+        return Err(StorageError::service_error(
+            "private ORAM mutation supervisor candidate limit exceeded",
+        ));
+    }
+
+    let auth = Auth::new_internal(storage::rbac::Access::full(
+        "private ORAM mutation supervisor discovery",
+    ));
+    let verification = new_unchecked_verification_pass();
+    let toc = dispatcher.toc(&auth, &verification);
+    let access = storage::rbac::Access::full("private ORAM mutation supervisor discovery");
+    let mut collection_names = HashMap::new();
+    for pass in toc.all_collections(&access).await {
+        let collection = toc.get_collection(&pass).await?;
+        let config = collection.config_snapshot().await;
+        let Ok(collection_id) = config.stable_crypto_id(collection.name()) else {
+            continue;
+        };
+        if collection_names
+            .insert(collection_id, collection.name().to_string())
+            .is_some()
+        {
+            return Err(StorageError::service_error(
+                "private ORAM mutation supervisor found duplicate collection identity",
+            ));
+        }
+    }
+
+    let mut status = PrivateOramMutationSupervisorStatusV2 {
+        generation,
+        inspected: u32::try_from(candidate_count).map_err(|_| {
+            StorageError::service_error("private ORAM mutation supervisor candidate limit exceeded")
+        })?,
+        last_scan_unix: current_unix_secs()?,
+        ..PrivateOramMutationSupervisorStatusV2::default()
+    };
+    let mut foreign_owner_observations = HashSet::new();
+    for (key, owner_peer_id, generation) in pending_acknowledgements {
+        let Some(collection_name) = collection_names.get(&key.collection_id) else {
+            status.failed = status.failed.saturating_add(1);
+            continue;
+        };
+        if owner_peer_id != identity.peer_id() || owner_peer_id != dispatcher.this_peer_id() {
+            status.owned_elsewhere = status.owned_elsewhere.saturating_add(1);
+            foreign_owner_observations.insert(PrivateOramForeignOwnerObservationV2 {
+                key,
+                owner_peer_id,
+                generation,
+            });
+            continue;
+        }
+        let result = async {
+            archive_private_oram_mutation_before_acknowledgement_v2(
+                dispatcher,
+                settings,
+                identity,
+                collection_name,
+                &key,
+                generation,
+            )
+            .await?;
+            dispatcher
+                .submit_private_oram_mutation_clear_acknowledgement_v2(
+                    key,
+                    owner_peer_id,
+                    generation,
+                    Some(Duration::from_secs(60)),
+                )
+                .await
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                status.reconciled = status.reconciled.saturating_add(1);
+                status.awaiting_cleanup = status.awaiting_cleanup.saturating_add(1);
+            }
+            Err(_) => status.failed = status.failed.saturating_add(1),
+        }
+    }
+    for key in keys {
+        let Some(collection_name) = collection_names.get(&key.collection_id) else {
+            status.failed = status.failed.saturating_add(1);
+            continue;
+        };
+        if private_oram_detached_job_exists_for_collection_v2(&key.collection_id)? {
+            status.process_local_pending = status.process_local_pending.saturating_add(1);
+            continue;
+        }
+        let slot = consensus
+            .private_oram_mutation_lease_slot(&key)
+            .ok_or_else(|| {
+                StorageError::service_error("private ORAM mutation supervisor state is unavailable")
+            })?;
+        let Some(lease) = slot.active.as_ref() else {
+            continue;
+        };
+        if lease.owner_peer_id != identity.peer_id() {
+            status.owned_elsewhere = status.owned_elsewhere.saturating_add(1);
+            foreign_owner_observations.insert(PrivateOramForeignOwnerObservationV2 {
+                key: key.clone(),
+                owner_peer_id: lease.owner_peer_id,
+                generation: slot.generation,
+            });
+            continue;
+        }
+        match reconcile_private_oram_admitted_to_ready_v2(
+            dispatcher,
+            settings,
+            identity,
+            collection_name,
+            &key,
+        )
+        .await
+        {
+            Ok(()) => match resume_private_oram_mutation_terminal_once_v2(
+                dispatcher,
+                settings,
+                identity,
+                collection_name,
+                &key,
+            )
+            .await
+            {
+                Ok(PrivateOramMutationTerminalResumeOutcomeV2::Advanced) => {
+                    status.reconciled = status.reconciled.saturating_add(1);
+                    status.process_local_pending = status.process_local_pending.saturating_add(1);
+                }
+                Ok(PrivateOramMutationTerminalResumeOutcomeV2::AwaitingCleanup) => {
+                    status.reconciled = status.reconciled.saturating_add(1);
+                    status.awaiting_cleanup = status.awaiting_cleanup.saturating_add(1);
+                }
+                Err(_) => status.failed = status.failed.saturating_add(1),
+            },
+            Err(_) => status.failed = status.failed.saturating_add(1),
+        }
+    }
+    let (immutable_coordinator_unavailable, oldest_foreign_pending_age_secs) =
+        update_foreign_owner_stalls_v2(&foreign_owner_observations, status.last_scan_unix)?;
+    status.immutable_coordinator_unavailable = immutable_coordinator_unavailable;
+    status.oldest_foreign_pending_age_secs = oldest_foreign_pending_age_secs;
+    status.block_reason = if status.failed != 0 {
+        Some(PrivateOramMutationSupervisorBlockReasonV2::ReconcileFailure)
+    } else if immutable_coordinator_unavailable != 0 {
+        Some(PrivateOramMutationSupervisorBlockReasonV2::ImmutableCoordinatorUnavailable)
+    } else {
+        None
+    };
+    status.state = classify_private_oram_mutation_supervisor_state_v2(&status);
+    Ok(status)
+}
+
+fn classify_private_oram_mutation_supervisor_state_v2(
+    status: &PrivateOramMutationSupervisorStatusV2,
+) -> PrivateOramMutationSupervisorStateV2 {
+    if status.failed != 0 {
+        PrivateOramMutationSupervisorStateV2::Blocked
+    } else if status.immutable_coordinator_unavailable != 0 {
+        PrivateOramMutationSupervisorStateV2::Blocked
+    } else if status.process_local_pending != 0
+        || status.owned_elsewhere != 0
+        || status.awaiting_cleanup != 0
+    {
+        PrivateOramMutationSupervisorStateV2::Pending
+    } else {
+        PrivateOramMutationSupervisorStateV2::Ready
+    }
+}
+
+fn supervisor_status() -> &'static RwLock<PrivateOramMutationSupervisorStatusV2> {
+    static STATUS: OnceLock<RwLock<PrivateOramMutationSupervisorStatusV2>> = OnceLock::new();
+    STATUS.get_or_init(|| RwLock::new(PrivateOramMutationSupervisorStatusV2::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn foreign_owned_mutation_is_pending_and_failure_is_blocked() {
+        let foreign = PrivateOramMutationSupervisorStatusV2 {
+            owned_elsewhere: 1,
+            ..PrivateOramMutationSupervisorStatusV2::default()
+        };
+        assert_eq!(
+            classify_private_oram_mutation_supervisor_state_v2(&foreign),
+            PrivateOramMutationSupervisorStateV2::Pending
+        );
+
+        let failed = PrivateOramMutationSupervisorStatusV2 {
+            state: PrivateOramMutationSupervisorStateV2::Blocked,
+            failed: 1,
+            owned_elsewhere: 1,
+            block_reason: Some(PrivateOramMutationSupervisorBlockReasonV2::ReconcileFailure),
+            ..PrivateOramMutationSupervisorStatusV2::default()
+        };
+        assert_eq!(
+            classify_private_oram_mutation_supervisor_state_v2(&failed),
+            PrivateOramMutationSupervisorStateV2::Blocked
+        );
+
+        let owner_unavailable = PrivateOramMutationSupervisorStatusV2 {
+            state: PrivateOramMutationSupervisorStateV2::Blocked,
+            owned_elsewhere: 1,
+            immutable_coordinator_unavailable: 1,
+            block_reason: Some(
+                PrivateOramMutationSupervisorBlockReasonV2::ImmutableCoordinatorUnavailable,
+            ),
+            ..PrivateOramMutationSupervisorStatusV2::default()
+        };
+        assert_eq!(
+            classify_private_oram_mutation_supervisor_state_v2(&owner_unavailable),
+            PrivateOramMutationSupervisorStateV2::Blocked
+        );
+        assert!(private_oram_mutation_supervisor_status_is_ready_v2(
+            &owner_unavailable
+        ));
+        assert!(!private_oram_mutation_supervisor_status_is_ready_v2(
+            &failed
+        ));
+    }
+
+    #[test]
+    fn foreign_owner_stall_requires_a_bounded_unchanged_observation() {
+        let observation = PrivateOramForeignOwnerObservationV2 {
+            key: PrivateOramMutationKey {
+                collection_id: "foreign-owner-stall-test".to_string(),
+            },
+            owner_peer_id: 17,
+            generation: 9,
+        };
+        let observed = HashSet::from([observation]);
+        let mut first_seen = HashMap::new();
+        assert_eq!(
+            classify_foreign_owner_stalls_v2(&mut first_seen, &observed, 100, 10),
+            (0, 0)
+        );
+        assert_eq!(
+            classify_foreign_owner_stalls_v2(&mut first_seen, &observed, 109, 10),
+            (0, 9)
+        );
+        assert_eq!(
+            classify_foreign_owner_stalls_v2(&mut first_seen, &observed, 110, 10),
+            (1, 10)
+        );
+        assert_eq!(
+            classify_foreign_owner_stalls_v2(&mut first_seen, &HashSet::new(), 120, 10),
+            (0, 0)
+        );
+        assert!(first_seen.is_empty());
+    }
+}

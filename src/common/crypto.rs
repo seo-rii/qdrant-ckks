@@ -28,12 +28,13 @@ use qdrant_sec::{
     METADATA_BLIND_INDEX_PROVIDER, METADATA_EXACT_MATCH_TOKEN_BINDING, METADATA_VALUE_BINDING,
     MasterKeyProvider, PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER,
     PAYLOAD_FIELD_BINDING, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
-    PRIVATE_RESULT_ORAM_BINDING, PayloadEncryptionError, PayloadEncryptionPolicy,
-    PayloadTextEncryptor, RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
+    PRIVATE_ORAM_CONSENSUS_WIRE_PROTOCOL_VERSION, PRIVATE_RESULT_ORAM_BINDING,
+    PayloadEncryptionError, PayloadEncryptionPolicy, PayloadTextEncryptor,
+    RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, ServerPayloadVerifiedEnvelopeKey,
     VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING, VECTOR_OPENFHE_CKKS_PROVIDER,
-    VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, WrappedKeyBlob, client_ckks_vector_sidecar_envelope_key,
-    client_payload_nonce_replay_key, client_payload_signature_key_id,
-    private_hnsw_min_f32_node_block_bytes, rewrap_resource_key,
+    VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, VECTOR_PRIVATE_HNSW_ORAM_V2_PROVIDER, WrappedKeyBlob,
+    client_ckks_vector_sidecar_envelope_key, client_payload_nonce_replay_key,
+    client_payload_signature_key_id, private_hnsw_min_f32_node_block_bytes, rewrap_resource_key,
     validate_client_ckks_vector_payload_value_for_runtime,
     validate_client_payload_value_for_runtime,
 };
@@ -2806,6 +2807,36 @@ pub fn validate_recovered_collection_crypto_config(
 
 pub fn effective_settings(settings: &Settings) -> CryptoSettings {
     settings.crypto.clone()
+}
+
+pub fn private_oram_mutation_v2_binary_capability_digest() -> String {
+    const DOMAIN: &[u8] = b"qdrant-sec/private-oram-mutation-v2-binary-capability/v1";
+    let mut hasher = Sha256::new();
+    hasher.update(DOMAIN);
+    hasher.update(qdrant_sec::PRIVATE_ORAM_CONSENSUS_WIRE_PROTOCOL_MIN_VERSION.to_be_bytes());
+    let protocol_capability = qdrant_sec::private_oram_mutation_protocol_capability_digest_v2();
+    hasher.update((protocol_capability.len() as u64).to_be_bytes());
+    hasher.update(protocol_capability.as_bytes());
+    hasher.update((env!("CARGO_PKG_VERSION").len() as u64).to_be_bytes());
+    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hasher.update((VECTOR_PRIVATE_HNSW_ORAM_V2_PROVIDER.len() as u64).to_be_bytes());
+    hasher.update(VECTOR_PRIVATE_HNSW_ORAM_V2_PROVIDER.as_bytes());
+    BASE64URL_NOPAD.encode(&hasher.finalize())
+}
+
+pub fn private_oram_mutation_v3_binary_capability_digest() -> String {
+    const DOMAIN: &[u8] = b"qdrant-sec/private-oram-mutation-v3-binary-capability/v1";
+    let mut hasher = Sha256::new();
+    hasher.update(DOMAIN);
+    hasher.update(PRIVATE_ORAM_CONSENSUS_WIRE_PROTOCOL_VERSION.to_be_bytes());
+    let protocol_capability = qdrant_sec::private_oram_mutation_protocol_capability_digest_v3();
+    hasher.update((protocol_capability.len() as u64).to_be_bytes());
+    hasher.update(protocol_capability.as_bytes());
+    hasher.update((env!("CARGO_PKG_VERSION").len() as u64).to_be_bytes());
+    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hasher.update((VECTOR_PRIVATE_HNSW_ORAM_V2_PROVIDER.len() as u64).to_be_bytes());
+    hasher.update(VECTOR_PRIVATE_HNSW_ORAM_V2_PROVIDER.as_bytes());
+    BASE64URL_NOPAD.encode(&hasher.finalize())
 }
 
 pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
@@ -9736,6 +9767,18 @@ mod tests {
     use crate::settings::CryptoInstanceConfig;
 
     static CLUSTER_KEY_ATTESTATION_ENV_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[test]
+    fn private_oram_binary_capability_digests_are_release_known_answers() {
+        assert_eq!(
+            private_oram_mutation_v2_binary_capability_digest(),
+            "476bxEnworZ3LqmqqKrsc1Udw7AjtJdwjNq_gyPsxok",
+        );
+        assert_eq!(
+            private_oram_mutation_v3_binary_capability_digest(),
+            "dAtfKtcZBHNaXhM-amdoNULrgFbKmnO_EWz8LcJy3l4",
+        );
+    }
 
     fn cluster_key_attestation_env_test_guard() -> std::sync::MutexGuard<'static, ()> {
         CLUSTER_KEY_ATTESTATION_ENV_TEST_LOCK
