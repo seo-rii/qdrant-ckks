@@ -35,6 +35,8 @@ use crate::actix::api::discover_api::config_discover_api;
 use crate::actix::api::issues_api::config_issues_api;
 use crate::actix::api::local_shard_api::config_local_shard_api;
 use crate::actix::api::private_hnsw_api::config_private_hnsw_api;
+#[cfg(target_os = "linux")]
+use crate::actix::api::private_oram_mutation_api::config_private_oram_mutation_api;
 use crate::actix::api::private_oram_recovery_api::config_private_oram_recovery_api;
 use crate::actix::api::private_result_oram_api::config_private_result_oram_api;
 use crate::actix::api::profiler_api::config_profiler_api;
@@ -54,6 +56,7 @@ use crate::common::auth::AuthKeys;
 use crate::common::debugger::DebuggerState;
 use crate::common::health;
 use crate::common::http_client::HttpClient;
+use crate::common::private_oram_peer_identity::PrivateOramPeerRecoveryIdentity;
 use crate::common::telemetry::TelemetryCollector;
 use crate::settings::{Settings, max_web_workers};
 use crate::tracing::LoggerHandle;
@@ -213,6 +216,7 @@ pub fn init(
     health_checker: Option<Arc<health::HealthChecker>>,
     settings: Settings,
     logger_handle: LoggerHandle,
+    private_oram_peer_identity: Option<Arc<PrivateOramPeerRecoveryIdentity>>,
 ) -> io::Result<()> {
     actix_web::rt::System::new().block_on(async {
         // Nothing to verify here.
@@ -238,6 +242,8 @@ pub fn init(
         let web_ui_available = web_ui_folder(&settings);
         let service_config = web::Data::new(settings.service.clone());
         let settings_data = web::Data::new(settings.clone());
+        let private_oram_peer_identity_data =
+            web::Data::new(private_oram_peer_identity.clone());
         let audit_config_data = web::Data::new(settings.audit.clone());
         let snapshot_upload_limit_bytes = multipart_snapshot_upload_limit_bytes(&settings);
 
@@ -264,7 +270,7 @@ pub fn init(
                 .limit(settings.service.max_request_size_mb * 1024 * 1024)
                 .error_handler(|err, rec| validation_error_handler("JSON body", err, rec));
 
-            let mut app = App::new()
+            let app = App::new()
                 .wrap(Compress::default()) // Reads the `Accept-Encoding` header to negotiate which compression codec to use.
                 // api_key middleware
                 // note: the last call to `wrap()` or `wrap_fn()` is executed first
@@ -307,6 +313,7 @@ pub fn init(
                 )
                 .app_data(service_config.clone())
                 .app_data(settings_data.clone())
+                .app_data(private_oram_peer_identity_data.clone())
                 .app_data(audit_config_data.clone())
                 .service(index)
                 .configure(config_collections_api)
@@ -319,7 +326,10 @@ pub fn init(
                 .configure(config_discover_api)
                 .configure(config_query_api)
                 .configure(config_facet_api)
-                .configure(config_private_hnsw_api)
+                .configure(config_private_hnsw_api);
+            #[cfg(target_os = "linux")]
+            let app = app.configure(config_private_oram_mutation_api);
+            let mut app = app
                 .configure(config_private_oram_recovery_api)
                 .configure(config_private_result_oram_api)
                 .configure(config_shards_api)
@@ -452,9 +462,7 @@ fn private_oram_validation_error_message(
         err,
         actix_web_validator::Error::Validate(_)
             | actix_web_validator::Error::Deserialize(_)
-            | actix_web_validator::Error::JsonPayloadError(
-                actix_web::error::JsonPayloadError::Deserialize(_)
-            )
+            | actix_web_validator::Error::JsonPayloadError(_)
     );
     if !should_sanitize {
         return None;
@@ -476,6 +484,7 @@ fn path_has_private_oram_marker(path: &str) -> bool {
     matches!(
         segments.as_slice(),
         ["", "collections", _, "private-oram", "recovery", ..]
+            | ["", "collections", _, "private-oram", "v2", "mutation", ..]
     ) || (segments.get(1) == Some(&"collections")
         && matches!(
             segments.get(3).copied(),
@@ -616,6 +625,10 @@ mod tests {
                     web::post().to(private_oram_validation_test_endpoint),
                 )
                 .route(
+                    "/collections/{collection_name}/private-oram/v2/mutation/open",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
                     "/collections/{collection_name}/ordinary/session",
                     web::post().to(private_oram_validation_test_endpoint),
                 )
@@ -651,6 +664,7 @@ mod tests {
             "/collections/docs/private-result-oram/buckets",
             "/collections/docs/private-result-oram/oram/read_buckets",
             "/collections/docs/private-result-oram/oram/commit",
+            "/collections/docs/private-oram/v2/mutation/open",
         ] {
             for field_sentinel in private_oram_unknown_field_sentinels {
                 let private_oram_request = actix_test::TestRequest::post()
@@ -868,6 +882,12 @@ mod tests {
 
     #[test]
     fn private_oram_access_paths_redact_session_ids_and_queries() {
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-oram/v2/mutation/read?session_id=query-sentinel"
+            ),
+            "/collections/docs/private-oram/v2/mutation/read?[redacted]"
+        );
         assert_eq!(
             redact_private_oram_access_path(
                 "/collections/docs/private-hnsw/text/session/session-id-sentinel/close"

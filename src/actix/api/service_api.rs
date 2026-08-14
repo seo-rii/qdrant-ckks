@@ -194,10 +194,14 @@ async fn livez() -> impl Responder {
 
 #[get("/readyz")]
 async fn readyz(health_checker: web::Data<Option<Arc<health::HealthChecker>>>) -> impl Responder {
-    let is_ready = match health_checker.as_ref() {
+    let shards_ready = match health_checker.as_ref() {
         Some(health_checker) => health_checker.check_ready().await,
         None => true,
     };
+    let private_oram_ready =
+        crate::common::private_oram_mutation_supervisor::private_oram_mutation_supervisor_ready_v2(
+        );
+    let is_ready = shards_ready && private_oram_ready;
 
     let (status, body) = if is_ready {
         (StatusCode::OK, "all shards are ready")

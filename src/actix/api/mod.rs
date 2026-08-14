@@ -13,6 +13,8 @@ pub mod facet_api;
 pub mod issues_api;
 pub mod local_shard_api;
 pub mod private_hnsw_api;
+#[cfg(target_os = "linux")]
+pub mod private_oram_mutation_api;
 pub mod private_oram_recovery_api;
 pub mod private_result_oram_api;
 pub mod profiler_api;
