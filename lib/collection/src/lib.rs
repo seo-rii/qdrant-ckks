@@ -31,6 +31,23 @@ pub mod profiling;
 pub mod update_workers;
 
 #[doc(hidden)]
+pub use private_oram_owner_journal::{
+    CommittedPrivateOramOwnerCleanupReceiptV2,
+    PrivateOramOwnerAbortReleasedReservationResolutionV1, PrivateOramOwnerCleanupRepairStateV2,
+    PrivateOramOwnerDurableReservationResolutionV1,
+    PrivateOramOwnerInstalledReservationResolutionV1, PrivateOramOwnerJournal,
+    PrivateOramOwnerJournalError, PrivateOramOwnerLocalIntentStateV2,
+    PrivateOramOwnerLocalIntentStatusV2, PrivateOramOwnerPrepareParentV2,
+    PrivateOramOwnerPrepareRequirementV2, PrivateOramOwnerPreparedEvidenceV2,
+    PrivateOramOwnerPreparedIndexEvidenceV2, PrivateOramOwnerPrestagePlanV2,
+    PrivateOramOwnerPrestageReceiptV2, PrivateOramOwnerPrestageStoreV2,
+    PrivateOramOwnerReservationResolutionKindV1, PrivateOramOwnerReservationResolutionV1,
+    decode_private_oram_owner_prepare_parent_v2, decode_private_oram_owner_prepared_evidence_v2,
+    decode_private_oram_owner_prestage_receipt_v2, encode_private_oram_owner_prepare_parent_v2,
+    encode_private_oram_owner_prepared_evidence_v2, encode_private_oram_owner_prestage_receipt_v2,
+    validate_private_oram_owner_prestage_receipt_v2,
+};
+#[doc(hidden)]
 pub use private_oram_owner_store_adapter::{
     PrivateOramOwnerRecoveryLiveParentV1, PrivateOramOwnerRecoveryPairOutcomeV1,
     PrivateOramOwnerRecoveryParentBridgeV1, PrivateOramOwnerRecoveryParentDispositionV1,

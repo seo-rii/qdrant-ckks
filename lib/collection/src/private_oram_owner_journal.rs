@@ -24,11 +24,26 @@ use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
 use fs_err::{File, OpenOptions};
 use qdrant_sec::{
-    PRIVATE_ORAM_APPEND_MAX_TOTAL_BUCKET_REFS, PrivateHnswOramBucket, PrivateOramAppendBucketRefV1,
-    PrivateOramAppendMutationBundleV1, PrivateOramIndexKindV2,
-    PrivateOramValidatedOwnerFinalBucketsV1, PrivateOramValidatedOwnerPrepareV1,
-    PrivateResultOramBucket, private_oram_append_mutation_v1_digest,
+    PRIVATE_ORAM_APPEND_MAX_TOTAL_BUCKET_REFS, PRIVATE_ORAM_OWNER_PRESTAGE_MAX_CANONICAL_BYTES_V2,
+    PrivateHnswOramBucket, PrivateOramAppendBucketRefV1, PrivateOramAppendMutationBundleV1,
+    PrivateOramIndexKindV2, PrivateOramOwnerCleanupObservedPrestateV1,
+    PrivateOramOwnerCleanupReceiptV1, PrivateOramOwnerCleanupSignerV1,
+    PrivateOramOwnerCleanupTerminalStateV1, PrivateOramOwnerLifecycleStateV1,
+    PrivateOramOwnerPrestagePackageV2, PrivateOramOwnerPrestageRequestV2,
+    PrivateOramOwnerReservationPrepareChallengeV1, PrivateOramValidatedOwnerFinalBucketsV1,
+    PrivateOramValidatedOwnerPrepareV1, PrivateResultOramBucket,
+    SignedPrivateOramOwnerCleanupAuthorizationV1, SignedPrivateOramOwnerCleanupReceiptV1,
+    VerifiedPrivateOramOwnerCleanupAuthorizationV1, VerifiedPrivateOramOwnerPrestageRequestV2,
+    decode_private_oram_owner_prestage_package_v2, private_oram_append_mutation_v1_digest,
+    private_oram_owner_cleanup_receipt_v1, private_oram_owner_lifecycle_genesis_state_v1,
+    private_oram_owner_prestage_request_digest_v2, validate_private_oram_owner_lifecycle_state_v1,
+    validate_private_oram_owner_prestage_package_for_request_v2,
+    validate_private_oram_owner_reservation_prepare_challenge_v1,
+    validate_self_consistent_signed_private_oram_owner_cleanup_authorization_v1,
+    validate_self_consistent_signed_private_oram_owner_cleanup_receipt_v1,
+    validate_signed_private_oram_owner_cleanup_receipt_v1,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -62,6 +77,56 @@ const MAX_TERMINAL_RECORD_BYTES: u64 = 4 * 1024;
 const MAX_RESOURCE_ID_BYTES: usize = 256;
 const DIGEST_BYTES: usize = 32;
 const MAX_PAIRED_OWNER_INDEXES: usize = 2;
+const MAX_OWNER_ADOPTION_CANONICAL_BYTES: usize = 64 * 1024;
+
+const PRESTAGE_ROOT_DIR: &str = "private-oram-owner-prestage-v2";
+const PRESTAGE_INTENTS_DIR: &str = "intents";
+const PRESTAGE_TEMP_DIR: &str = "temp";
+const PRESTAGE_TERMINALS_DIR: &str = "terminals";
+const PRESTAGE_RETIRED_DIR: &str = "retired";
+const PRESTAGE_QUARANTINE_DIR: &str = "quarantine";
+const PRESTAGE_RESERVATION_FENCE_DIR: &str = "reservation-fence";
+const PRESTAGE_SUPERBLOCK_FILE: &str = "superblock.json";
+const PRESTAGE_PACKAGE_FILE: &str = "package.json";
+const PRESTAGE_RECEIPT_FILE: &str = "receipt.json";
+const PRESTAGE_INTENT_MARKER_FILE: &str = "intent.json";
+const PRESTAGE_ADOPTION_PENDING_MARKER_FILE: &str = "adoption-pending.json";
+const PRESTAGE_ADOPTED_MARKER_FILE: &str = "adopted.json";
+const PRESTAGE_TERMINAL_RECORD_FILE: &str = "record.json";
+const PRESTAGE_RESERVATION_FENCE_FILE: &str = "fence.json";
+const PRESTAGE_RESERVATION_RESOLUTION_FILE: &str = "resolution.json";
+const PRESTAGE_RESERVATION_ABORT_RELEASE_FILE: &str = "abort-release.json";
+const PRESTAGE_RECEIPT_VERSION: u16 = 3;
+const PRESTAGE_SUPERBLOCK_VERSION: u16 = 2;
+const PRESTAGE_LIFECYCLE_MARKER_VERSION: u16 = 3;
+const PRESTAGE_MAX_PACKAGE_BYTES: u64 = PRIVATE_ORAM_OWNER_PRESTAGE_MAX_CANONICAL_BYTES_V2 as u64;
+const PRESTAGE_MAX_RECEIPT_BYTES: u64 = 64 * 1024;
+const PRESTAGE_MAX_SUPERBLOCK_BYTES: u64 = 64 * 1024;
+const PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES: u64 = 64 * 1024;
+const PRESTAGE_MAX_TERMINAL_RECORDS: usize = 4_096;
+const PRESTAGE_RESERVATION_FENCE_VERSION: u16 = 1;
+const PRESTAGE_RESERVATION_RESOLUTION_VERSION_V2: u16 = 2;
+const PRESTAGE_RESERVATION_RESOLUTION_VERSION: u16 = 3;
+const PRESTAGE_RESERVATION_ABORT_RELEASE_VERSION: u16 = 1;
+const PRESTAGE_MAX_RESERVATION_FENCE_BYTES: u64 = 128 * 1024;
+const PRESTAGE_MAX_RESERVATION_RESOLUTION_BYTES: u64 = 64 * 1024;
+const PRESTAGE_MAX_RESERVATION_ABORT_RELEASE_BYTES: u64 = 64 * 1024;
+const PRESTAGE_RECEIPT_DIGEST_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-prestage-storage-receipt/v3";
+const PRESTAGE_SUPERBLOCK_DIGEST_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-prestage-superblock/v2";
+const PRESTAGE_OWNER_STORE_INCARNATION_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-store-incarnation/v2";
+const PRESTAGE_LIFECYCLE_MARKER_DIGEST_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-prestage-lifecycle-marker/v3";
+const PRESTAGE_RESERVATION_FENCE_DIGEST_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-reservation-fence/v1";
+const PRESTAGE_RESERVATION_RESOLUTION_DIGEST_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-reservation-resolution/v1";
+const PRESTAGE_RESERVATION_ABSENT_FENCE_DIGEST_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-reservation-absent-fence/v1";
+const PRESTAGE_RESERVATION_ABORT_RELEASE_DIGEST_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-reservation-abort-release/v1";
 
 const DESCRIPTOR_DOMAIN: &[u8] = b"qdrant-sec/private-oram-owner-journal-descriptor/v1";
 const STATE_DOMAIN: &[u8] = b"qdrant-sec/private-oram-owner-journal-state/v1";
@@ -75,12 +140,22 @@ const INDEX_FINALIZED_EVIDENCE_DOMAIN: &[u8] =
 const INDEX_ABORTED_OLD_EVIDENCE_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-owner-index-aborted-old-evidence/v1";
 
+const fn bool_true() -> bool {
+    true
+}
+
+const fn is_true(value: &bool) -> bool {
+    *value
+}
+
 #[derive(Error, Clone, Copy, PartialEq, Eq)]
 pub enum PrivateOramOwnerJournalError {
     #[error("private ORAM owner journal is unsupported on this platform or filesystem")]
     Unsupported,
     #[error("private ORAM owner journal input is invalid")]
     InvalidInput(&'static str),
+    #[error("private ORAM owner journal is not enrolled")]
+    NotEnrolled,
     #[error("another private ORAM owner journal is active")]
     ConcurrentMutation,
     #[error("private ORAM owner journal phase transition is invalid")]
@@ -91,6 +166,12 @@ pub enum PrivateOramOwnerJournalError {
     Io,
     #[error("private ORAM owner journal publication outcome is indeterminate")]
     Indeterminate,
+    #[error("private ORAM owner cleanup terminal commit is indeterminate")]
+    IndeterminateTerminalCommit,
+    #[error("private ORAM owner cleanup requires externally authenticated recovery")]
+    ExternalRecoveryRequired,
+    #[error("private ORAM owner cleanup terminal capacity is exhausted")]
+    TerminalCapacityExceeded,
 }
 
 impl Debug for PrivateOramOwnerJournalError {
@@ -98,11 +179,17 @@ impl Debug for PrivateOramOwnerJournalError {
         match self {
             Self::Unsupported => f.write_str("Unsupported"),
             Self::InvalidInput(field) => f.debug_tuple("InvalidInput").field(field).finish(),
+            Self::NotEnrolled => f.write_str("NotEnrolled"),
             Self::ConcurrentMutation => f.write_str("ConcurrentMutation"),
             Self::InvalidTransition => f.write_str("InvalidTransition"),
             Self::Corrupt => f.write_str("Corrupt([redacted])"),
             Self::Io => f.write_str("Io([redacted])"),
             Self::Indeterminate => f.write_str("Indeterminate([redacted])"),
+            Self::IndeterminateTerminalCommit => {
+                f.write_str("IndeterminateTerminalCommit([redacted])")
+            }
+            Self::ExternalRecoveryRequired => f.write_str("ExternalRecoveryRequired([redacted])"),
+            Self::TerminalCapacityExceeded => f.write_str("TerminalCapacityExceeded"),
         }
     }
 }
@@ -138,6 +225,872 @@ pub(crate) struct PrivateOramOwnerJournalPrepareContextV1<'a> {
     pub(crate) parent_lease_acquired_record_digest: &'a str,
     pub(crate) owner_peer_id: u64,
     pub(crate) requirements: &'a [PrivateOramOwnerJournalRequirementV1<'a>],
+}
+
+/// Cross-crate input for one owner prepare after the V2 parent journal is durable.
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateOramOwnerPrepareParentV2 {
+    parent_descriptor_digest: String,
+    parent_lease_acquired_record_digest: String,
+    owner_peer_id: u64,
+    requirements: Vec<PrivateOramOwnerPrepareRequirementV2>,
+}
+
+/// Non-authoritative future-parent projection used to build one inert owner intent.
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerPrestagePlanV2 {
+    parent_descriptor_digest: String,
+    parent_lease_acquired_record_digest: String,
+    owner_peer_id: u64,
+    requirements: Vec<PrivateOramOwnerPrepareRequirementV2>,
+}
+
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateOramOwnerPrepareRequirementV2 {
+    pub kind: PrivateOramIndexKindV2,
+    pub index_name: String,
+    pub old_epoch: u64,
+    pub new_epoch: u64,
+    pub old_root_hash: String,
+    pub new_root_hash: String,
+    pub writeback_digest: String,
+}
+
+impl Debug for PrivateOramOwnerPrepareParentV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerPrepareParentV2")
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field("parent_lease_acquired_record_digest", &"[redacted]")
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("requirement_count", &self.requirements.len())
+            .finish()
+    }
+}
+
+impl Debug for PrivateOramOwnerPrestagePlanV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerPrestagePlanV2")
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field("parent_lease_acquired_record_digest", &"[redacted]")
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("requirement_count", &self.requirements.len())
+            .finish()
+    }
+}
+
+impl Debug for PrivateOramOwnerPrepareRequirementV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerPrepareRequirementV2")
+            .field("kind", &self.kind)
+            .field("index_name", &"[redacted]")
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("writeback_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerPrepareParentV2 {
+    pub fn try_new(
+        parent_descriptor_digest: String,
+        parent_lease_acquired_record_digest: String,
+        owner_peer_id: u64,
+        requirements: Vec<PrivateOramOwnerPrepareRequirementV2>,
+    ) -> Result<Self, PrivateOramOwnerJournalError> {
+        validate_owner_prepare_parent_fields(
+            &parent_descriptor_digest,
+            &parent_lease_acquired_record_digest,
+            &requirements,
+        )?;
+        Ok(Self {
+            parent_descriptor_digest,
+            parent_lease_acquired_record_digest,
+            owner_peer_id,
+            requirements,
+        })
+    }
+
+    pub fn parent_descriptor_digest(&self) -> &str {
+        &self.parent_descriptor_digest
+    }
+
+    pub fn parent_lease_acquired_record_digest(&self) -> &str {
+        &self.parent_lease_acquired_record_digest
+    }
+
+    pub const fn owner_peer_id(&self) -> u64 {
+        self.owner_peer_id
+    }
+
+    pub fn requirements(&self) -> &[PrivateOramOwnerPrepareRequirementV2] {
+        &self.requirements
+    }
+}
+
+impl PrivateOramOwnerPrestagePlanV2 {
+    pub fn try_new(
+        parent_descriptor_digest: String,
+        parent_lease_acquired_record_digest: String,
+        owner_peer_id: u64,
+        requirements: Vec<PrivateOramOwnerPrepareRequirementV2>,
+    ) -> Result<Self, PrivateOramOwnerJournalError> {
+        validate_owner_prepare_parent_fields(
+            &parent_descriptor_digest,
+            &parent_lease_acquired_record_digest,
+            &requirements,
+        )?;
+        Ok(Self {
+            parent_descriptor_digest,
+            parent_lease_acquired_record_digest,
+            owner_peer_id,
+            requirements,
+        })
+    }
+}
+
+/// Durable proof that an exact inert owner package and its prepared journal bytes are installed.
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateOramOwnerPrestageReceiptV2 {
+    version: u16,
+    intent_key: String,
+    collection_id: String,
+    mutation_id: String,
+    mutation_digest: String,
+    expected_aggregate_digest: String,
+    lease_generation: u64,
+    writer_fence: u64,
+    owner_peer_id: u64,
+    parent_descriptor_digest: String,
+    parent_lease_acquired_record_digest: String,
+    owner_roster_digest: String,
+    activation_registry_generation: u64,
+    activation_manifest_digest: String,
+    package_sha256: String,
+    package_len: u64,
+    owner_request_digest: String,
+    owner_journal_descriptor_digest: String,
+    prepared_state_digest: String,
+    receipt_digest: String,
+}
+
+impl Debug for PrivateOramOwnerPrestageReceiptV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerPrestageReceiptV3")
+            .field("version", &self.version)
+            .field("lease_generation", &self.lease_generation)
+            .field("writer_fence", &self.writer_fence)
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("package_len", &self.package_len)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PrivateOramOwnerPrestageReceiptV2 {
+    pub fn intent_key(&self) -> &str {
+        &self.intent_key
+    }
+
+    pub fn owner_peer_id(&self) -> u64 {
+        self.owner_peer_id
+    }
+
+    pub fn collection_id(&self) -> &str {
+        &self.collection_id
+    }
+
+    pub fn mutation_id(&self) -> &str {
+        &self.mutation_id
+    }
+
+    pub fn mutation_digest(&self) -> &str {
+        &self.mutation_digest
+    }
+
+    pub fn expected_aggregate_digest(&self) -> &str {
+        &self.expected_aggregate_digest
+    }
+
+    pub fn lease_generation(&self) -> u64 {
+        self.lease_generation
+    }
+
+    pub fn writer_fence(&self) -> u64 {
+        self.writer_fence
+    }
+
+    pub fn parent_descriptor_digest(&self) -> &str {
+        &self.parent_descriptor_digest
+    }
+
+    pub fn parent_lease_acquired_record_digest(&self) -> &str {
+        &self.parent_lease_acquired_record_digest
+    }
+
+    pub fn owner_roster_digest(&self) -> &str {
+        &self.owner_roster_digest
+    }
+
+    pub fn activation_registry_generation(&self) -> u64 {
+        self.activation_registry_generation
+    }
+
+    pub fn activation_manifest_digest(&self) -> &str {
+        &self.activation_manifest_digest
+    }
+
+    pub fn prepared_state_digest(&self) -> &str {
+        &self.prepared_state_digest
+    }
+
+    pub fn package_sha256(&self) -> &str {
+        &self.package_sha256
+    }
+
+    pub fn package_len(&self) -> u64 {
+        self.package_len
+    }
+
+    pub fn owner_request_digest(&self) -> &str {
+        &self.owner_request_digest
+    }
+
+    pub fn owner_journal_descriptor_digest(&self) -> &str {
+        &self.owner_journal_descriptor_digest
+    }
+
+    pub fn receipt_digest(&self) -> &str {
+        &self.receipt_digest
+    }
+
+    #[cfg(feature = "testing")]
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts_for_test(
+        intent_key: String,
+        collection_id: String,
+        mutation_id: String,
+        mutation_digest: String,
+        expected_aggregate_digest: String,
+        lease_generation: u64,
+        writer_fence: u64,
+        owner_peer_id: u64,
+        parent_descriptor_digest: String,
+        parent_lease_acquired_record_digest: String,
+        owner_roster_digest: String,
+        activation_registry_generation: u64,
+        activation_manifest_digest: String,
+        package_sha256: String,
+        package_len: u64,
+        owner_request_digest: String,
+        owner_journal_descriptor_digest: String,
+        prepared_state_digest: String,
+    ) -> Self {
+        let mut receipt = Self {
+            version: PRESTAGE_RECEIPT_VERSION,
+            intent_key,
+            collection_id,
+            mutation_id,
+            mutation_digest,
+            expected_aggregate_digest,
+            lease_generation,
+            writer_fence,
+            owner_peer_id,
+            parent_descriptor_digest,
+            parent_lease_acquired_record_digest,
+            owner_roster_digest,
+            activation_registry_generation,
+            activation_manifest_digest,
+            package_sha256,
+            package_len,
+            owner_request_digest,
+            owner_journal_descriptor_digest,
+            prepared_state_digest,
+            receipt_digest: String::new(),
+        };
+        receipt.receipt_digest = private_oram_owner_prestage_receipt_digest_v2(&receipt)
+            .expect("test prestage receipt must be canonical");
+        receipt
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateOramOwnerPrestageSuperblockV2 {
+    version: u16,
+    owner_store_incarnation_digest: String,
+    lifecycle_generation: u64,
+    lifecycle_state_root: String,
+    minimum_lifecycle_reader_version: u16,
+    lifecycle_capability: String,
+    superblock_digest: String,
+}
+
+impl PrivateOramOwnerPrestageSuperblockV2 {
+    fn lifecycle_state(
+        &self,
+    ) -> Result<PrivateOramOwnerLifecycleStateV1, PrivateOramOwnerJournalError> {
+        let state = PrivateOramOwnerLifecycleStateV1 {
+            owner_store_incarnation_digest: self.owner_store_incarnation_digest.clone(),
+            generation: self.lifecycle_generation,
+            state_root: self.lifecycle_state_root.clone(),
+            minimum_reader_version: self.minimum_lifecycle_reader_version,
+            capability: self.lifecycle_capability.clone(),
+        };
+        let genesis = private_oram_owner_lifecycle_genesis_state_v1(
+            self.owner_store_incarnation_digest.clone(),
+        )
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+        if self.lifecycle_generation == 0 && state != genesis {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        Ok(state)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PrivateOramOwnerLifecycleMarkerKindV2 {
+    Intent,
+    AdoptionPending,
+    Adopted,
+    TombstonedAbsent,
+    Quarantined,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateOramOwnerLifecycleMarkerV2 {
+    version: u16,
+    kind: PrivateOramOwnerLifecycleMarkerKindV2,
+    owner_store_incarnation_digest: String,
+    intent_key: String,
+    collection_id: String,
+    mutation_id: String,
+    mutation_digest: String,
+    expected_aggregate_digest: String,
+    lease_generation: u64,
+    writer_fence: u64,
+    owner_peer_id: u64,
+    parent_descriptor_digest: String,
+    parent_lease_acquired_record_digest: String,
+    package_sha256: String,
+    prestage_receipt_digest: Option<String>,
+    owner_journal_descriptor_digest: Option<String>,
+    terminal_authority_digest: Option<String>,
+    cleanup_authority_signer: Option<PrivateOramOwnerCleanupSignerV1>,
+    signed_cleanup_authorization: Option<SignedPrivateOramOwnerCleanupAuthorizationV1>,
+    signed_cleanup_receipt: Option<SignedPrivateOramOwnerCleanupReceiptV1>,
+    marker_digest: String,
+}
+
+impl Debug for PrivateOramOwnerLifecycleMarkerV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerLifecycleMarkerV2")
+            .field("version", &self.version)
+            .field("kind", &self.kind)
+            .field("lease_generation", &self.lease_generation)
+            .field("writer_fence", &self.writer_fence)
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("owner_store_incarnation_digest", &"[redacted]")
+            .field("intent_key", &"[redacted]")
+            .field("marker_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateOramOwnerLocalIntentStateV2 {
+    Absent,
+    Intent,
+    AdoptionPending,
+    Adopted,
+    TombstonedAbsent,
+    Quarantined,
+}
+
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerLocalIntentStatusV2 {
+    state: PrivateOramOwnerLocalIntentStateV2,
+    lifecycle_state: PrivateOramOwnerLifecycleStateV1,
+    marker_digest: Option<String>,
+}
+
+impl Debug for PrivateOramOwnerLocalIntentStatusV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerLocalIntentStatusV2")
+            .field("state", &self.state)
+            .field("lifecycle_state", &self.lifecycle_state)
+            .field("marker_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerLocalIntentStatusV2 {
+    pub const fn state(&self) -> PrivateOramOwnerLocalIntentStateV2 {
+        self.state
+    }
+
+    pub fn owner_store_incarnation_digest(&self) -> &str {
+        &self.lifecycle_state.owner_store_incarnation_digest
+    }
+
+    pub fn lifecycle_state(&self) -> &PrivateOramOwnerLifecycleStateV1 {
+        &self.lifecycle_state
+    }
+
+    pub fn marker_digest(&self) -> Option<&str> {
+        self.marker_digest.as_deref()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateOramOwnerReservationFenceRecordV1 {
+    version: u16,
+    challenge: PrivateOramOwnerReservationPrepareChallengeV1,
+    lifecycle_state: PrivateOramOwnerLifecycleStateV1,
+    terminal_record_count: u64,
+    terminal_record_limit: u64,
+    fence_record_digest: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivateOramOwnerReservationResolutionKindV1 {
+    Finalized,
+    Cancelled,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateOramOwnerReservationResolutionRecordV1 {
+    version: u16,
+    kind: PrivateOramOwnerReservationResolutionKindV1,
+    #[serde(default = "bool_true", skip_serializing_if = "is_true")]
+    fence_was_present: bool,
+    fence_record_digest: String,
+    committed_challenge_digest: String,
+    reservation_intent_digest: String,
+    attempt_id: String,
+    challenge_applied_term: u64,
+    challenge_applied_index: u64,
+    resolution_applied_term: u64,
+    resolution_applied_index: u64,
+    reserved_terminal_intent_key: String,
+    finalized_reservation_digest: Option<String>,
+    owner_store_incarnation_digest: String,
+    owner_store_binding_digest: String,
+    resolution_record_digest: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateOramOwnerReservationAbortReleaseRecordV1 {
+    version: u16,
+    resolution_record_digest: String,
+    fence_record_digest: String,
+    abort_release_authority_digest: String,
+    owner_store_incarnation_digest: String,
+    owner_store_binding_digest: String,
+    release_marker_digest: String,
+}
+
+impl Debug for PrivateOramOwnerReservationResolutionRecordV1 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramOwnerReservationResolutionRecordV1")
+            .field("version", &self.version)
+            .field("kind", &self.kind)
+            .field("fence_was_present", &self.fence_was_present)
+            .field("challenge_applied_term", &self.challenge_applied_term)
+            .field("challenge_applied_index", &self.challenge_applied_index)
+            .field("resolution_applied_term", &self.resolution_applied_term)
+            .field("resolution_applied_index", &self.resolution_applied_index)
+            .field("fence_record_digest", &"[redacted]")
+            .field("committed_challenge_digest", &"[redacted]")
+            .field("reservation_intent_digest", &"[redacted]")
+            .field("attempt_id", &"[redacted]")
+            .field("reserved_terminal_intent_key", &"[redacted]")
+            .field("finalized_reservation_digest", &"[redacted]")
+            .field("owner_store_incarnation_digest", &"[redacted]")
+            .field("owner_store_binding_digest", &"[redacted]")
+            .field("resolution_record_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl Debug for PrivateOramOwnerReservationFenceRecordV1 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramOwnerReservationFenceRecordV1")
+            .field("version", &self.version)
+            .field("challenge", &self.challenge)
+            .field("lifecycle_state", &self.lifecycle_state)
+            .field("terminal_record_count", &self.terminal_record_count)
+            .field("terminal_record_limit", &self.terminal_record_limit)
+            .field("fence_record_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+/// Durable owner-local proof created before an owner signs reservation readiness.
+#[doc(hidden)]
+#[derive(PartialEq, Eq)]
+pub struct PrivateOramOwnerDurableReservationFenceV1 {
+    record: PrivateOramOwnerReservationFenceRecordV1,
+}
+
+impl Debug for PrivateOramOwnerDurableReservationFenceV1 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramOwnerDurableReservationFenceV1")
+            .field("record", &"[durable]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerDurableReservationFenceV1 {
+    pub fn challenge(&self) -> &PrivateOramOwnerReservationPrepareChallengeV1 {
+        &self.record.challenge
+    }
+
+    pub fn lifecycle_state(&self) -> &PrivateOramOwnerLifecycleStateV1 {
+        &self.record.lifecycle_state
+    }
+
+    pub fn local_terminal_generation(&self) -> u64 {
+        self.record.lifecycle_state.generation
+    }
+
+    pub fn fence_record_digest(&self) -> &str {
+        &self.record.fence_record_digest
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerReservationResolutionV1 {
+    pub kind: PrivateOramOwnerReservationResolutionKindV1,
+    pub committed_challenge_digest: String,
+    pub reservation_intent_digest: String,
+    pub attempt_id: String,
+    pub challenge_applied_term: u64,
+    pub challenge_applied_index: u64,
+    pub resolution_applied_term: u64,
+    pub resolution_applied_index: u64,
+    pub finalized_reservation_digest: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerDurableReservationResolutionV1 {
+    record: PrivateOramOwnerReservationResolutionRecordV1,
+    owner_store_incarnation_digest: String,
+    owner_store_binding_digest: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerInstalledReservationResolutionV1 {
+    durable_resolution: PrivateOramOwnerDurableReservationResolutionV1,
+    installed_intent_marker_digest: String,
+    installed_prestage_receipt_digest: String,
+    installed_package_sha256: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerAbortReleasedReservationResolutionV1 {
+    durable_resolution: PrivateOramOwnerDurableReservationResolutionV1,
+    abort_release_authority_digest: String,
+    abort_release_marker_digest: String,
+}
+
+impl Debug for PrivateOramOwnerDurableReservationResolutionV1 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramOwnerDurableReservationResolutionV1")
+            .field("kind", &self.record.kind)
+            .field(
+                "resolution_applied_term",
+                &self.record.resolution_applied_term,
+            )
+            .field(
+                "resolution_applied_index",
+                &self.record.resolution_applied_index,
+            )
+            .field("resolution_record_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl Debug for PrivateOramOwnerInstalledReservationResolutionV1 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramOwnerInstalledReservationResolutionV1")
+            .field("durable_resolution", &self.durable_resolution)
+            .field("installed_intent_marker_digest", &"[redacted]")
+            .field("installed_prestage_receipt_digest", &"[redacted]")
+            .field("installed_package_sha256", &"[redacted]")
+            .finish()
+    }
+}
+
+impl Debug for PrivateOramOwnerAbortReleasedReservationResolutionV1 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramOwnerAbortReleasedReservationResolutionV1")
+            .field("durable_resolution", &self.durable_resolution)
+            .field("abort_release_authority_digest", &"[redacted]")
+            .field("abort_release_marker_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerDurableReservationResolutionV1 {
+    pub const fn kind(&self) -> PrivateOramOwnerReservationResolutionKindV1 {
+        self.record.kind
+    }
+
+    pub fn reserved_terminal_intent_key(&self) -> &str {
+        &self.record.reserved_terminal_intent_key
+    }
+
+    pub fn resolution_record_digest(&self) -> &str {
+        &self.record.resolution_record_digest
+    }
+
+    pub fn durable_fence_record_digest(&self) -> &str {
+        &self.record.fence_record_digest
+    }
+
+    pub fn owner_store_incarnation_digest(&self) -> &str {
+        &self.owner_store_incarnation_digest
+    }
+
+    pub fn owner_store_binding_digest(&self) -> &str {
+        &self.owner_store_binding_digest
+    }
+}
+
+impl PrivateOramOwnerInstalledReservationResolutionV1 {
+    pub fn durable_resolution(&self) -> &PrivateOramOwnerDurableReservationResolutionV1 {
+        &self.durable_resolution
+    }
+
+    pub fn installed_intent_marker_digest(&self) -> &str {
+        &self.installed_intent_marker_digest
+    }
+
+    pub fn installed_prestage_receipt_digest(&self) -> &str {
+        &self.installed_prestage_receipt_digest
+    }
+
+    pub fn installed_package_sha256(&self) -> &str {
+        &self.installed_package_sha256
+    }
+}
+
+impl PrivateOramOwnerAbortReleasedReservationResolutionV1 {
+    pub fn durable_resolution(&self) -> &PrivateOramOwnerDurableReservationResolutionV1 {
+        &self.durable_resolution
+    }
+
+    pub fn abort_release_authority_digest(&self) -> &str {
+        &self.abort_release_authority_digest
+    }
+
+    pub fn abort_release_marker_digest(&self) -> &str {
+        &self.abort_release_marker_digest
+    }
+}
+
+impl Debug for PrivateOramOwnerReservationResolutionV1 {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateOramOwnerReservationResolutionV1")
+            .field("kind", &self.kind)
+            .field("challenge_applied_term", &self.challenge_applied_term)
+            .field("challenge_applied_index", &self.challenge_applied_index)
+            .field("resolution_applied_term", &self.resolution_applied_term)
+            .field("resolution_applied_index", &self.resolution_applied_index)
+            .field("committed_challenge_digest", &"[redacted]")
+            .field("reservation_intent_digest", &"[redacted]")
+            .field("attempt_id", &"[redacted]")
+            .field("finalized_reservation_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateOramOwnerCleanupRepairStateV2 {
+    Complete,
+    NeedsSuperblockReconciliation,
+    NeedsPayloadRelocation,
+}
+
+/// Owner cleanup evidence constructed only after the exact immutable terminal is durable.
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct CommittedPrivateOramOwnerCleanupReceiptV2 {
+    signed_receipt: SignedPrivateOramOwnerCleanupReceiptV1,
+    storage_terminal_marker_digest: String,
+    repair_state: PrivateOramOwnerCleanupRepairStateV2,
+}
+
+impl Debug for CommittedPrivateOramOwnerCleanupReceiptV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommittedPrivateOramOwnerCleanupReceiptV2")
+            .field("repair_state", &self.repair_state)
+            .field("signed_receipt", &"[redacted]")
+            .field("storage_terminal_marker_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl CommittedPrivateOramOwnerCleanupReceiptV2 {
+    pub fn signed_receipt(&self) -> &SignedPrivateOramOwnerCleanupReceiptV1 {
+        &self.signed_receipt
+    }
+
+    pub fn receipt(&self) -> &PrivateOramOwnerCleanupReceiptV1 {
+        &self.signed_receipt.receipt
+    }
+
+    pub fn storage_terminal_marker_digest(&self) -> &str {
+        &self.storage_terminal_marker_digest
+    }
+
+    pub const fn repair_state(&self) -> PrivateOramOwnerCleanupRepairStateV2 {
+        self.repair_state
+    }
+}
+
+/// Multi-entry, insert-only store for pre-admission owner intents.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct PrivateOramOwnerPrestageStoreV2 {
+    primary_hnsw_store_root: PathBuf,
+    root: PathBuf,
+}
+
+impl Debug for PrivateOramOwnerPrestageStoreV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerPrestageStoreV2")
+            .field("primary_hnsw_store_root", &"[redacted]")
+            .field("root", &"[redacted]")
+            .finish()
+    }
+}
+
+fn validate_owner_prepare_parent_fields(
+    parent_descriptor_digest: &str,
+    parent_lease_acquired_record_digest: &str,
+    requirements: &[PrivateOramOwnerPrepareRequirementV2],
+) -> Result<(), PrivateOramOwnerJournalError> {
+    validate_digest(parent_descriptor_digest, "parent_descriptor_digest")?;
+    validate_digest(
+        parent_lease_acquired_record_digest,
+        "parent_lease_acquired_record_digest",
+    )?;
+    if requirements.is_empty()
+        || requirements.len() > MAX_PAIRED_OWNER_INDEXES
+        || requirements[0].kind != PrivateOramIndexKindV2::Hnsw
+        || requirements
+            .windows(2)
+            .any(|pair| pair[0].kind == pair[1].kind)
+    {
+        return Err(PrivateOramOwnerJournalError::InvalidInput(
+            "owner_requirements",
+        ));
+    }
+    Ok(())
+}
+
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateOramOwnerPreparedEvidenceV2 {
+    owner_peer_id: u64,
+    journal_descriptor_digest: String,
+    parent_descriptor_digest: String,
+    parent_lease_acquired_record_digest: String,
+    indexes: Vec<PrivateOramOwnerPreparedIndexEvidenceV2>,
+}
+
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateOramOwnerPreparedIndexEvidenceV2 {
+    kind: PrivateOramIndexKindV2,
+    index_name: String,
+    prepared_journal_digest: String,
+}
+
+impl Debug for PrivateOramOwnerPreparedEvidenceV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerPreparedEvidenceV2")
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("journal_descriptor_digest", &"[redacted]")
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field("parent_lease_acquired_record_digest", &"[redacted]")
+            .field("index_count", &self.indexes.len())
+            .finish()
+    }
+}
+
+impl Debug for PrivateOramOwnerPreparedIndexEvidenceV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerPreparedIndexEvidenceV2")
+            .field("kind", &self.kind)
+            .field("index_name", &"[redacted]")
+            .field("prepared_journal_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerPreparedEvidenceV2 {
+    pub const fn owner_peer_id(&self) -> u64 {
+        self.owner_peer_id
+    }
+
+    pub fn journal_descriptor_digest(&self) -> &str {
+        &self.journal_descriptor_digest
+    }
+
+    pub fn parent_descriptor_digest(&self) -> &str {
+        &self.parent_descriptor_digest
+    }
+
+    pub fn parent_lease_acquired_record_digest(&self) -> &str {
+        &self.parent_lease_acquired_record_digest
+    }
+
+    pub fn indexes(&self) -> &[PrivateOramOwnerPreparedIndexEvidenceV2] {
+        &self.indexes
+    }
+}
+
+impl PrivateOramOwnerPreparedIndexEvidenceV2 {
+    pub const fn kind(&self) -> PrivateOramIndexKindV2 {
+        self.kind
+    }
+
+    pub fn index_name(&self) -> &str {
+        &self.index_name
+    }
+
+    pub fn prepared_journal_digest(&self) -> &str {
+        &self.prepared_journal_digest
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1174,6 +2127,3905 @@ impl Debug for PrivateOramOwnerJournal {
     }
 }
 
+struct LoadedPrivateOramOwnerPrestageIntentV2 {
+    package: PrivateOramOwnerPrestagePackageV2,
+    package_bytes: Vec<u8>,
+    receipt: PrivateOramOwnerPrestageReceiptV2,
+    prepared: ValidatedOwnerJournal,
+    intent_marker: PrivateOramOwnerLifecycleMarkerV2,
+    adoption_pending_marker: Option<PrivateOramOwnerLifecycleMarkerV2>,
+    adopted_marker: Option<PrivateOramOwnerLifecycleMarkerV2>,
+}
+
+enum PlannedPrivateOramOwnerCleanupV2 {
+    Existing(CommittedPrivateOramOwnerCleanupReceiptV2),
+    Unsigned(PrivateOramOwnerCleanupReceiptV1),
+}
+
+impl LoadedPrivateOramOwnerPrestageIntentV2 {
+    fn state(&self) -> PrivateOramOwnerLocalIntentStateV2 {
+        if self.adopted_marker.is_some() {
+            PrivateOramOwnerLocalIntentStateV2::Adopted
+        } else if self.adoption_pending_marker.is_some() {
+            PrivateOramOwnerLocalIntentStateV2::AdoptionPending
+        } else {
+            PrivateOramOwnerLocalIntentStateV2::Intent
+        }
+    }
+
+    fn current_marker(&self) -> &PrivateOramOwnerLifecycleMarkerV2 {
+        self.adopted_marker
+            .as_ref()
+            .or(self.adoption_pending_marker.as_ref())
+            .unwrap_or(&self.intent_marker)
+    }
+}
+
+impl PrivateOramOwnerPrestageStoreV2 {
+    pub fn new(primary_hnsw_store_root: impl AsRef<Path>) -> Self {
+        let primary_hnsw_store_root = primary_hnsw_store_root.as_ref().to_path_buf();
+        let root = primary_hnsw_store_root
+            .join(OWNER_STORE_TEMP_DIR)
+            .join(PRESTAGE_ROOT_DIR);
+        Self {
+            primary_hnsw_store_root,
+            root,
+        }
+    }
+
+    pub fn root_path(&self) -> &Path {
+        &self.root
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_exclusive_lifecycle_root_lock_for_test_v2<R>(
+        &self,
+        action: impl FnOnce() -> R,
+    ) -> Result<R, PrivateOramOwnerJournalError> {
+        self.ensure_layout()?;
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let guard = lock_private_oram_owner_lifecycle_root(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        let output = action();
+        guard.require_exclusive()?;
+        Ok(output)
+    }
+
+    /// Installs one immutable intent. Exact replay returns the same receipt; a conflicting body
+    /// under the same intent key fails closed.
+    pub fn install_v2(
+        &self,
+        validated_request: &VerifiedPrivateOramOwnerPrestageRequestV2,
+        package: &PrivateOramOwnerPrestagePackageV2,
+        package_canonical_json: &[u8],
+        validated_prepare: &PrivateOramValidatedOwnerPrepareV1,
+        plan: &PrivateOramOwnerPrestagePlanV2,
+    ) -> Result<PrivateOramOwnerPrestageReceiptV2, PrivateOramOwnerJournalError> {
+        self.install_inner_v2(
+            validated_request,
+            package,
+            package_canonical_json,
+            validated_prepare,
+            plan,
+            false,
+            false,
+        )
+    }
+
+    /// V3 install requires a committed finalized reservation handoff. An exact replay may proceed
+    /// after the handoff marker was consumed because the immutable intent itself is durable proof.
+    pub fn install_v3_reserved(
+        &self,
+        validated_request: &VerifiedPrivateOramOwnerPrestageRequestV2,
+        package: &PrivateOramOwnerPrestagePackageV2,
+        package_canonical_json: &[u8],
+        validated_prepare: &PrivateOramValidatedOwnerPrepareV1,
+        plan: &PrivateOramOwnerPrestagePlanV2,
+    ) -> Result<PrivateOramOwnerPrestageReceiptV2, PrivateOramOwnerJournalError> {
+        self.install_inner_v2(
+            validated_request,
+            package,
+            package_canonical_json,
+            validated_prepare,
+            plan,
+            true,
+            true,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_v3_reserved_leave_fence_for_test_v1(
+        &self,
+        validated_request: &VerifiedPrivateOramOwnerPrestageRequestV2,
+        package: &PrivateOramOwnerPrestagePackageV2,
+        package_canonical_json: &[u8],
+        validated_prepare: &PrivateOramValidatedOwnerPrepareV1,
+        plan: &PrivateOramOwnerPrestagePlanV2,
+    ) -> Result<PrivateOramOwnerPrestageReceiptV2, PrivateOramOwnerJournalError> {
+        self.install_inner_v2(
+            validated_request,
+            package,
+            package_canonical_json,
+            validated_prepare,
+            plan,
+            true,
+            false,
+        )
+    }
+
+    fn install_inner_v2(
+        &self,
+        validated_request: &VerifiedPrivateOramOwnerPrestageRequestV2,
+        package: &PrivateOramOwnerPrestagePackageV2,
+        package_canonical_json: &[u8],
+        validated_prepare: &PrivateOramValidatedOwnerPrepareV1,
+        plan: &PrivateOramOwnerPrestagePlanV2,
+        require_finalized_reservation_handoff: bool,
+        consume_finalized_reservation_handoff: bool,
+    ) -> Result<PrivateOramOwnerPrestageReceiptV2, PrivateOramOwnerJournalError> {
+        #[cfg(not(target_os = "linux"))]
+        ensure_supported_platform()?;
+        validate_private_oram_owner_prestage_package_for_request_v2(
+            validated_request,
+            package,
+            package_canonical_json,
+        )
+        .map_err(|_| PrivateOramOwnerJournalError::InvalidInput("prestage_package"))?;
+        let request = validated_request.request();
+        if request.owner_peer_id != plan.owner_peer_id
+            || request.parent_descriptor_digest != plan.parent_descriptor_digest
+            || request.parent_lease_acquired_record_digest
+                != plan.parent_lease_acquired_record_digest
+            || validated_prepare.mutation_digest() != request.mutation_digest
+            || validated_prepare.mutation_bundle() != &package.owner_prepare.mutation_bundle
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidInput(
+                "prestage_context",
+            ));
+        }
+        let requirements = plan
+            .requirements
+            .iter()
+            .map(|requirement| PrivateOramOwnerJournalRequirementV1 {
+                kind: requirement.kind,
+                index_name: &requirement.index_name,
+                old_epoch: requirement.old_epoch,
+                new_epoch: requirement.new_epoch,
+                old_root_hash: &requirement.old_root_hash,
+                new_root_hash: &requirement.new_root_hash,
+                writeback_digest: &requirement.writeback_digest,
+            })
+            .collect::<Vec<_>>();
+        let desired = ValidatedOwnerJournal::build(
+            validated_prepare,
+            PrivateOramOwnerJournalPrepareContextV1 {
+                parent_descriptor_digest: &plan.parent_descriptor_digest,
+                parent_lease_acquired_record_digest: &plan.parent_lease_acquired_record_digest,
+                owner_peer_id: plan.owner_peer_id,
+                requirements: &requirements,
+            },
+        )?;
+        let receipt = private_oram_owner_prestage_receipt_v2(request, &desired)?;
+        self.ensure_layout()?;
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let _lock = lock_private_oram_owner_lifecycle_root(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        let reservation_handoff = self.require_install_authorized_by_reservation_fence_locked(
+            &root,
+            request.intent_key.as_str(),
+        )?;
+        let superblock = self.load_superblock_locked(&root)?;
+        if let Some(terminal) =
+            self.load_terminal_marker_locked(&root, request.intent_key.as_str())?
+        {
+            if terminal.signed_cleanup_receipt.is_some() {
+                return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+            }
+            if !private_oram_owner_terminal_matches_receipt_v2(&terminal, &receipt)? {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            let (_, intents) = self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+            let destination = match terminal.kind {
+                PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent => PRESTAGE_RETIRED_DIR,
+                PrivateOramOwnerLifecycleMarkerKindV2::Quarantined => PRESTAGE_QUARANTINE_DIR,
+                _ => return Err(PrivateOramOwnerJournalError::Corrupt),
+            };
+            self.finish_terminal_payload_move_locked(
+                &root,
+                &intents,
+                request.intent_key.as_str(),
+                &terminal,
+                destination,
+            )?;
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let intent_marker = private_oram_owner_lifecycle_marker_v2(
+            PrivateOramOwnerLifecycleMarkerKindV2::Intent,
+            &superblock.owner_store_incarnation_digest,
+            &receipt,
+            None,
+        )?;
+        let intent_marker_bytes = encode_private_oram_owner_lifecycle_marker_v2(&intent_marker)?;
+        let (intents_path, intents) =
+            self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+        let (temp_path, temp) = self.open_prestage_child_locked(&root, PRESTAGE_TEMP_DIR)?;
+
+        let intent_path = intents_path.join(&request.intent_key);
+        if path_entry_exists(&intent_path)? {
+            let existing = self.load_intent_locked(
+                &root,
+                &intents,
+                PRESTAGE_INTENTS_DIR,
+                request.intent_key.as_str(),
+            )?;
+            if existing.package_bytes != package_canonical_json
+                || existing.package != *package
+                || existing.receipt != receipt
+                || !existing.prepared.exactly_matches(&desired)
+                || existing.intent_marker != intent_marker
+            {
+                return Err(PrivateOramOwnerJournalError::ConcurrentMutation);
+            }
+            sync_open_directory(&intents)
+                .and_then(|()| sync_open_directory(&root))
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+            validate_open_directory_at_path(&root, &self.root)?;
+            if reservation_handoff && consume_finalized_reservation_handoff {
+                self.consume_finalized_reservation_fence_locked(&root)?;
+            }
+            return Ok(receipt);
+        }
+        if require_finalized_reservation_handoff && !reservation_handoff {
+            return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+        }
+
+        let candidate = tempfile::Builder::new()
+            .prefix("prestage-v2-")
+            .tempdir_in(&temp_path)
+            .map_err(|_| PrivateOramOwnerJournalError::Io)?;
+        set_private_directory_permissions(candidate.path())?;
+        write_new_private_file(
+            &candidate.path().join(PRESTAGE_PACKAGE_FILE),
+            package_canonical_json,
+            PRESTAGE_MAX_PACKAGE_BYTES,
+        )?;
+        write_new_private_file(
+            &candidate.path().join(DESCRIPTOR_FILE),
+            &desired.descriptor_bytes,
+            MAX_DESCRIPTOR_BYTES,
+        )?;
+        write_new_private_file(
+            &candidate.path().join(FINAL_BUCKETS_FILE),
+            &desired.final_bucket_bytes,
+            MAX_FINAL_BUCKET_FRAME_BYTES,
+        )?;
+        write_new_private_file(
+            &candidate.path().join(STATE_FILE),
+            &desired.state_bytes,
+            MAX_STATE_BYTES,
+        )?;
+        let receipt_bytes = encode_private_oram_owner_prestage_receipt_v2(&receipt)?;
+        write_new_private_file(
+            &candidate.path().join(PRESTAGE_RECEIPT_FILE),
+            &receipt_bytes,
+            PRESTAGE_MAX_RECEIPT_BYTES,
+        )?;
+        write_new_private_file(
+            &candidate.path().join(PRESTAGE_INTENT_MARKER_FILE),
+            &intent_marker_bytes,
+            PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES,
+        )?;
+        validate_private_oram_owner_prestage_intent_entries(candidate.path())?;
+        sync_private_directory(candidate.path())?;
+        for (name, expected, max_bytes) in [
+            (
+                PRESTAGE_PACKAGE_FILE,
+                package_canonical_json,
+                PRESTAGE_MAX_PACKAGE_BYTES,
+            ),
+            (
+                DESCRIPTOR_FILE,
+                desired.descriptor_bytes.as_slice(),
+                MAX_DESCRIPTOR_BYTES,
+            ),
+            (
+                FINAL_BUCKETS_FILE,
+                desired.final_bucket_bytes.as_slice(),
+                MAX_FINAL_BUCKET_FRAME_BYTES,
+            ),
+            (STATE_FILE, desired.state_bytes.as_slice(), MAX_STATE_BYTES),
+            (
+                PRESTAGE_RECEIPT_FILE,
+                receipt_bytes.as_slice(),
+                PRESTAGE_MAX_RECEIPT_BYTES,
+            ),
+            (
+                PRESTAGE_INTENT_MARKER_FILE,
+                intent_marker_bytes.as_slice(),
+                PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES,
+            ),
+        ] {
+            let (mut pinned, actual) =
+                read_private_file_pinned(&candidate.path().join(name), max_bytes)?;
+            if actual != expected {
+                return Err(PrivateOramOwnerJournalError::Corrupt);
+            }
+            pinned.validate_exact_contents(expected)?;
+        }
+        let candidate_directory = open_private_directory(candidate.path())?;
+        let candidate_name = candidate
+            .path()
+            .file_name()
+            .ok_or(PrivateOramOwnerJournalError::Corrupt)?;
+        sync_open_directory(&temp)?;
+        match rename_entry_noreplace(
+            &temp,
+            candidate_name,
+            &intents,
+            OsStr::new(&request.intent_key),
+        ) {
+            Ok(()) => {
+                sync_open_directory(&temp)
+                    .and_then(|()| sync_open_directory(&intents))
+                    .and_then(|()| sync_open_directory(&root))
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                let installed_directory = open_private_directory(&intent_path)
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                ensure_same_open_inode(&candidate_directory, &installed_directory)
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                let installed = self
+                    .load_intent_locked(
+                        &root,
+                        &intents,
+                        PRESTAGE_INTENTS_DIR,
+                        request.intent_key.as_str(),
+                    )
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                if installed.package_bytes != package_canonical_json
+                    || installed.receipt != receipt
+                    || !installed.prepared.exactly_matches(&desired)
+                    || installed.intent_marker != intent_marker
+                {
+                    return Err(PrivateOramOwnerJournalError::Indeterminate);
+                }
+                validate_open_directory_at_path(&root, &self.root)
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                if reservation_handoff && consume_finalized_reservation_handoff {
+                    self.consume_finalized_reservation_fence_locked(&root)?;
+                }
+                Ok(receipt)
+            }
+            Err(PrivateOramOwnerJournalError::ConcurrentMutation) => {
+                let existing = self.load_intent_locked(
+                    &root,
+                    &intents,
+                    PRESTAGE_INTENTS_DIR,
+                    request.intent_key.as_str(),
+                )?;
+                if existing.package_bytes != package_canonical_json
+                    || existing.receipt != receipt
+                    || !existing.prepared.exactly_matches(&desired)
+                    || existing.intent_marker != intent_marker
+                {
+                    return Err(PrivateOramOwnerJournalError::ConcurrentMutation);
+                }
+                sync_open_directory(&intents)
+                    .and_then(|()| sync_open_directory(&root))
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                if reservation_handoff && consume_finalized_reservation_handoff {
+                    self.consume_finalized_reservation_fence_locked(&root)?;
+                }
+                Ok(receipt)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Adopts exact pre-staged bytes only after the durable sequence-1 parent exists.
+    pub fn adopt_for_parent_v2(
+        &self,
+        intent_key: &str,
+        expected_package_sha256: &str,
+        parent: &PrivateOramOwnerPrepareParentV2,
+    ) -> Result<PrivateOramOwnerPreparedEvidenceV2, PrivateOramOwnerJournalError> {
+        self.adopt_for_parent_inner_v2(intent_key, expected_package_sha256, parent, false, false)?
+            .ok_or(PrivateOramOwnerJournalError::Indeterminate)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn leave_adoption_pending_for_test_v2(
+        &self,
+        intent_key: &str,
+        expected_package_sha256: &str,
+        parent: &PrivateOramOwnerPrepareParentV2,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        if self
+            .adopt_for_parent_inner_v2(intent_key, expected_package_sha256, parent, true, false)?
+            .is_some()
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn leave_adoption_after_canonical_for_test_v2(
+        &self,
+        intent_key: &str,
+        expected_package_sha256: &str,
+        parent: &PrivateOramOwnerPrepareParentV2,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        if self
+            .adopt_for_parent_inner_v2(intent_key, expected_package_sha256, parent, false, true)?
+            .is_some()
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        Ok(())
+    }
+
+    fn adopt_for_parent_inner_v2(
+        &self,
+        intent_key: &str,
+        expected_package_sha256: &str,
+        parent: &PrivateOramOwnerPrepareParentV2,
+        stop_after_pending: bool,
+        stop_after_canonical: bool,
+    ) -> Result<Option<PrivateOramOwnerPreparedEvidenceV2>, PrivateOramOwnerJournalError> {
+        validate_digest(expected_package_sha256, "package_sha256")?;
+        self.ensure_layout()?;
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let lifecycle_lock = lock_private_oram_owner_lifecycle_root(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        self.require_no_active_reservation_fence_locked(&root)?;
+        let superblock = self.load_superblock_locked(&root)?;
+        if let Some(terminal) = self.load_terminal_marker_locked(&root, intent_key)? {
+            if terminal.signed_cleanup_receipt.is_some() {
+                return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+            }
+            if terminal.package_sha256 != expected_package_sha256
+                || terminal.parent_descriptor_digest != parent.parent_descriptor_digest
+                || terminal.parent_lease_acquired_record_digest
+                    != parent.parent_lease_acquired_record_digest
+                || terminal.owner_peer_id != parent.owner_peer_id
+            {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            self.validate_terminal_payload_state_locked(&root, &terminal)?;
+            let (_, intents) = self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+            let destination = match terminal.kind {
+                PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent => PRESTAGE_RETIRED_DIR,
+                PrivateOramOwnerLifecycleMarkerKindV2::Quarantined => PRESTAGE_QUARANTINE_DIR,
+                _ => return Err(PrivateOramOwnerJournalError::Corrupt),
+            };
+            self.finish_terminal_payload_move_locked(
+                &root,
+                &intents,
+                intent_key,
+                &terminal,
+                destination,
+            )?;
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let (_, intents) = self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+        let loaded = self.load_intent_locked(&root, &intents, PRESTAGE_INTENTS_DIR, intent_key)?;
+        if loaded.receipt.package_sha256 != expected_package_sha256
+            || loaded.receipt.parent_descriptor_digest != parent.parent_descriptor_digest
+            || loaded.receipt.parent_lease_acquired_record_digest
+                != parent.parent_lease_acquired_record_digest
+            || loaded.receipt.owner_peer_id != parent.owner_peer_id
+            || loaded.prepared.snapshot.descriptor.parent_descriptor_digest
+                != parent.parent_descriptor_digest
+            || loaded
+                .prepared
+                .snapshot
+                .descriptor
+                .parent_lease_acquired_record_digest
+                != parent.parent_lease_acquired_record_digest
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let expected_requirements = parent
+            .requirements
+            .iter()
+            .map(|requirement| {
+                (
+                    requirement.kind,
+                    requirement.index_name.as_str(),
+                    requirement.old_epoch,
+                    requirement.new_epoch,
+                    requirement.old_root_hash.as_str(),
+                    requirement.new_root_hash.as_str(),
+                    requirement.writeback_digest.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let actual_requirements = loaded
+            .prepared
+            .snapshot
+            .descriptor
+            .indexes
+            .iter()
+            .map(|index| {
+                (
+                    index.kind,
+                    index.index_name.as_str(),
+                    index.old_epoch,
+                    index.new_epoch,
+                    index.old_root_hash.as_str(),
+                    index.new_root_hash.as_str(),
+                    index.writeback_digest.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if actual_requirements != expected_requirements {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let owner_journal = PrivateOramOwnerJournal::new(&self.primary_hnsw_store_root);
+        let canonical_root = owner_journal.ensure_root()?;
+        let canonical_lock = lock_private_journal_root(&canonical_root)?;
+        let pending_marker = private_oram_owner_lifecycle_marker_v2(
+            PrivateOramOwnerLifecycleMarkerKindV2::AdoptionPending,
+            &superblock.owner_store_incarnation_digest,
+            &loaded.receipt,
+            None,
+        )?;
+        if let Some(existing) = &loaded.adoption_pending_marker {
+            if existing != &pending_marker {
+                return Err(PrivateOramOwnerJournalError::Corrupt);
+            }
+        } else {
+            self.publish_intent_marker_locked(
+                &root,
+                &intents,
+                intent_key,
+                PRESTAGE_ADOPTION_PENDING_MARKER_FILE,
+                &pending_marker,
+            )?;
+        }
+        if stop_after_pending && loaded.adopted_marker.is_none() {
+            validate_open_directory_at_path(&root, &self.root)?;
+            return Ok(None);
+        }
+        let adopted_marker = private_oram_owner_lifecycle_marker_v2(
+            PrivateOramOwnerLifecycleMarkerKindV2::Adopted,
+            &superblock.owner_store_incarnation_digest,
+            &loaded.receipt,
+            None,
+        )?;
+        if let Some(existing) = &loaded.adopted_marker
+            && existing != &adopted_marker
+        {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        let prepared = match owner_journal.prepare_validated_with_lifecycle_guard(
+            &lifecycle_lock,
+            &canonical_lock,
+            loaded.prepared.clone(),
+        ) {
+            Ok(prepared) => prepared,
+            Err(error @ PrivateOramOwnerJournalError::ConcurrentMutation) => {
+                let quarantine = private_oram_owner_lifecycle_marker_v2(
+                    PrivateOramOwnerLifecycleMarkerKindV2::Quarantined,
+                    &superblock.owner_store_incarnation_digest,
+                    &loaded.receipt,
+                    Some(&pending_marker.marker_digest),
+                )?;
+                self.publish_terminal_then_move_intent_locked(
+                    &root,
+                    &intents,
+                    intent_key,
+                    &quarantine,
+                    PRESTAGE_QUARANTINE_DIR,
+                    true,
+                )?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+        if stop_after_canonical && loaded.adopted_marker.is_none() {
+            validate_open_directory_at_path(&canonical_root, owner_journal.root_path())?;
+            validate_open_directory_at_path(&root, &self.root)?;
+            return Ok(None);
+        }
+        if loaded.adopted_marker.is_none() {
+            self.publish_intent_marker_locked(
+                &root,
+                &intents,
+                intent_key,
+                PRESTAGE_ADOPTED_MARKER_FILE,
+                &adopted_marker,
+            )?;
+        }
+        let (_, token) = prepared;
+        let replayed =
+            self.load_intent_locked(&root, &intents, PRESTAGE_INTENTS_DIR, intent_key)?;
+        if replayed.state() != PrivateOramOwnerLocalIntentStateV2::Adopted
+            || replayed.current_marker() != &adopted_marker
+        {
+            return Err(PrivateOramOwnerJournalError::Indeterminate);
+        }
+        validate_open_directory_at_path(&root, &self.root)?;
+        Ok(Some(prepared_evidence_v2(token)))
+    }
+
+    pub fn inspect_v2(
+        &self,
+        intent_key: &str,
+    ) -> Result<Option<PrivateOramOwnerPrestageReceiptV2>, PrivateOramOwnerJournalError> {
+        if !path_entry_exists(&self.root)? {
+            return Ok(None);
+        }
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let _lock = lock_private_oram_owner_lifecycle_root_shared(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        validate_private_oram_owner_prestage_root_entries(&root)?;
+        self.require_no_unreconciled_signed_cleanup_locked(&root)?;
+        if let Some(terminal) = self.load_terminal_marker_locked(&root, intent_key)? {
+            self.validate_terminal_payload_state_locked(&root, &terminal)?;
+            return match terminal.kind {
+                PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent => Ok(None),
+                PrivateOramOwnerLifecycleMarkerKindV2::Quarantined => {
+                    Err(PrivateOramOwnerJournalError::Corrupt)
+                }
+                _ => Err(PrivateOramOwnerJournalError::Corrupt),
+            };
+        }
+        let (intents_path, intents) =
+            self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+        let intent_path = intents_path.join(intent_key);
+        if !path_entry_exists(&intent_path)? {
+            return Ok(None);
+        }
+        Ok(Some(
+            self.load_intent_locked(&root, &intents, PRESTAGE_INTENTS_DIR, intent_key)?
+                .receipt,
+        ))
+    }
+
+    pub fn inspect_lifecycle_v2(
+        &self,
+        intent_key: &str,
+    ) -> Result<PrivateOramOwnerLocalIntentStatusV2, PrivateOramOwnerJournalError> {
+        validate_digest(intent_key, "intent_key")?;
+        self.ensure_layout()?;
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let _lock = lock_private_oram_owner_lifecycle_root_shared(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        let superblock = self.load_superblock_locked(&root)?;
+        if let Some(terminal) = self.load_terminal_marker_locked(&root, intent_key)? {
+            self.validate_terminal_payload_state_locked(&root, &terminal)?;
+            let state = match terminal.kind {
+                PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent => {
+                    PrivateOramOwnerLocalIntentStateV2::TombstonedAbsent
+                }
+                PrivateOramOwnerLifecycleMarkerKindV2::Quarantined => {
+                    PrivateOramOwnerLocalIntentStateV2::Quarantined
+                }
+                _ => return Err(PrivateOramOwnerJournalError::Corrupt),
+            };
+            return Ok(PrivateOramOwnerLocalIntentStatusV2 {
+                state,
+                lifecycle_state: superblock.lifecycle_state()?,
+                marker_digest: Some(terminal.marker_digest),
+            });
+        }
+        let (intents_path, intents) =
+            self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+        let intent_path = intents_path.join(intent_key);
+        if !path_entry_exists(&intent_path)? {
+            return Ok(PrivateOramOwnerLocalIntentStatusV2 {
+                state: PrivateOramOwnerLocalIntentStateV2::Absent,
+                lifecycle_state: superblock.lifecycle_state()?,
+                marker_digest: None,
+            });
+        }
+        let loaded = self.load_intent_locked(&root, &intents, PRESTAGE_INTENTS_DIR, intent_key)?;
+        Ok(PrivateOramOwnerLocalIntentStatusV2 {
+            state: loaded.state(),
+            lifecycle_state: superblock.lifecycle_state()?,
+            marker_digest: Some(loaded.current_marker().marker_digest.clone()),
+        })
+    }
+
+    /// Persists one exclusive committed-challenge fence before reservation readiness is signed.
+    /// Exact replay is idempotent; a different active challenge fails closed.
+    pub fn prepare_reservation_fence_v1(
+        &self,
+        challenge: &PrivateOramOwnerReservationPrepareChallengeV1,
+        expected_lifecycle_state: &PrivateOramOwnerLifecycleStateV1,
+    ) -> Result<PrivateOramOwnerDurableReservationFenceV1, PrivateOramOwnerJournalError> {
+        validate_private_oram_owner_reservation_prepare_challenge_v1(challenge)
+            .map_err(|_| PrivateOramOwnerJournalError::InvalidInput("reservation_challenge"))?;
+        if !path_entry_exists(&self.root)? {
+            return Err(PrivateOramOwnerJournalError::NotEnrolled);
+        }
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let lifecycle_lock = lock_private_oram_owner_lifecycle_root(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        lifecycle_lock.require_exclusive()?;
+        validate_private_oram_owner_prestage_root_entries(&root)?;
+        self.require_no_unreconciled_signed_cleanup_locked(&root)?;
+        let installed_lifecycle = self.load_superblock_locked(&root)?.lifecycle_state()?;
+        if &installed_lifecycle != expected_lifecycle_state
+            || challenge.owner_store_incarnation_digest
+                != installed_lifecycle.owner_store_incarnation_digest
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let (fence_path, fence_dir) =
+            self.open_prestage_child_locked(&root, PRESTAGE_RESERVATION_FENCE_DIR)?;
+        validate_private_oram_owner_reservation_fence_entries(&fence_dir)?;
+        if let Some(existing) = self.load_reservation_fence_locked(&root, &fence_dir)? {
+            if existing.challenge != *challenge || existing.lifecycle_state != installed_lifecycle {
+                return Err(PrivateOramOwnerJournalError::ConcurrentMutation);
+            }
+            return Ok(PrivateOramOwnerDurableReservationFenceV1 { record: existing });
+        }
+        if self
+            .load_reservation_resolution_locked(&root, &fence_dir)?
+            .as_ref()
+            .is_some_and(|record| {
+                private_oram_owner_reservation_resolution_matches_challenge_v1(record, challenge)
+            })
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        self.remove_reservation_resolution_residual_locked(&root, &fence_dir)?;
+        if self
+            .load_terminal_marker_locked(&root, &challenge.reserved_terminal_intent_key)?
+            .is_some()
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        self.require_terminal_capacity_locked(&root, &challenge.reserved_terminal_intent_key)?;
+        let (_, terminals) = self.open_prestage_child_locked(&root, PRESTAGE_TERMINALS_DIR)?;
+        let terminal_record_count = u64::try_from(
+            directory_entry_names_open_bounded(
+                &terminals,
+                PRESTAGE_MAX_TERMINAL_RECORDS,
+                PrivateOramOwnerJournalError::Corrupt,
+            )?
+            .len(),
+        )
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+        let mut record = PrivateOramOwnerReservationFenceRecordV1 {
+            version: PRESTAGE_RESERVATION_FENCE_VERSION,
+            challenge: challenge.clone(),
+            lifecycle_state: installed_lifecycle,
+            terminal_record_count,
+            terminal_record_limit: PRESTAGE_MAX_TERMINAL_RECORDS as u64,
+            fence_record_digest: String::new(),
+        };
+        record.fence_record_digest = private_oram_owner_reservation_fence_digest_v1(&record)?;
+        let bytes = encode_private_oram_owner_reservation_fence_v1(&record)?;
+        self.publish_immutable_file_locked(
+            &root,
+            &fence_dir,
+            &fence_path,
+            PRESTAGE_RESERVATION_FENCE_FILE,
+            &bytes,
+            PRESTAGE_MAX_RESERVATION_FENCE_BYTES,
+        )?;
+        sync_open_directory(&fence_dir)
+            .and_then(|()| sync_open_directory(&root))
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        let installed = self
+            .load_reservation_fence_locked(&root, &fence_dir)?
+            .ok_or(PrivateOramOwnerJournalError::Indeterminate)?;
+        if installed != record {
+            return Err(PrivateOramOwnerJournalError::Indeterminate);
+        }
+        validate_open_directory_at_path(&root, &self.root)
+            .and_then(|()| validate_open_directory_at_path(&fence_dir, &fence_path))
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        Ok(PrivateOramOwnerDurableReservationFenceV1 { record })
+    }
+
+    /// Durably binds the local fence to an exact committed consensus disposition. A finalized
+    /// disposition is consumed only after the reserved intent is installed. Cancellation removes
+    /// the fence only after the resolution record itself has reached durable storage.
+    pub fn resolve_reservation_fence_v1(
+        &self,
+        resolution: &PrivateOramOwnerReservationResolutionV1,
+    ) -> Result<PrivateOramOwnerDurableReservationResolutionV1, PrivateOramOwnerJournalError> {
+        self.resolve_reservation_fence_inner_v1(resolution, None)
+    }
+
+    /// Resolves an exact committed cancellation even when this owner durably never published the
+    /// corresponding fence. The absent case is recorded before returning so response loss and
+    /// restart replay the same terminal fact and the cancelled challenge cannot later be prepared.
+    pub fn resolve_reservation_fence_or_record_absent_cancellation_v1(
+        &self,
+        resolution: &PrivateOramOwnerReservationResolutionV1,
+        challenge: &PrivateOramOwnerReservationPrepareChallengeV1,
+        expected_lifecycle_state: &PrivateOramOwnerLifecycleStateV1,
+    ) -> Result<PrivateOramOwnerDurableReservationResolutionV1, PrivateOramOwnerJournalError> {
+        validate_private_oram_owner_reservation_prepare_challenge_v1(challenge)
+            .map_err(|_| PrivateOramOwnerJournalError::InvalidInput("reservation_challenge"))?;
+        if !private_oram_owner_reservation_resolution_input_matches_challenge_v1(
+            resolution, challenge,
+        ) {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        self.resolve_reservation_fence_inner_v1(
+            resolution,
+            Some((challenge, expected_lifecycle_state)),
+        )
+    }
+
+    fn resolve_reservation_fence_inner_v1(
+        &self,
+        resolution: &PrivateOramOwnerReservationResolutionV1,
+        absent_cancellation_context: Option<(
+            &PrivateOramOwnerReservationPrepareChallengeV1,
+            &PrivateOramOwnerLifecycleStateV1,
+        )>,
+    ) -> Result<PrivateOramOwnerDurableReservationResolutionV1, PrivateOramOwnerJournalError> {
+        validate_private_oram_owner_reservation_resolution_input_v1(resolution)?;
+        if !path_entry_exists(&self.root)? {
+            return Err(PrivateOramOwnerJournalError::NotEnrolled);
+        }
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let lifecycle_lock = lock_private_oram_owner_lifecycle_root(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        lifecycle_lock.require_exclusive()?;
+        let superblock = self.load_superblock_locked(&root)?;
+        let (fence_path, fence_dir) =
+            self.open_prestage_child_locked(&root, PRESTAGE_RESERVATION_FENCE_DIR)?;
+        let Some(fence) = self.load_reservation_fence_locked(&root, &fence_dir)? else {
+            if let Some(existing) = self.load_reservation_resolution_locked(&root, &fence_dir)? {
+                if !private_oram_owner_reservation_resolution_matches_input_v1(
+                    &existing, resolution,
+                ) {
+                    return Err(PrivateOramOwnerJournalError::InvalidTransition);
+                }
+                return Ok(PrivateOramOwnerDurableReservationResolutionV1 {
+                    owner_store_incarnation_digest: existing.owner_store_incarnation_digest.clone(),
+                    owner_store_binding_digest: existing.owner_store_binding_digest.clone(),
+                    record: existing,
+                });
+            }
+            let Some((challenge, expected_lifecycle_state)) = absent_cancellation_context else {
+                return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+            };
+            if resolution.kind != PrivateOramOwnerReservationResolutionKindV1::Cancelled
+                || challenge.owner_store_incarnation_digest
+                    != superblock.owner_store_incarnation_digest
+                || expected_lifecycle_state != &superblock.lifecycle_state()?
+                || challenge.owner_store_incarnation_digest
+                    != expected_lifecycle_state.owner_store_incarnation_digest
+                || self
+                    .load_reservation_abort_release_locked(&root, &fence_dir)?
+                    .is_some()
+                || self
+                    .load_terminal_marker_locked(&root, &challenge.reserved_terminal_intent_key)?
+                    .is_some()
+            {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            let (intents_path, _) = self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+            if path_entry_exists(&intents_path.join(&challenge.reserved_terminal_intent_key))? {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            let mut record = PrivateOramOwnerReservationResolutionRecordV1 {
+                version: PRESTAGE_RESERVATION_RESOLUTION_VERSION,
+                kind: resolution.kind,
+                fence_was_present: false,
+                fence_record_digest: private_oram_owner_absent_reservation_fence_digest_v1(
+                    challenge,
+                    expected_lifecycle_state,
+                )?,
+                committed_challenge_digest: resolution.committed_challenge_digest.clone(),
+                reservation_intent_digest: resolution.reservation_intent_digest.clone(),
+                attempt_id: resolution.attempt_id.clone(),
+                challenge_applied_term: resolution.challenge_applied_term,
+                challenge_applied_index: resolution.challenge_applied_index,
+                resolution_applied_term: resolution.resolution_applied_term,
+                resolution_applied_index: resolution.resolution_applied_index,
+                reserved_terminal_intent_key: challenge.reserved_terminal_intent_key.clone(),
+                finalized_reservation_digest: None,
+                owner_store_incarnation_digest: superblock.owner_store_incarnation_digest.clone(),
+                owner_store_binding_digest: challenge.expected_checkpoint_record_digest.clone(),
+                resolution_record_digest: String::new(),
+            };
+            record.resolution_record_digest =
+                private_oram_owner_reservation_resolution_digest_v1(&record)?;
+            let bytes = encode_private_oram_owner_reservation_resolution_v1(&record)?;
+            self.publish_immutable_file_locked(
+                &root,
+                &fence_dir,
+                &fence_path,
+                PRESTAGE_RESERVATION_RESOLUTION_FILE,
+                &bytes,
+                PRESTAGE_MAX_RESERVATION_RESOLUTION_BYTES,
+            )?;
+            sync_open_directory(&fence_dir)
+                .and_then(|()| sync_open_directory(&root))
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+            if self
+                .load_reservation_fence_locked(&root, &fence_dir)?
+                .is_some()
+                || self
+                    .load_reservation_resolution_locked(&root, &fence_dir)?
+                    .as_ref()
+                    != Some(&record)
+            {
+                return Err(PrivateOramOwnerJournalError::Indeterminate);
+            }
+            return Ok(PrivateOramOwnerDurableReservationResolutionV1 {
+                owner_store_incarnation_digest: record.owner_store_incarnation_digest.clone(),
+                owner_store_binding_digest: record.owner_store_binding_digest.clone(),
+                record,
+            });
+        };
+        if fence.challenge.committed_challenge_digest != resolution.committed_challenge_digest
+            || fence.challenge.reservation_intent_digest != resolution.reservation_intent_digest
+            || fence.challenge.attempt_id != resolution.attempt_id
+            || fence.challenge.challenge_applied_term != resolution.challenge_applied_term
+            || fence.challenge.challenge_applied_index != resolution.challenge_applied_index
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let mut record = PrivateOramOwnerReservationResolutionRecordV1 {
+            version: PRESTAGE_RESERVATION_RESOLUTION_VERSION,
+            kind: resolution.kind,
+            fence_was_present: true,
+            fence_record_digest: fence.fence_record_digest.clone(),
+            committed_challenge_digest: resolution.committed_challenge_digest.clone(),
+            reservation_intent_digest: resolution.reservation_intent_digest.clone(),
+            attempt_id: resolution.attempt_id.clone(),
+            challenge_applied_term: resolution.challenge_applied_term,
+            challenge_applied_index: resolution.challenge_applied_index,
+            resolution_applied_term: resolution.resolution_applied_term,
+            resolution_applied_index: resolution.resolution_applied_index,
+            reserved_terminal_intent_key: fence.challenge.reserved_terminal_intent_key.clone(),
+            finalized_reservation_digest: resolution.finalized_reservation_digest.clone(),
+            owner_store_incarnation_digest: fence
+                .lifecycle_state
+                .owner_store_incarnation_digest
+                .clone(),
+            owner_store_binding_digest: fence.challenge.expected_checkpoint_record_digest.clone(),
+            resolution_record_digest: String::new(),
+        };
+        if record.owner_store_incarnation_digest != superblock.owner_store_incarnation_digest {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        record.resolution_record_digest =
+            private_oram_owner_reservation_resolution_digest_v1(&record)?;
+        let bytes = encode_private_oram_owner_reservation_resolution_v1(&record)?;
+        self.publish_immutable_file_locked(
+            &root,
+            &fence_dir,
+            &fence_path,
+            PRESTAGE_RESERVATION_RESOLUTION_FILE,
+            &bytes,
+            PRESTAGE_MAX_RESERVATION_RESOLUTION_BYTES,
+        )?;
+        sync_open_directory(&fence_dir)
+            .and_then(|()| sync_open_directory(&root))
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        if resolution.kind == PrivateOramOwnerReservationResolutionKindV1::Cancelled {
+            self.remove_reservation_fence_keep_resolution_locked(&root, &fence_dir, &record)?;
+        }
+        Ok(PrivateOramOwnerDurableReservationResolutionV1 {
+            owner_store_incarnation_digest: record.owner_store_incarnation_digest.clone(),
+            owner_store_binding_digest: record.owner_store_binding_digest.clone(),
+            record,
+        })
+    }
+
+    /// Confirms that one finalized reservation resolution was consumed by an exact durable owner
+    /// intent. The returned evidence is suitable for a completion receipt signed after install.
+    pub fn confirm_installed_reservation_resolution_v1(
+        &self,
+        resolution: &PrivateOramOwnerReservationResolutionV1,
+    ) -> Result<PrivateOramOwnerInstalledReservationResolutionV1, PrivateOramOwnerJournalError>
+    {
+        validate_private_oram_owner_reservation_resolution_input_v1(resolution)?;
+        if resolution.kind != PrivateOramOwnerReservationResolutionKindV1::Finalized {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        if !path_entry_exists(&self.root)? {
+            return Err(PrivateOramOwnerJournalError::NotEnrolled);
+        }
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let lifecycle_lock = lock_private_oram_owner_lifecycle_root(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        lifecycle_lock.require_exclusive()?;
+        let superblock = self.load_superblock_locked(&root)?;
+        let (_, fence_dir) =
+            self.open_prestage_child_locked(&root, PRESTAGE_RESERVATION_FENCE_DIR)?;
+        if self
+            .load_reservation_fence_locked(&root, &fence_dir)?
+            .is_some()
+        {
+            return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+        }
+        let durable_record = self
+            .load_reservation_resolution_locked(&root, &fence_dir)?
+            .filter(|record| {
+                private_oram_owner_reservation_resolution_matches_input_v1(record, resolution)
+            })
+            .ok_or(PrivateOramOwnerJournalError::ExternalRecoveryRequired)?;
+        if durable_record.owner_store_incarnation_digest
+            != superblock.owner_store_incarnation_digest
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let (_, intents) = self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+        let installed = self
+            .load_intent_locked(
+                &root,
+                &intents,
+                PRESTAGE_INTENTS_DIR,
+                &durable_record.reserved_terminal_intent_key,
+            )
+            .map_err(|error| match error {
+                PrivateOramOwnerJournalError::Io => {
+                    PrivateOramOwnerJournalError::ExternalRecoveryRequired
+                }
+                other => other,
+            })?;
+        if installed.receipt.intent_key() != durable_record.reserved_terminal_intent_key {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let installed_intent_marker_digest = installed.current_marker().marker_digest.clone();
+        Ok(PrivateOramOwnerInstalledReservationResolutionV1 {
+            durable_resolution: PrivateOramOwnerDurableReservationResolutionV1 {
+                owner_store_incarnation_digest: durable_record
+                    .owner_store_incarnation_digest
+                    .clone(),
+                owner_store_binding_digest: durable_record.owner_store_binding_digest.clone(),
+                record: durable_record,
+            },
+            installed_intent_marker_digest,
+            installed_prestage_receipt_digest: installed.receipt.receipt_digest().to_string(),
+            installed_package_sha256: installed.receipt.package_sha256().to_string(),
+        })
+    }
+
+    /// Releases one finalized but uninstalled reservation only after a durable consensus abort
+    /// outcome is supplied. The abort marker reaches durable storage before the fence is removed.
+    pub fn release_finalized_reservation_after_abort_v1(
+        &self,
+        resolution: &PrivateOramOwnerReservationResolutionV1,
+        abort_release_authority_digest: &str,
+    ) -> Result<PrivateOramOwnerAbortReleasedReservationResolutionV1, PrivateOramOwnerJournalError>
+    {
+        self.release_finalized_reservation_after_abort_inner_v1(
+            resolution,
+            abort_release_authority_digest,
+            true,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release_finalized_reservation_after_abort_leave_fence_for_test_v1(
+        &self,
+        resolution: &PrivateOramOwnerReservationResolutionV1,
+        abort_release_authority_digest: &str,
+    ) -> Result<PrivateOramOwnerAbortReleasedReservationResolutionV1, PrivateOramOwnerJournalError>
+    {
+        self.release_finalized_reservation_after_abort_inner_v1(
+            resolution,
+            abort_release_authority_digest,
+            false,
+        )
+    }
+
+    fn release_finalized_reservation_after_abort_inner_v1(
+        &self,
+        resolution: &PrivateOramOwnerReservationResolutionV1,
+        abort_release_authority_digest: &str,
+        consume_finalized_reservation_handoff: bool,
+    ) -> Result<PrivateOramOwnerAbortReleasedReservationResolutionV1, PrivateOramOwnerJournalError>
+    {
+        validate_private_oram_owner_reservation_resolution_input_v1(resolution)?;
+        validate_digest(
+            abort_release_authority_digest,
+            "abort_release_authority_digest",
+        )?;
+        if resolution.kind != PrivateOramOwnerReservationResolutionKindV1::Finalized {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        if !path_entry_exists(&self.root)? {
+            return Err(PrivateOramOwnerJournalError::NotEnrolled);
+        }
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let lifecycle_lock = lock_private_oram_owner_lifecycle_root(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        lifecycle_lock.require_exclusive()?;
+        let superblock = self.load_superblock_locked(&root)?;
+        let (fence_path, fence_dir) =
+            self.open_prestage_child_locked(&root, PRESTAGE_RESERVATION_FENCE_DIR)?;
+        let fence = self.load_reservation_fence_locked(&root, &fence_dir)?;
+        let durable_record = self
+            .load_reservation_resolution_locked(&root, &fence_dir)?
+            .filter(|record| {
+                private_oram_owner_reservation_resolution_matches_input_v1(record, resolution)
+            })
+            .ok_or(PrivateOramOwnerJournalError::ExternalRecoveryRequired)?;
+        if durable_record.owner_store_incarnation_digest
+            != superblock.owner_store_incarnation_digest
+            || fence.as_ref().is_some_and(|record| {
+                record.fence_record_digest != durable_record.fence_record_digest
+                    || record.challenge.reserved_terminal_intent_key
+                        != durable_record.reserved_terminal_intent_key
+            })
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let (intents_path, _) = self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+        if path_entry_exists(&intents_path.join(&durable_record.reserved_terminal_intent_key))? {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let mut release = PrivateOramOwnerReservationAbortReleaseRecordV1 {
+            version: PRESTAGE_RESERVATION_ABORT_RELEASE_VERSION,
+            resolution_record_digest: durable_record.resolution_record_digest.clone(),
+            fence_record_digest: durable_record.fence_record_digest.clone(),
+            abort_release_authority_digest: abort_release_authority_digest.to_string(),
+            owner_store_incarnation_digest: durable_record.owner_store_incarnation_digest.clone(),
+            owner_store_binding_digest: durable_record.owner_store_binding_digest.clone(),
+            release_marker_digest: String::new(),
+        };
+        release.release_marker_digest =
+            private_oram_owner_reservation_abort_release_digest_v1(&release)?;
+        let existing_release = self.load_reservation_abort_release_locked(&root, &fence_dir)?;
+        if fence.is_none() && existing_release.is_none() {
+            return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+        }
+        if existing_release
+            .as_ref()
+            .is_some_and(|existing| existing != &release)
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        if existing_release.is_none() {
+            let bytes = encode_private_oram_owner_reservation_abort_release_v1(&release)?;
+            self.publish_immutable_file_locked(
+                &root,
+                &fence_dir,
+                &fence_path,
+                PRESTAGE_RESERVATION_ABORT_RELEASE_FILE,
+                &bytes,
+                PRESTAGE_MAX_RESERVATION_ABORT_RELEASE_BYTES,
+            )?;
+            sync_open_directory(&fence_dir)
+                .and_then(|()| sync_open_directory(&root))
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        }
+        if fence.is_some() && consume_finalized_reservation_handoff {
+            self.remove_reservation_fence_keep_resolution_locked(
+                &root,
+                &fence_dir,
+                &durable_record,
+            )?;
+        }
+        let retained_fence = self.load_reservation_fence_locked(&root, &fence_dir)?;
+        if retained_fence.is_some() == consume_finalized_reservation_handoff
+            || self
+                .load_reservation_resolution_locked(&root, &fence_dir)?
+                .as_ref()
+                != Some(&durable_record)
+            || self
+                .load_reservation_abort_release_locked(&root, &fence_dir)?
+                .as_ref()
+                != Some(&release)
+        {
+            return Err(PrivateOramOwnerJournalError::Indeterminate);
+        }
+        Ok(PrivateOramOwnerAbortReleasedReservationResolutionV1 {
+            durable_resolution: PrivateOramOwnerDurableReservationResolutionV1 {
+                owner_store_incarnation_digest: durable_record
+                    .owner_store_incarnation_digest
+                    .clone(),
+                owner_store_binding_digest: durable_record.owner_store_binding_digest.clone(),
+                record: durable_record,
+            },
+            abort_release_authority_digest: release.abort_release_authority_digest,
+            abort_release_marker_digest: release.release_marker_digest,
+        })
+    }
+
+    /// Applies one consensus-authorized negative admission cleanup. The owner signature callback
+    /// runs outside filesystem locks; its result is revalidated against a freshly classified
+    /// local state before any terminal marker is published.
+    pub fn cleanup_with_authorization_v2<F>(
+        &self,
+        authorization: &VerifiedPrivateOramOwnerCleanupAuthorizationV1,
+        sign_receipt: F,
+    ) -> Result<CommittedPrivateOramOwnerCleanupReceiptV2, PrivateOramOwnerJournalError>
+    where
+        F: FnOnce(
+            &PrivateOramOwnerCleanupReceiptV1,
+        )
+            -> Result<SignedPrivateOramOwnerCleanupReceiptV1, PrivateOramOwnerJournalError>,
+    {
+        let unsigned = match self.plan_cleanup_v2(authorization)? {
+            PlannedPrivateOramOwnerCleanupV2::Existing(committed) => return Ok(committed),
+            PlannedPrivateOramOwnerCleanupV2::Unsigned(unsigned) => unsigned,
+        };
+        let signed = sign_receipt(&unsigned)?;
+        validate_signed_private_oram_owner_cleanup_receipt_v1(&signed, authorization)
+            .map_err(|_| PrivateOramOwnerJournalError::InvalidInput("cleanup_receipt"))?;
+        self.apply_signed_cleanup_v2(authorization, &signed)
+    }
+
+    fn plan_cleanup_v2(
+        &self,
+        authorization: &VerifiedPrivateOramOwnerCleanupAuthorizationV1,
+    ) -> Result<PlannedPrivateOramOwnerCleanupV2, PrivateOramOwnerJournalError> {
+        self.ensure_layout_for_authenticated_cleanup_v2()?;
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let lifecycle_lock = lock_private_oram_owner_lifecycle_root(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        self.require_no_active_reservation_fence_locked(&root)?;
+        let superblock = self.load_superblock_locked(&root)?;
+        let owner_journal = PrivateOramOwnerJournal::new(&self.primary_hnsw_store_root);
+        let canonical_root = owner_journal.ensure_root()?;
+        let _canonical_lock = lock_private_journal_root(&canonical_root)?;
+        if let Some(terminal) = self.load_terminal_marker_locked(
+            &root,
+            authorization.authorization().target.intent_key.as_str(),
+        )? {
+            let committed = self.replay_cleanup_terminal_locked(
+                lifecycle_lock.root_lock(),
+                authorization,
+                &terminal,
+                &superblock,
+                &owner_journal,
+                &canonical_root,
+            )?;
+            return Ok(PlannedPrivateOramOwnerCleanupV2::Existing(committed));
+        }
+        self.require_terminal_capacity_locked(
+            &root,
+            authorization.authorization().target.intent_key.as_str(),
+        )?;
+        let observed = self.validate_cleanup_prestate_locked(
+            &root,
+            &superblock,
+            authorization,
+            &owner_journal,
+            &canonical_root,
+        )?;
+        let receipt = private_oram_owner_cleanup_receipt_v1(authorization, observed)
+            .map_err(|_| PrivateOramOwnerJournalError::InvalidTransition)?;
+        Ok(PlannedPrivateOramOwnerCleanupV2::Unsigned(receipt))
+    }
+
+    fn apply_signed_cleanup_v2(
+        &self,
+        authorization: &VerifiedPrivateOramOwnerCleanupAuthorizationV1,
+        signed: &SignedPrivateOramOwnerCleanupReceiptV1,
+    ) -> Result<CommittedPrivateOramOwnerCleanupReceiptV2, PrivateOramOwnerJournalError> {
+        self.apply_signed_cleanup_inner_v2(authorization, signed, false)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn leave_cleanup_after_terminal_for_test_v2<F>(
+        &self,
+        authorization: &VerifiedPrivateOramOwnerCleanupAuthorizationV1,
+        sign_receipt: F,
+    ) -> Result<SignedPrivateOramOwnerCleanupReceiptV1, PrivateOramOwnerJournalError>
+    where
+        F: FnOnce(
+            &PrivateOramOwnerCleanupReceiptV1,
+        )
+            -> Result<SignedPrivateOramOwnerCleanupReceiptV1, PrivateOramOwnerJournalError>,
+    {
+        let unsigned = match self.plan_cleanup_v2(authorization)? {
+            PlannedPrivateOramOwnerCleanupV2::Existing(_) => {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            PlannedPrivateOramOwnerCleanupV2::Unsigned(unsigned) => unsigned,
+        };
+        let signed = sign_receipt(&unsigned)?;
+        self.apply_signed_cleanup_inner_v2(authorization, &signed, true)
+            .map(|committed| committed.signed_receipt)
+    }
+
+    fn apply_signed_cleanup_inner_v2(
+        &self,
+        authorization: &VerifiedPrivateOramOwnerCleanupAuthorizationV1,
+        signed: &SignedPrivateOramOwnerCleanupReceiptV1,
+        stop_after_terminal: bool,
+    ) -> Result<CommittedPrivateOramOwnerCleanupReceiptV2, PrivateOramOwnerJournalError> {
+        validate_signed_private_oram_owner_cleanup_receipt_v1(signed, authorization)
+            .map_err(|_| PrivateOramOwnerJournalError::InvalidInput("cleanup_receipt"))?;
+        self.ensure_layout_for_authenticated_cleanup_v2()?;
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let lifecycle_lock = lock_private_oram_owner_lifecycle_root(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        self.require_no_active_reservation_fence_locked(&root)?;
+        let superblock = self.load_superblock_locked(&root)?;
+        let intent_key = authorization.authorization().target.intent_key.as_str();
+        let owner_journal = PrivateOramOwnerJournal::new(&self.primary_hnsw_store_root);
+        let canonical_root = owner_journal.ensure_root()?;
+        let _canonical_lock = lock_private_journal_root(&canonical_root)?;
+        if let Some(terminal) = self.load_terminal_marker_locked(&root, intent_key)? {
+            return self.replay_cleanup_terminal_locked(
+                lifecycle_lock.root_lock(),
+                authorization,
+                &terminal,
+                &superblock,
+                &owner_journal,
+                &canonical_root,
+            );
+        }
+        self.require_terminal_capacity_locked(&root, intent_key)?;
+        let observed = self.validate_cleanup_prestate_locked(
+            &root,
+            &superblock,
+            authorization,
+            &owner_journal,
+            &canonical_root,
+        )?;
+        let expected = private_oram_owner_cleanup_receipt_v1(authorization, observed)
+            .map_err(|_| PrivateOramOwnerJournalError::InvalidTransition)?;
+        if signed.receipt != expected {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let terminal = private_oram_owner_cleanup_lifecycle_marker_v2(authorization, signed)?;
+        encode_private_oram_owner_lifecycle_marker_v2(&terminal)?;
+        let (_, intents) = self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+        let destination = match terminal.kind {
+            PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent => PRESTAGE_RETIRED_DIR,
+            PrivateOramOwnerLifecycleMarkerKindV2::Quarantined => PRESTAGE_QUARANTINE_DIR,
+            _ => return Err(PrivateOramOwnerJournalError::Corrupt),
+        };
+        if let Err(error) = self.publish_terminal_then_move_intent_locked(
+            &root,
+            &intents,
+            intent_key,
+            &terminal,
+            destination,
+            false,
+        ) {
+            return Err(match error {
+                PrivateOramOwnerJournalError::Indeterminate => {
+                    PrivateOramOwnerJournalError::IndeterminateTerminalCommit
+                }
+                error => error,
+            });
+        }
+        if stop_after_terminal {
+            return Ok(committed_private_oram_owner_cleanup_receipt_v2(
+                signed,
+                &terminal,
+                PrivateOramOwnerCleanupRepairStateV2::NeedsSuperblockReconciliation,
+            ));
+        }
+        if self
+            .replace_superblock_locked(
+                lifecycle_lock.root_lock(),
+                &superblock,
+                &signed.receipt.new_lifecycle_state,
+            )
+            .is_err()
+        {
+            return Ok(committed_private_oram_owner_cleanup_receipt_v2(
+                signed,
+                &terminal,
+                PrivateOramOwnerCleanupRepairStateV2::NeedsSuperblockReconciliation,
+            ));
+        }
+        if self
+            .finish_terminal_payload_move_locked(
+                &root,
+                &intents,
+                intent_key,
+                &terminal,
+                destination,
+            )
+            .is_err()
+        {
+            return Ok(committed_private_oram_owner_cleanup_receipt_v2(
+                signed,
+                &terminal,
+                PrivateOramOwnerCleanupRepairStateV2::NeedsPayloadRelocation,
+            ));
+        }
+        Ok(committed_private_oram_owner_cleanup_receipt_v2(
+            signed,
+            &terminal,
+            PrivateOramOwnerCleanupRepairStateV2::Complete,
+        ))
+    }
+
+    fn replay_cleanup_terminal_locked(
+        &self,
+        root_lock: &PrivateJournalRootLock<'_>,
+        authorization: &VerifiedPrivateOramOwnerCleanupAuthorizationV1,
+        terminal: &PrivateOramOwnerLifecycleMarkerV2,
+        superblock: &PrivateOramOwnerPrestageSuperblockV2,
+        owner_journal: &PrivateOramOwnerJournal,
+        canonical_root: &File,
+    ) -> Result<CommittedPrivateOramOwnerCleanupReceiptV2, PrivateOramOwnerJournalError> {
+        root_lock.require_exclusive()?;
+        let root = root_lock.root;
+        let signed = terminal
+            .signed_cleanup_receipt
+            .as_ref()
+            .ok_or(PrivateOramOwnerJournalError::InvalidTransition)?;
+        validate_signed_private_oram_owner_cleanup_receipt_v1(signed, authorization)
+            .map_err(|_| PrivateOramOwnerJournalError::InvalidTransition)?;
+        if *terminal != private_oram_owner_cleanup_lifecycle_marker_v2(authorization, signed)? {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        self.validate_cleanup_canonical_absence_locked(
+            authorization,
+            owner_journal,
+            canonical_root,
+        )?;
+        self.validate_terminal_payload_state_locked(root, terminal)?;
+        let installed_state = superblock.lifecycle_state()?;
+        if installed_state == signed.receipt.previous_lifecycle_state {
+            if self
+                .replace_superblock_locked(
+                    root_lock,
+                    superblock,
+                    &signed.receipt.new_lifecycle_state,
+                )
+                .is_err()
+            {
+                return Ok(committed_private_oram_owner_cleanup_receipt_v2(
+                    signed,
+                    terminal,
+                    PrivateOramOwnerCleanupRepairStateV2::NeedsSuperblockReconciliation,
+                ));
+            }
+        } else if installed_state != signed.receipt.new_lifecycle_state {
+            return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+        }
+        let (_, intents) = self.open_prestage_child_locked(root, PRESTAGE_INTENTS_DIR)?;
+        let destination = match terminal.kind {
+            PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent => PRESTAGE_RETIRED_DIR,
+            PrivateOramOwnerLifecycleMarkerKindV2::Quarantined => PRESTAGE_QUARANTINE_DIR,
+            _ => return Err(PrivateOramOwnerJournalError::Corrupt),
+        };
+        if self
+            .finish_terminal_payload_move_locked(
+                root,
+                &intents,
+                &terminal.intent_key,
+                terminal,
+                destination,
+            )
+            .is_err()
+        {
+            return Ok(committed_private_oram_owner_cleanup_receipt_v2(
+                signed,
+                terminal,
+                PrivateOramOwnerCleanupRepairStateV2::NeedsPayloadRelocation,
+            ));
+        }
+        Ok(committed_private_oram_owner_cleanup_receipt_v2(
+            signed,
+            terminal,
+            PrivateOramOwnerCleanupRepairStateV2::Complete,
+        ))
+    }
+
+    fn validate_cleanup_prestate_locked(
+        &self,
+        root: &File,
+        superblock: &PrivateOramOwnerPrestageSuperblockV2,
+        authorization: &VerifiedPrivateOramOwnerCleanupAuthorizationV1,
+        owner_journal: &PrivateOramOwnerJournal,
+        canonical_root: &File,
+    ) -> Result<PrivateOramOwnerCleanupObservedPrestateV1, PrivateOramOwnerJournalError> {
+        if authorization
+            .authorization()
+            .target
+            .expected_lifecycle_state
+            != superblock.lifecycle_state()?
+            || authorization.authorization().target.owner_peer_id == 0
+            || authorization.authorization().target.intent_key.is_empty()
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        self.validate_cleanup_canonical_absence_locked(
+            authorization,
+            owner_journal,
+            canonical_root,
+        )?;
+        let authorization = authorization.authorization();
+
+        let (intents_path, intents) =
+            self.open_prestage_child_locked(root, PRESTAGE_INTENTS_DIR)?;
+        let (retired_path, _) = self.open_prestage_child_locked(root, PRESTAGE_RETIRED_DIR)?;
+        let (quarantine_path, _) =
+            self.open_prestage_child_locked(root, PRESTAGE_QUARANTINE_DIR)?;
+        let intent_key = authorization.target.intent_key.as_str();
+        let in_intents = path_entry_exists(&intents_path.join(intent_key))?;
+        let in_retired = path_entry_exists(&retired_path.join(intent_key))?;
+        let in_quarantine = path_entry_exists(&quarantine_path.join(intent_key))?;
+        if in_retired || in_quarantine {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        if !in_intents {
+            if authorization.target.prestage_receipt_digest.is_some()
+                || authorization.target.intent_marker_digest.is_some()
+                || authorization
+                    .target
+                    .owner_journal_descriptor_digest
+                    .is_some()
+            {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            return Ok(PrivateOramOwnerCleanupObservedPrestateV1::Absent);
+        }
+        let loaded = self.load_intent_locked(root, &intents, PRESTAGE_INTENTS_DIR, intent_key)?;
+        if loaded.state() != PrivateOramOwnerLocalIntentStateV2::Intent
+            || loaded.receipt.collection_id != authorization.authority.collection_id
+            || loaded.receipt.mutation_id != authorization.attempt.mutation_id
+            || loaded.receipt.mutation_digest != authorization.attempt.mutation_digest
+            || loaded.receipt.expected_aggregate_digest
+                != authorization.attempt.expected_aggregate_digest
+            || loaded.receipt.lease_generation != authorization.attempt.lease_generation
+            || loaded.receipt.writer_fence != authorization.attempt.writer_fence
+            || loaded.receipt.owner_peer_id != authorization.target.owner_peer_id
+            || loaded.receipt.parent_descriptor_digest
+                != authorization.target.parent_descriptor_digest
+            || loaded.receipt.parent_lease_acquired_record_digest
+                != authorization.target.parent_lease_acquired_record_digest
+            || loaded.receipt.owner_roster_digest != authorization.authority.owner_roster_digest
+            || loaded.receipt.activation_registry_generation
+                != authorization.authority.activation_registry_generation
+            || loaded.receipt.activation_manifest_digest
+                != authorization.authority.activation_manifest_digest
+            || loaded.receipt.package_sha256 != authorization.target.package_sha256
+            || loaded.receipt.package_len != authorization.target.package_len
+            || loaded.package_bytes.len() as u64 != authorization.target.package_len
+            || loaded.receipt.owner_request_digest != authorization.target.owner_request_digest
+            || authorization.target.prestage_receipt_digest.as_deref()
+                != Some(loaded.receipt.receipt_digest.as_str())
+            || authorization.target.intent_marker_digest.as_deref()
+                != Some(loaded.intent_marker.marker_digest.as_str())
+            || authorization
+                .target
+                .owner_journal_descriptor_digest
+                .as_deref()
+                != Some(loaded.receipt.owner_journal_descriptor_digest.as_str())
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        Ok(PrivateOramOwnerCleanupObservedPrestateV1::Intent)
+    }
+
+    fn validate_cleanup_canonical_absence_locked(
+        &self,
+        authorization: &VerifiedPrivateOramOwnerCleanupAuthorizationV1,
+        owner_journal: &PrivateOramOwnerJournal,
+        canonical_root: &File,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        let authorization = authorization.authorization();
+        if PrivateOramOwnerJournal::stable_root_entry_from(canonical_root)?
+            == StableRootEntry::Active
+        {
+            let canonical = owner_journal
+                .load_active_structural_from(canonical_root, false, None)?
+                .snapshot;
+            let descriptor = &canonical.descriptor;
+            let exact_descriptor = authorization
+                .target
+                .owner_journal_descriptor_digest
+                .as_deref()
+                == Some(descriptor.descriptor_digest.as_str());
+            let same_attempt = descriptor.collection_id == authorization.authority.collection_id
+                && descriptor.mutation_id == authorization.attempt.mutation_id
+                && descriptor.signed_mutation_digest == authorization.attempt.mutation_digest
+                && descriptor.parent_descriptor_digest
+                    == authorization.target.parent_descriptor_digest
+                && descriptor.parent_lease_acquired_record_digest
+                    == authorization.target.parent_lease_acquired_record_digest
+                && descriptor.owner_peer_id == authorization.target.owner_peer_id
+                && descriptor.writer_fence == authorization.attempt.writer_fence;
+            if exact_descriptor || same_attempt {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn quarantine_intent_for_test_v2(
+        &self,
+        intent_key: &str,
+        expected_package_sha256: &str,
+        terminal_authority_digest: &str,
+    ) -> Result<PrivateOramOwnerLocalIntentStatusV2, PrivateOramOwnerJournalError> {
+        self.quarantine_intent_inner_for_test_v2(
+            intent_key,
+            expected_package_sha256,
+            terminal_authority_digest,
+            true,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn leave_quarantine_before_payload_move_for_test_v2(
+        &self,
+        intent_key: &str,
+        expected_package_sha256: &str,
+        terminal_authority_digest: &str,
+    ) -> Result<PrivateOramOwnerLocalIntentStatusV2, PrivateOramOwnerJournalError> {
+        self.quarantine_intent_inner_for_test_v2(
+            intent_key,
+            expected_package_sha256,
+            terminal_authority_digest,
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    fn quarantine_intent_inner_for_test_v2(
+        &self,
+        intent_key: &str,
+        expected_package_sha256: &str,
+        terminal_authority_digest: &str,
+        move_payload: bool,
+    ) -> Result<PrivateOramOwnerLocalIntentStatusV2, PrivateOramOwnerJournalError> {
+        validate_digest(expected_package_sha256, "package_sha256")?;
+        validate_digest(terminal_authority_digest, "terminal_authority_digest")?;
+        self.ensure_layout()?;
+        let (owner_temp, root) = self.open_lifecycle_root_namespaces()?;
+        let _lock = lock_private_oram_owner_lifecycle_root(
+            &owner_temp,
+            self.owner_temp_path()?,
+            &root,
+            &self.root,
+        )?;
+        let superblock = self.load_superblock_locked(&root)?;
+        if let Some(existing) = self.load_terminal_marker_locked(&root, intent_key)? {
+            if existing.kind != PrivateOramOwnerLifecycleMarkerKindV2::Quarantined
+                || existing.terminal_authority_digest.as_deref() != Some(terminal_authority_digest)
+                || existing.package_sha256 != expected_package_sha256
+            {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            self.validate_terminal_payload_state_locked(&root, &existing)?;
+            let (_, intents) = self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+            if move_payload {
+                self.finish_terminal_payload_move_locked(
+                    &root,
+                    &intents,
+                    intent_key,
+                    &existing,
+                    PRESTAGE_QUARANTINE_DIR,
+                )?;
+            }
+            return Ok(PrivateOramOwnerLocalIntentStatusV2 {
+                state: PrivateOramOwnerLocalIntentStateV2::Quarantined,
+                lifecycle_state: superblock.lifecycle_state()?,
+                marker_digest: Some(existing.marker_digest),
+            });
+        }
+        let (_, intents) = self.open_prestage_child_locked(&root, PRESTAGE_INTENTS_DIR)?;
+        let loaded = self.load_intent_locked(&root, &intents, PRESTAGE_INTENTS_DIR, intent_key)?;
+        if loaded.state() != PrivateOramOwnerLocalIntentStateV2::Intent
+            || loaded.receipt.package_sha256 != expected_package_sha256
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let terminal = private_oram_owner_lifecycle_marker_v2(
+            PrivateOramOwnerLifecycleMarkerKindV2::Quarantined,
+            &superblock.owner_store_incarnation_digest,
+            &loaded.receipt,
+            Some(terminal_authority_digest),
+        )?;
+        self.publish_terminal_then_move_intent_locked(
+            &root,
+            &intents,
+            intent_key,
+            &terminal,
+            PRESTAGE_QUARANTINE_DIR,
+            move_payload,
+        )?;
+        Ok(PrivateOramOwnerLocalIntentStatusV2 {
+            state: PrivateOramOwnerLocalIntentStateV2::Quarantined,
+            lifecycle_state: superblock.lifecycle_state()?,
+            marker_digest: Some(terminal.marker_digest),
+        })
+    }
+
+    fn ensure_superblock_locked(
+        &self,
+        root_lock: &PrivateJournalRootLock<'_>,
+    ) -> Result<PrivateOramOwnerPrestageSuperblockV2, PrivateOramOwnerJournalError> {
+        root_lock.require_exclusive()?;
+        let root = root_lock.root;
+        let superblock_path =
+            open_directory_entry_path(root, OsStr::new(PRESTAGE_SUPERBLOCK_FILE))?;
+        if path_entry_exists(&superblock_path)? {
+            return self.load_superblock_locked(root);
+        }
+        let mut incarnation_hasher = Sha256::new();
+        incarnation_hasher.update(PRESTAGE_OWNER_STORE_INCARNATION_DOMAIN);
+        incarnation_hasher.update(uuid::Uuid::new_v4().as_bytes());
+        let owner_store_incarnation_digest = BASE64URL_NOPAD.encode(&incarnation_hasher.finalize());
+        let lifecycle =
+            private_oram_owner_lifecycle_genesis_state_v1(owner_store_incarnation_digest.clone())
+                .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+        let mut superblock = PrivateOramOwnerPrestageSuperblockV2 {
+            version: PRESTAGE_SUPERBLOCK_VERSION,
+            owner_store_incarnation_digest,
+            lifecycle_generation: lifecycle.generation,
+            lifecycle_state_root: lifecycle.state_root,
+            minimum_lifecycle_reader_version: lifecycle.minimum_reader_version,
+            lifecycle_capability: lifecycle.capability,
+            superblock_digest: String::new(),
+        };
+        superblock.superblock_digest =
+            private_oram_owner_prestage_superblock_digest_v2(&superblock)?;
+        let bytes = encode_private_oram_owner_prestage_superblock_v2(&superblock)?;
+        self.publish_immutable_file_locked(
+            root,
+            root,
+            &self.root,
+            PRESTAGE_SUPERBLOCK_FILE,
+            &bytes,
+            PRESTAGE_MAX_SUPERBLOCK_BYTES,
+        )?;
+        let installed = self.load_superblock_locked(root)?;
+        if installed != superblock {
+            return Err(PrivateOramOwnerJournalError::Indeterminate);
+        }
+        Ok(installed)
+    }
+
+    fn load_superblock_locked(
+        &self,
+        root: &File,
+    ) -> Result<PrivateOramOwnerPrestageSuperblockV2, PrivateOramOwnerJournalError> {
+        validate_open_directory_at_path(root, &self.root)?;
+        let superblock_path =
+            open_directory_entry_path(root, OsStr::new(PRESTAGE_SUPERBLOCK_FILE))?;
+        let (mut pinned, bytes) =
+            read_private_file_pinned(&superblock_path, PRESTAGE_MAX_SUPERBLOCK_BYTES)?;
+        let superblock = decode_private_oram_owner_prestage_superblock_v2(&bytes)?;
+        pinned.validate_exact_contents(&bytes)?;
+        Ok(superblock)
+    }
+
+    fn require_no_unreconciled_signed_cleanup_locked(
+        &self,
+        root: &File,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        let installed = self.load_superblock_locked(root)?.lifecycle_state()?;
+        let mut transitions = BTreeMap::new();
+        let (terminals_path, terminals) =
+            self.open_prestage_child_locked(root, PRESTAGE_TERMINALS_DIR)?;
+        let terminal_names = directory_entry_names_open_bounded(
+            &terminals,
+            PRESTAGE_MAX_TERMINAL_RECORDS,
+            PrivateOramOwnerJournalError::Corrupt,
+        )?;
+        for terminal_name in terminal_names {
+            let intent_key = terminal_name
+                .to_str()
+                .ok_or(PrivateOramOwnerJournalError::Corrupt)?;
+            validate_digest(intent_key, "intent_key")?;
+            let terminal = self
+                .load_terminal_marker_locked(root, intent_key)?
+                .ok_or(PrivateOramOwnerJournalError::Corrupt)?;
+            let Some(signed) = terminal.signed_cleanup_receipt else {
+                continue;
+            };
+            let previous = signed.receipt.previous_lifecycle_state;
+            let next = &signed.receipt.new_lifecycle_state;
+            if next.generation > installed.generation
+                || (next.generation == installed.generation && next != &installed)
+            {
+                return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+            }
+            if transitions
+                .insert(next.generation, (previous, next.clone()))
+                .is_some()
+            {
+                return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+            }
+        }
+
+        let mut reconstructed = private_oram_owner_lifecycle_genesis_state_v1(
+            installed.owner_store_incarnation_digest.clone(),
+        )
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+        for generation in 1..=installed.generation {
+            let (previous, next) = transitions
+                .get(&generation)
+                .ok_or(PrivateOramOwnerJournalError::ExternalRecoveryRequired)?;
+            if previous != &reconstructed || next.generation != generation {
+                return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+            }
+            reconstructed = next.clone();
+        }
+        if reconstructed != installed {
+            return Err(PrivateOramOwnerJournalError::ExternalRecoveryRequired);
+        }
+        validate_open_directory_at_path(&terminals, &terminals_path)?;
+        Ok(())
+    }
+
+    fn require_terminal_capacity_locked(
+        &self,
+        root: &File,
+        intent_key: &str,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        validate_digest(intent_key, "intent_key")?;
+        let (terminals_path, terminals) =
+            self.open_prestage_child_locked(root, PRESTAGE_TERMINALS_DIR)?;
+        let terminal_names = directory_entry_names_open_bounded(
+            &terminals,
+            PRESTAGE_MAX_TERMINAL_RECORDS,
+            PrivateOramOwnerJournalError::Corrupt,
+        )?;
+        if terminal_names.len() == PRESTAGE_MAX_TERMINAL_RECORDS
+            && !terminal_names.contains(OsStr::new(intent_key))
+        {
+            return Err(PrivateOramOwnerJournalError::TerminalCapacityExceeded);
+        }
+        validate_open_directory_at_path(&terminals, &terminals_path)?;
+        Ok(())
+    }
+
+    fn replace_superblock_locked(
+        &self,
+        root_lock: &PrivateJournalRootLock<'_>,
+        expected: &PrivateOramOwnerPrestageSuperblockV2,
+        lifecycle: &PrivateOramOwnerLifecycleStateV1,
+    ) -> Result<PrivateOramOwnerPrestageSuperblockV2, PrivateOramOwnerJournalError> {
+        root_lock.require_exclusive()?;
+        let root = root_lock.root;
+        if self.load_superblock_locked(root)? != *expected
+            || lifecycle.owner_store_incarnation_digest != expected.owner_store_incarnation_digest
+            || lifecycle.generation <= expected.lifecycle_generation
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let mut replacement = PrivateOramOwnerPrestageSuperblockV2 {
+            version: PRESTAGE_SUPERBLOCK_VERSION,
+            owner_store_incarnation_digest: lifecycle.owner_store_incarnation_digest.clone(),
+            lifecycle_generation: lifecycle.generation,
+            lifecycle_state_root: lifecycle.state_root.clone(),
+            minimum_lifecycle_reader_version: lifecycle.minimum_reader_version,
+            lifecycle_capability: lifecycle.capability.clone(),
+            superblock_digest: String::new(),
+        };
+        replacement.superblock_digest =
+            private_oram_owner_prestage_superblock_digest_v2(&replacement)?;
+        let bytes = encode_private_oram_owner_prestage_superblock_v2(&replacement)?;
+        let (temp_path, temp) = self.open_prestage_child_locked(root, PRESTAGE_TEMP_DIR)?;
+        let candidate_name = format!(".superblock-v2-{}", uuid::Uuid::new_v4().simple());
+        let candidate_name = OsStr::new(&candidate_name);
+        let candidate_path = open_directory_entry_path(&temp, candidate_name)?;
+        write_new_private_file(&candidate_path, &bytes, PRESTAGE_MAX_SUPERBLOCK_BYTES)?;
+        sync_open_directory(&temp)?;
+        validate_open_directory_at_path(root, &self.root)?;
+        validate_open_directory_at_path(&temp, &temp_path)?;
+        rename_entry_replace(
+            &temp,
+            candidate_name,
+            root,
+            OsStr::new(PRESTAGE_SUPERBLOCK_FILE),
+        )?;
+        sync_open_directory(root)
+            .and_then(|()| sync_open_directory(&temp))
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        let installed = self
+            .load_superblock_locked(root)
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        if installed != replacement {
+            return Err(PrivateOramOwnerJournalError::Indeterminate);
+        }
+        validate_open_directory_at_path(root, &self.root)
+            .and_then(|()| validate_open_directory_at_path(&temp, &temp_path))
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        Ok(installed)
+    }
+
+    fn publish_intent_marker_locked(
+        &self,
+        root: &File,
+        intents: &File,
+        intent_key: &str,
+        marker_file: &str,
+        marker: &PrivateOramOwnerLifecycleMarkerV2,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        validate_open_directory_at_path(root, &self.root)?;
+        validate_open_directory_at_path(intents, &self.root.join(PRESTAGE_INTENTS_DIR))?;
+        if marker.intent_key != intent_key
+            || !matches!(
+                (marker_file, marker.kind),
+                (
+                    PRESTAGE_ADOPTION_PENDING_MARKER_FILE,
+                    PrivateOramOwnerLifecycleMarkerKindV2::AdoptionPending
+                ) | (
+                    PRESTAGE_ADOPTED_MARKER_FILE,
+                    PrivateOramOwnerLifecycleMarkerKindV2::Adopted
+                )
+            )
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidInput(
+                "lifecycle_marker",
+            ));
+        }
+        let intent_path = open_directory_entry_path(intents, OsStr::new(intent_key))?;
+        let intent = open_private_directory(&intent_path)?;
+        let bytes = encode_private_oram_owner_lifecycle_marker_v2(marker)?;
+        self.publish_immutable_file_locked(
+            root,
+            &intent,
+            &intent_path,
+            marker_file,
+            &bytes,
+            PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES,
+        )?;
+        sync_open_directory(intents)
+            .and_then(|()| sync_open_directory(root))
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        Ok(())
+    }
+
+    fn publish_immutable_file_locked(
+        &self,
+        root: &File,
+        destination: &File,
+        destination_path: &Path,
+        file_name: &str,
+        bytes: &[u8],
+        max_bytes: u64,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        validate_open_directory_at_path(root, &self.root)?;
+        validate_open_directory_at_path(destination, destination_path)?;
+        let final_path = open_directory_entry_path(destination, OsStr::new(file_name))?;
+        if path_entry_exists(&final_path)? {
+            let (mut existing, existing_bytes) = read_private_file_pinned(&final_path, max_bytes)?;
+            if existing_bytes != bytes {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            existing.validate_exact_contents(bytes)?;
+            sync_open_directory(destination)
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+            return Ok(());
+        }
+        let (temp_path, temp) = self.open_prestage_child_locked(root, PRESTAGE_TEMP_DIR)?;
+        let candidate = tempfile::Builder::new()
+            .prefix("lifecycle-file-v2-")
+            .tempdir_in(&temp_path)
+            .map_err(|_| PrivateOramOwnerJournalError::Io)?;
+        set_private_directory_permissions(candidate.path())?;
+        write_new_private_file(&candidate.path().join(file_name), bytes, max_bytes)?;
+        sync_private_directory(candidate.path())?;
+        let candidate_directory = open_private_directory(candidate.path())?;
+        let installed_candidate = match rename_entry_noreplace(
+            &candidate_directory,
+            OsStr::new(file_name),
+            destination,
+            OsStr::new(file_name),
+        ) {
+            Ok(()) => true,
+            Err(PrivateOramOwnerJournalError::ConcurrentMutation) => false,
+            Err(error) => return Err(error),
+        };
+        if installed_candidate {
+            sync_open_directory(&candidate_directory)
+                .and_then(|()| sync_open_directory(destination))
+                .and_then(|()| sync_open_directory(&temp))
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        } else {
+            sync_open_directory(destination)
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        }
+        let (mut installed, installed_bytes) = read_private_file_pinned(&final_path, max_bytes)
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        if installed_bytes != bytes {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        installed
+            .validate_exact_contents(bytes)
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        Ok(())
+    }
+
+    fn load_terminal_marker_locked(
+        &self,
+        root: &File,
+        intent_key: &str,
+    ) -> Result<Option<PrivateOramOwnerLifecycleMarkerV2>, PrivateOramOwnerJournalError> {
+        validate_digest(intent_key, "intent_key")?;
+        validate_open_directory_at_path(root, &self.root)?;
+        let (terminals_path, terminals) =
+            self.open_prestage_child_locked(root, PRESTAGE_TERMINALS_DIR)?;
+        let terminal_path = terminals_path.join(intent_key);
+        if !path_entry_exists(&terminal_path)? {
+            return Ok(None);
+        }
+        let terminal = open_private_directory(&terminal_path)?;
+        let names = directory_entry_names_open(&terminal)?;
+        if names != BTreeSet::from([OsStr::new(PRESTAGE_TERMINAL_RECORD_FILE).to_owned()]) {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        let (mut pinned, bytes) = read_private_file_pinned(
+            &terminal_path.join(PRESTAGE_TERMINAL_RECORD_FILE),
+            PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES,
+        )?;
+        let marker = decode_private_oram_owner_lifecycle_marker_v2(&bytes)?;
+        let superblock = self.load_superblock_locked(root)?;
+        if marker.intent_key != intent_key
+            || marker.owner_store_incarnation_digest != superblock.owner_store_incarnation_digest
+            || !matches!(
+                marker.kind,
+                PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent
+                    | PrivateOramOwnerLifecycleMarkerKindV2::Quarantined
+            )
+        {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        pinned.validate_exact_contents(&bytes)?;
+        validate_open_directory_at_path(&terminal, &terminal_path)?;
+        validate_open_directory_at_path(&terminals, &terminals_path)?;
+        Ok(Some(marker))
+    }
+
+    fn load_reservation_fence_locked(
+        &self,
+        root: &File,
+        fence_dir: &File,
+    ) -> Result<Option<PrivateOramOwnerReservationFenceRecordV1>, PrivateOramOwnerJournalError>
+    {
+        validate_open_directory_at_path(root, &self.root)?;
+        let fence_path = self.root.join(PRESTAGE_RESERVATION_FENCE_DIR);
+        validate_open_directory_at_path(fence_dir, &fence_path)?;
+        validate_private_oram_owner_reservation_fence_entries(fence_dir)?;
+        let record_path =
+            open_directory_entry_path(fence_dir, OsStr::new(PRESTAGE_RESERVATION_FENCE_FILE))?;
+        if !path_entry_exists(&record_path)? {
+            return Ok(None);
+        }
+        let (mut pinned, bytes) =
+            read_private_file_pinned(&record_path, PRESTAGE_MAX_RESERVATION_FENCE_BYTES)?;
+        let record = decode_private_oram_owner_reservation_fence_v1(&bytes)?;
+        pinned.validate_exact_contents(&bytes)?;
+        Ok(Some(record))
+    }
+
+    fn load_reservation_resolution_locked(
+        &self,
+        root: &File,
+        fence_dir: &File,
+    ) -> Result<Option<PrivateOramOwnerReservationResolutionRecordV1>, PrivateOramOwnerJournalError>
+    {
+        validate_open_directory_at_path(root, &self.root)?;
+        let fence_path = self.root.join(PRESTAGE_RESERVATION_FENCE_DIR);
+        validate_open_directory_at_path(fence_dir, &fence_path)?;
+        validate_private_oram_owner_reservation_fence_entries(fence_dir)?;
+        let record_path =
+            open_directory_entry_path(fence_dir, OsStr::new(PRESTAGE_RESERVATION_RESOLUTION_FILE))?;
+        if !path_entry_exists(&record_path)? {
+            return Ok(None);
+        }
+        let (mut pinned, bytes) =
+            read_private_file_pinned(&record_path, PRESTAGE_MAX_RESERVATION_RESOLUTION_BYTES)?;
+        let record = decode_private_oram_owner_reservation_resolution_v1(&bytes)?;
+        pinned.validate_exact_contents(&bytes)?;
+        Ok(Some(record))
+    }
+
+    fn load_reservation_abort_release_locked(
+        &self,
+        root: &File,
+        fence_dir: &File,
+    ) -> Result<Option<PrivateOramOwnerReservationAbortReleaseRecordV1>, PrivateOramOwnerJournalError>
+    {
+        validate_open_directory_at_path(root, &self.root)?;
+        let fence_path = self.root.join(PRESTAGE_RESERVATION_FENCE_DIR);
+        validate_open_directory_at_path(fence_dir, &fence_path)?;
+        validate_private_oram_owner_reservation_fence_entries(fence_dir)?;
+        let record_path = open_directory_entry_path(
+            fence_dir,
+            OsStr::new(PRESTAGE_RESERVATION_ABORT_RELEASE_FILE),
+        )?;
+        if !path_entry_exists(&record_path)? {
+            return Ok(None);
+        }
+        let (mut pinned, bytes) =
+            read_private_file_pinned(&record_path, PRESTAGE_MAX_RESERVATION_ABORT_RELEASE_BYTES)?;
+        let record = decode_private_oram_owner_reservation_abort_release_v1(&bytes)?;
+        pinned.validate_exact_contents(&bytes)?;
+        Ok(Some(record))
+    }
+
+    fn require_install_authorized_by_reservation_fence_locked(
+        &self,
+        root: &File,
+        intent_key: &str,
+    ) -> Result<bool, PrivateOramOwnerJournalError> {
+        let (_, fence_dir) =
+            self.open_prestage_child_locked(root, PRESTAGE_RESERVATION_FENCE_DIR)?;
+        if self
+            .load_reservation_abort_release_locked(root, &fence_dir)?
+            .is_some()
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let Some(fence) = self.load_reservation_fence_locked(root, &fence_dir)? else {
+            if self
+                .load_reservation_resolution_locked(root, &fence_dir)?
+                .as_ref()
+                .is_some_and(|resolution| {
+                    resolution.kind == PrivateOramOwnerReservationResolutionKindV1::Cancelled
+                })
+            {
+                self.remove_reservation_resolution_residual_locked(root, &fence_dir)?;
+            }
+            return Ok(false);
+        };
+        let resolution = self
+            .load_reservation_resolution_locked(root, &fence_dir)?
+            .ok_or(PrivateOramOwnerJournalError::ConcurrentMutation)?;
+        if resolution.kind != PrivateOramOwnerReservationResolutionKindV1::Finalized
+            || resolution.fence_record_digest != fence.fence_record_digest
+            || resolution.reserved_terminal_intent_key != intent_key
+            || fence.challenge.reserved_terminal_intent_key != intent_key
+        {
+            return Err(PrivateOramOwnerJournalError::ConcurrentMutation);
+        }
+        Ok(true)
+    }
+
+    fn consume_finalized_reservation_fence_locked(
+        &self,
+        root: &File,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        let (_, fence_dir) =
+            self.open_prestage_child_locked(root, PRESTAGE_RESERVATION_FENCE_DIR)?;
+        let resolution = self
+            .load_reservation_resolution_locked(root, &fence_dir)?
+            .ok_or(PrivateOramOwnerJournalError::Indeterminate)?;
+        if resolution.kind != PrivateOramOwnerReservationResolutionKindV1::Finalized {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        self.remove_reservation_fence_keep_resolution_locked(root, &fence_dir, &resolution)
+    }
+
+    fn remove_reservation_fence_keep_resolution_locked(
+        &self,
+        root: &File,
+        fence_dir: &File,
+        resolution: &PrivateOramOwnerReservationResolutionRecordV1,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        let fence_path =
+            open_directory_entry_path(&fence_dir, OsStr::new(PRESTAGE_RESERVATION_FENCE_FILE))?;
+        fs::remove_file(&fence_path).map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        sync_open_directory(&fence_dir)
+            .and_then(|()| sync_open_directory(root))
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        if self
+            .load_reservation_fence_locked(root, &fence_dir)?
+            .is_some()
+            || self
+                .load_reservation_resolution_locked(root, &fence_dir)?
+                .as_ref()
+                != Some(resolution)
+        {
+            return Err(PrivateOramOwnerJournalError::Indeterminate);
+        }
+        Ok(())
+    }
+
+    fn remove_reservation_resolution_residual_locked(
+        &self,
+        root: &File,
+        fence_dir: &File,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        if self
+            .load_reservation_fence_locked(root, fence_dir)?
+            .is_some()
+        {
+            return Err(PrivateOramOwnerJournalError::ConcurrentMutation);
+        }
+        let release_path = open_directory_entry_path(
+            fence_dir,
+            OsStr::new(PRESTAGE_RESERVATION_ABORT_RELEASE_FILE),
+        )?;
+        if path_entry_exists(&release_path)? {
+            let _ = self
+                .load_reservation_abort_release_locked(root, fence_dir)?
+                .ok_or(PrivateOramOwnerJournalError::Corrupt)?;
+            fs::remove_file(&release_path)
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        }
+        let resolution_path =
+            open_directory_entry_path(fence_dir, OsStr::new(PRESTAGE_RESERVATION_RESOLUTION_FILE))?;
+        if path_entry_exists(&resolution_path)? {
+            let _ = self
+                .load_reservation_resolution_locked(root, fence_dir)?
+                .ok_or(PrivateOramOwnerJournalError::Corrupt)?;
+            fs::remove_file(&resolution_path)
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        }
+        sync_open_directory(fence_dir)
+            .and_then(|()| sync_open_directory(root))
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        Ok(())
+    }
+
+    fn require_no_active_reservation_fence_locked(
+        &self,
+        root: &File,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        let (_, fence_dir) =
+            self.open_prestage_child_locked(root, PRESTAGE_RESERVATION_FENCE_DIR)?;
+        if self
+            .load_reservation_fence_locked(root, &fence_dir)?
+            .is_some()
+        {
+            return Err(PrivateOramOwnerJournalError::ConcurrentMutation);
+        }
+        self.remove_reservation_resolution_residual_locked(root, &fence_dir)?;
+        Ok(())
+    }
+
+    fn validate_terminal_payload_state_locked(
+        &self,
+        root: &File,
+        terminal: &PrivateOramOwnerLifecycleMarkerV2,
+    ) -> Result<Option<LoadedPrivateOramOwnerPrestageIntentV2>, PrivateOramOwnerJournalError> {
+        validate_open_directory_at_path(root, &self.root)?;
+        let (intents_path, intents) =
+            self.open_prestage_child_locked(root, PRESTAGE_INTENTS_DIR)?;
+        let (retired_path, retired) =
+            self.open_prestage_child_locked(root, PRESTAGE_RETIRED_DIR)?;
+        let (quarantine_path, quarantine) =
+            self.open_prestage_child_locked(root, PRESTAGE_QUARANTINE_DIR)?;
+        let in_intents = path_entry_exists(&intents_path.join(&terminal.intent_key))?;
+        let in_retired = path_entry_exists(&retired_path.join(&terminal.intent_key))?;
+        let in_quarantine = path_entry_exists(&quarantine_path.join(&terminal.intent_key))?;
+        if terminal
+            .signed_cleanup_receipt
+            .as_ref()
+            .is_some_and(|signed| {
+                signed.receipt.terminal_state
+                    == PrivateOramOwnerCleanupTerminalStateV1::TombstonedAbsent
+            })
+        {
+            if in_intents || in_retired || in_quarantine {
+                return Err(PrivateOramOwnerJournalError::Corrupt);
+            }
+            validate_open_directory_at_path(&intents, &intents_path)?;
+            validate_open_directory_at_path(&retired, &retired_path)?;
+            validate_open_directory_at_path(&quarantine, &quarantine_path)?;
+            validate_open_directory_at_path(root, &self.root)?;
+            return Ok(None);
+        }
+        let (parent, parent_name) = match (terminal.kind, in_intents, in_retired, in_quarantine) {
+            (PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent, true, false, false) => {
+                (&intents, PRESTAGE_INTENTS_DIR)
+            }
+            (PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent, false, true, false) => {
+                (&retired, PRESTAGE_RETIRED_DIR)
+            }
+            (PrivateOramOwnerLifecycleMarkerKindV2::Quarantined, true, false, false) => {
+                (&intents, PRESTAGE_INTENTS_DIR)
+            }
+            (PrivateOramOwnerLifecycleMarkerKindV2::Quarantined, false, false, true) => {
+                (&quarantine, PRESTAGE_QUARANTINE_DIR)
+            }
+            _ => return Err(PrivateOramOwnerJournalError::Corrupt),
+        };
+        let loaded = self.load_intent_locked(root, parent, parent_name, &terminal.intent_key)?;
+        let payload_state_matches = loaded.state() == PrivateOramOwnerLocalIntentStateV2::Intent
+            || (terminal.kind == PrivateOramOwnerLifecycleMarkerKindV2::Quarantined
+                && terminal.signed_cleanup_receipt.is_none()
+                && loaded.state() == PrivateOramOwnerLocalIntentStateV2::AdoptionPending
+                && terminal.terminal_authority_digest.as_deref()
+                    == Some(loaded.current_marker().marker_digest.as_str()));
+        if !payload_state_matches
+            || !private_oram_owner_terminal_matches_receipt_v2(terminal, &loaded.receipt)?
+        {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        validate_open_directory_at_path(&intents, &intents_path)?;
+        validate_open_directory_at_path(&retired, &retired_path)?;
+        validate_open_directory_at_path(&quarantine, &quarantine_path)?;
+        validate_open_directory_at_path(root, &self.root)?;
+        Ok(Some(loaded))
+    }
+
+    fn publish_terminal_then_move_intent_locked(
+        &self,
+        root: &File,
+        intents: &File,
+        intent_key: &str,
+        terminal: &PrivateOramOwnerLifecycleMarkerV2,
+        destination_name: &str,
+        move_payload: bool,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        if terminal.intent_key != intent_key
+            || !matches!(
+                (terminal.kind, destination_name),
+                (
+                    PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent,
+                    PRESTAGE_RETIRED_DIR
+                ) | (
+                    PrivateOramOwnerLifecycleMarkerKindV2::Quarantined,
+                    PRESTAGE_QUARANTINE_DIR
+                )
+            )
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidInput("terminal"));
+        }
+        validate_open_directory_at_path(root, &self.root)?;
+        let (terminals_path, terminals) =
+            self.open_prestage_child_locked(root, PRESTAGE_TERMINALS_DIR)?;
+        let terminal_path = terminals_path.join(intent_key);
+        if let Some(existing) = self.load_terminal_marker_locked(root, intent_key)? {
+            if existing != *terminal {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            sync_open_directory(&terminals)
+                .and_then(|()| sync_open_directory(root))
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        } else {
+            self.require_terminal_capacity_locked(root, intent_key)?;
+            let (temp_path, temp) = self.open_prestage_child_locked(root, PRESTAGE_TEMP_DIR)?;
+            let candidate = tempfile::Builder::new()
+                .prefix("terminal-v2-")
+                .tempdir_in(&temp_path)
+                .map_err(|_| PrivateOramOwnerJournalError::Io)?;
+            set_private_directory_permissions(candidate.path())?;
+            let bytes = encode_private_oram_owner_lifecycle_marker_v2(terminal)?;
+            write_new_private_file(
+                &candidate.path().join(PRESTAGE_TERMINAL_RECORD_FILE),
+                &bytes,
+                PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES,
+            )?;
+            sync_private_directory(candidate.path())?;
+            let candidate_directory = open_private_directory(candidate.path())?;
+            let candidate_name = candidate
+                .path()
+                .file_name()
+                .ok_or(PrivateOramOwnerJournalError::Corrupt)?;
+            let installed_candidate = match rename_entry_noreplace(
+                &temp,
+                candidate_name,
+                &terminals,
+                OsStr::new(intent_key),
+            ) {
+                Ok(()) => true,
+                Err(PrivateOramOwnerJournalError::ConcurrentMutation) => false,
+                Err(error) => return Err(error),
+            };
+            sync_open_directory(&temp)
+                .and_then(|()| sync_open_directory(&terminals))
+                .and_then(|()| sync_open_directory(root))
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+            let installed = self
+                .load_terminal_marker_locked(root, intent_key)
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?
+                .ok_or(PrivateOramOwnerJournalError::Indeterminate)?;
+            if installed != *terminal {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            if installed_candidate {
+                let installed_directory = open_private_directory(&terminal_path)
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                ensure_same_open_inode(&candidate_directory, &installed_directory)
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+            }
+        }
+        if move_payload {
+            self.finish_terminal_payload_move_locked(
+                root,
+                intents,
+                intent_key,
+                terminal,
+                destination_name,
+            )?;
+        } else {
+            self.validate_terminal_payload_state_locked(root, terminal)?;
+        }
+        validate_open_directory_at_path(&terminals, &terminals_path)
+            .and_then(|()| validate_open_directory_at_path(root, &self.root))
+            .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+        let _ = terminal_path;
+        Ok(())
+    }
+
+    fn finish_terminal_payload_move_locked(
+        &self,
+        root: &File,
+        intents: &File,
+        intent_key: &str,
+        terminal: &PrivateOramOwnerLifecycleMarkerV2,
+        destination_name: &str,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        if terminal.intent_key != intent_key
+            || !matches!(
+                (terminal.kind, destination_name),
+                (
+                    PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent,
+                    PRESTAGE_RETIRED_DIR
+                ) | (
+                    PrivateOramOwnerLifecycleMarkerKindV2::Quarantined,
+                    PRESTAGE_QUARANTINE_DIR
+                )
+            )
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidInput("terminal"));
+        }
+        if terminal
+            .signed_cleanup_receipt
+            .as_ref()
+            .is_some_and(|signed| {
+                signed.receipt.terminal_state
+                    == PrivateOramOwnerCleanupTerminalStateV1::TombstonedAbsent
+            })
+        {
+            self.validate_terminal_payload_state_locked(root, terminal)?;
+            return Ok(());
+        }
+        self.validate_terminal_payload_state_locked(root, terminal)?;
+        let (destination_path, destination) =
+            self.open_prestage_child_locked(root, destination_name)?;
+        let source_path = open_directory_entry_path(intents, OsStr::new(intent_key))?;
+        let moved_path = destination_path.join(intent_key);
+        let source_exists = path_entry_exists(&source_path)?;
+        let moved_exists = path_entry_exists(&moved_path)?;
+        match (source_exists, moved_exists) {
+            (true, false) => {
+                rename_entry_noreplace(
+                    intents,
+                    OsStr::new(intent_key),
+                    &destination,
+                    OsStr::new(intent_key),
+                )?;
+                sync_open_directory(intents)
+                    .and_then(|()| sync_open_directory(&destination))
+                    .and_then(|()| sync_open_directory(root))
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+            }
+            (false, true) => {
+                sync_open_directory(intents)
+                    .and_then(|()| sync_open_directory(&destination))
+                    .and_then(|()| sync_open_directory(root))
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+            }
+            (true, true) | (false, false) => {
+                return Err(PrivateOramOwnerJournalError::Corrupt);
+            }
+        }
+        self.validate_terminal_payload_state_locked(root, terminal)?;
+        Ok(())
+    }
+
+    fn open_prestage_child_locked(
+        &self,
+        root: &File,
+        name: &str,
+    ) -> Result<(PathBuf, File), PrivateOramOwnerJournalError> {
+        if !matches!(
+            name,
+            PRESTAGE_INTENTS_DIR
+                | PRESTAGE_TEMP_DIR
+                | PRESTAGE_TERMINALS_DIR
+                | PRESTAGE_RETIRED_DIR
+                | PRESTAGE_QUARANTINE_DIR
+                | PRESTAGE_RESERVATION_FENCE_DIR
+        ) {
+            return Err(PrivateOramOwnerJournalError::InvalidInput("prestage_child"));
+        }
+        validate_open_directory_at_path(root, &self.root)?;
+        let anchored = open_directory_entry_path(root, OsStr::new(name))?;
+        let child = open_private_directory(&anchored)?;
+        validate_open_directory_at_path(&child, &self.root.join(name))?;
+        Ok((anchored, child))
+    }
+
+    fn owner_temp_path(&self) -> Result<&Path, PrivateOramOwnerJournalError> {
+        self.root
+            .parent()
+            .ok_or(PrivateOramOwnerJournalError::Corrupt)
+    }
+
+    fn open_lifecycle_root_namespaces(&self) -> Result<(File, File), PrivateOramOwnerJournalError> {
+        let owner_temp_path = self.owner_temp_path()?;
+        let owner_temp = open_private_directory(owner_temp_path)?;
+        let anchored_root = open_directory_entry_path(&owner_temp, OsStr::new(PRESTAGE_ROOT_DIR))?;
+        let root = open_private_directory(&anchored_root)?;
+        validate_open_directory_at_path(&owner_temp, owner_temp_path)?;
+        validate_open_directory_at_path(&root, &self.root)?;
+        Ok((owner_temp, root))
+    }
+
+    fn ensure_layout(&self) -> Result<(), PrivateOramOwnerJournalError> {
+        self.ensure_layout_inner_v2(true)
+    }
+
+    fn ensure_layout_for_authenticated_cleanup_v2(
+        &self,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        self.ensure_layout_inner_v2(false)
+    }
+
+    fn ensure_layout_inner_v2(
+        &self,
+        reject_unreconciled_cleanup: bool,
+    ) -> Result<(), PrivateOramOwnerJournalError> {
+        let owner_temp = self.owner_temp_path()?;
+        let owner_temp_file = open_private_directory(owner_temp)?;
+        let parent_lock = lock_private_journal_root(&owner_temp_file)?;
+        let anchored_root =
+            open_directory_entry_path(&owner_temp_file, OsStr::new(PRESTAGE_ROOT_DIR))?;
+        create_private_directory(&anchored_root)?;
+        sync_open_directory(&owner_temp_file)?;
+        validate_open_directory_at_path(&owner_temp_file, owner_temp)?;
+        let root = open_private_directory(&anchored_root)?;
+        validate_open_directory_at_path(&root, &self.root)?;
+        for name in [
+            PRESTAGE_INTENTS_DIR,
+            PRESTAGE_TEMP_DIR,
+            PRESTAGE_TERMINALS_DIR,
+            PRESTAGE_RETIRED_DIR,
+            PRESTAGE_QUARANTINE_DIR,
+            PRESTAGE_RESERVATION_FENCE_DIR,
+        ] {
+            let child_path = open_directory_entry_path(&root, OsStr::new(name))?;
+            create_private_directory(&child_path)?;
+            sync_private_directory(&child_path)?;
+        }
+        sync_open_directory(&root)?;
+        validate_open_directory_at_path(&root, &self.root)?;
+        let root_lock = lock_private_journal_root(&root)?;
+        let lifecycle_lock = PrivateOramOwnerLifecycleRootLock {
+            root_lock,
+            parent_lock,
+            expected_parent: owner_temp,
+            expected_root: &self.root,
+        };
+        lifecycle_lock.require_exclusive()?;
+        self.ensure_superblock_locked(lifecycle_lock.root_lock())?;
+        if reject_unreconciled_cleanup {
+            self.require_no_unreconciled_signed_cleanup_locked(&root)?;
+        }
+        validate_private_oram_owner_prestage_root_entries(&root)?;
+        Ok(())
+    }
+
+    fn load_intent_locked(
+        &self,
+        root: &File,
+        parent: &File,
+        parent_name: &str,
+        intent_key: &str,
+    ) -> Result<LoadedPrivateOramOwnerPrestageIntentV2, PrivateOramOwnerJournalError> {
+        validate_digest(intent_key, "intent_key")?;
+        if !matches!(
+            parent_name,
+            PRESTAGE_INTENTS_DIR | PRESTAGE_RETIRED_DIR | PRESTAGE_QUARANTINE_DIR
+        ) {
+            return Err(PrivateOramOwnerJournalError::InvalidInput(
+                "prestage_parent",
+            ));
+        }
+        validate_open_directory_at_path(root, &self.root)?;
+        validate_open_directory_at_path(parent, &self.root.join(parent_name))?;
+        let intent_path = open_directory_entry_path(parent, OsStr::new(intent_key))?;
+        let intent = open_private_directory(&intent_path)?;
+        validate_open_directory_at_path(&intent, &intent_path)?;
+        validate_private_oram_owner_prestage_intent_entries(&intent_path)?;
+        let (mut package_file, package_bytes) = read_private_file_pinned(
+            &intent_path.join(PRESTAGE_PACKAGE_FILE),
+            PRESTAGE_MAX_PACKAGE_BYTES,
+        )?;
+        let (mut descriptor_file, descriptor_bytes) =
+            read_private_file_pinned(&intent_path.join(DESCRIPTOR_FILE), MAX_DESCRIPTOR_BYTES)?;
+        let (mut final_bucket_file, final_bucket_bytes) = read_private_file_pinned(
+            &intent_path.join(FINAL_BUCKETS_FILE),
+            MAX_FINAL_BUCKET_FRAME_BYTES,
+        )?;
+        let (mut state_file, state_bytes) =
+            read_private_file_pinned(&intent_path.join(STATE_FILE), MAX_STATE_BYTES)?;
+        let (mut receipt_file, receipt_bytes) = read_private_file_pinned(
+            &intent_path.join(PRESTAGE_RECEIPT_FILE),
+            PRESTAGE_MAX_RECEIPT_BYTES,
+        )?;
+        let (mut intent_marker_file, intent_marker_bytes) = read_private_file_pinned(
+            &intent_path.join(PRESTAGE_INTENT_MARKER_FILE),
+            PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES,
+        )?;
+        let mut pending_marker_file = None;
+        let mut pending_marker_bytes = None;
+        if path_entry_exists(&intent_path.join(PRESTAGE_ADOPTION_PENDING_MARKER_FILE))? {
+            let (file, bytes) = read_private_file_pinned(
+                &intent_path.join(PRESTAGE_ADOPTION_PENDING_MARKER_FILE),
+                PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES,
+            )?;
+            pending_marker_file = Some(file);
+            pending_marker_bytes = Some(bytes);
+        }
+        let mut adopted_marker_file = None;
+        let mut adopted_marker_bytes = None;
+        if path_entry_exists(&intent_path.join(PRESTAGE_ADOPTED_MARKER_FILE))? {
+            let (file, bytes) = read_private_file_pinned(
+                &intent_path.join(PRESTAGE_ADOPTED_MARKER_FILE),
+                PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES,
+            )?;
+            adopted_marker_file = Some(file);
+            adopted_marker_bytes = Some(bytes);
+        }
+        let package = decode_private_oram_owner_prestage_package_v2(&package_bytes)
+            .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+        let receipt = decode_private_oram_owner_prestage_receipt_v2(&receipt_bytes)?;
+        let prepared =
+            ValidatedOwnerJournal::decode(descriptor_bytes, final_bucket_bytes, state_bytes, None)?;
+        let superblock = self.load_superblock_locked(root)?;
+        let intent_marker = decode_private_oram_owner_lifecycle_marker_v2(&intent_marker_bytes)?;
+        let expected_intent_marker = private_oram_owner_lifecycle_marker_v2(
+            PrivateOramOwnerLifecycleMarkerKindV2::Intent,
+            &superblock.owner_store_incarnation_digest,
+            &receipt,
+            None,
+        )?;
+        let adoption_pending_marker = pending_marker_bytes
+            .as_deref()
+            .map(decode_private_oram_owner_lifecycle_marker_v2)
+            .transpose()?;
+        let adopted_marker = adopted_marker_bytes
+            .as_deref()
+            .map(decode_private_oram_owner_lifecycle_marker_v2)
+            .transpose()?;
+        if receipt.intent_key != intent_key
+            || receipt.package_sha256 != digest_string(&package_bytes)
+            || usize::try_from(receipt.package_len).ok() != Some(package_bytes.len())
+            || receipt.collection_id != package.collection_id
+            || receipt.mutation_id != package.mutation_id
+            || receipt.mutation_digest != package.mutation_digest
+            || receipt.expected_aggregate_digest != package.expected_aggregate_digest
+            || receipt.lease_generation != package.lease_generation
+            || receipt.writer_fence != package.writer_fence
+            || receipt.owner_peer_id != package.owner_peer_id
+            || receipt.parent_descriptor_digest != package.parent_descriptor_digest
+            || receipt.parent_lease_acquired_record_digest
+                != package.parent_lease_acquired_record_digest
+            || receipt.owner_roster_digest != package.owner_roster_digest
+            || receipt.activation_registry_generation != package.activation_registry_generation
+            || receipt.activation_manifest_digest != package.activation_manifest_digest
+            || receipt.owner_journal_descriptor_digest
+                != prepared.snapshot.descriptor.descriptor_digest
+            || receipt.prepared_state_digest != prepared.snapshot.state.state_digest
+            || intent_marker != expected_intent_marker
+            || adoption_pending_marker.as_ref().is_some_and(|marker| {
+                private_oram_owner_lifecycle_marker_v2(
+                    PrivateOramOwnerLifecycleMarkerKindV2::AdoptionPending,
+                    &superblock.owner_store_incarnation_digest,
+                    &receipt,
+                    None,
+                )
+                .map_or(true, |expected| marker != &expected)
+            })
+            || adopted_marker.as_ref().is_some_and(|marker| {
+                private_oram_owner_lifecycle_marker_v2(
+                    PrivateOramOwnerLifecycleMarkerKindV2::Adopted,
+                    &superblock.owner_store_incarnation_digest,
+                    &receipt,
+                    None,
+                )
+                .map_or(true, |expected| marker != &expected)
+            })
+            || (adopted_marker.is_some() && adoption_pending_marker.is_none())
+        {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        package_file.validate_exact_contents(&package_bytes)?;
+        descriptor_file.validate_exact_contents(&prepared.descriptor_bytes)?;
+        final_bucket_file.validate_exact_contents(&prepared.final_bucket_bytes)?;
+        state_file.validate_exact_contents(&prepared.state_bytes)?;
+        receipt_file.validate_exact_contents(&receipt_bytes)?;
+        intent_marker_file.validate_exact_contents(&intent_marker_bytes)?;
+        if let (Some(mut file), Some(bytes)) =
+            (pending_marker_file, pending_marker_bytes.as_deref())
+        {
+            file.validate_exact_contents(bytes)?;
+        }
+        if let (Some(mut file), Some(bytes)) =
+            (adopted_marker_file, adopted_marker_bytes.as_deref())
+        {
+            file.validate_exact_contents(bytes)?;
+        }
+        validate_open_directory_at_path(&intent, &intent_path)?;
+        Ok(LoadedPrivateOramOwnerPrestageIntentV2 {
+            package,
+            package_bytes,
+            receipt,
+            prepared,
+            intent_marker,
+            adoption_pending_marker,
+            adopted_marker,
+        })
+    }
+}
+
+fn prepared_evidence_v2(
+    token: PrivateOramDurableOwnerPreparedTokenV1,
+) -> PrivateOramOwnerPreparedEvidenceV2 {
+    PrivateOramOwnerPreparedEvidenceV2 {
+        owner_peer_id: token.owner_peer_id,
+        journal_descriptor_digest: token.journal_descriptor_digest,
+        parent_descriptor_digest: token.parent_descriptor_digest,
+        parent_lease_acquired_record_digest: token.parent_lease_acquired_record_digest,
+        indexes: token
+            .indexes
+            .into_iter()
+            .map(|index| PrivateOramOwnerPreparedIndexEvidenceV2 {
+                kind: index.kind,
+                index_name: index.index_name,
+                prepared_journal_digest: index.prepared_journal_digest,
+            })
+            .collect(),
+    }
+}
+
+fn private_oram_owner_prestage_receipt_v2(
+    request: &PrivateOramOwnerPrestageRequestV2,
+    prepared: &ValidatedOwnerJournal,
+) -> Result<PrivateOramOwnerPrestageReceiptV2, PrivateOramOwnerJournalError> {
+    let mut receipt = PrivateOramOwnerPrestageReceiptV2 {
+        version: PRESTAGE_RECEIPT_VERSION,
+        intent_key: request.intent_key.clone(),
+        collection_id: request.collection_id.clone(),
+        mutation_id: request.mutation_id.clone(),
+        mutation_digest: request.mutation_digest.clone(),
+        expected_aggregate_digest: request.expected_aggregate_digest.clone(),
+        lease_generation: request.lease_generation,
+        writer_fence: request.writer_fence,
+        owner_peer_id: request.owner_peer_id,
+        parent_descriptor_digest: request.parent_descriptor_digest.clone(),
+        parent_lease_acquired_record_digest: request.parent_lease_acquired_record_digest.clone(),
+        owner_roster_digest: request.owner_roster_digest.clone(),
+        activation_registry_generation: request.activation_registry_generation,
+        activation_manifest_digest: request.activation_manifest_digest.clone(),
+        package_sha256: request.package_sha256.clone(),
+        package_len: request.package_len,
+        owner_request_digest: private_oram_owner_prestage_request_digest_v2(request)
+            .map_err(|_| PrivateOramOwnerJournalError::InvalidInput("prestage_request"))?,
+        owner_journal_descriptor_digest: prepared.snapshot.descriptor.descriptor_digest.clone(),
+        prepared_state_digest: prepared.snapshot.state.state_digest.clone(),
+        receipt_digest: String::new(),
+    };
+    receipt.receipt_digest = private_oram_owner_prestage_receipt_digest_v2(&receipt)?;
+    validate_private_oram_owner_prestage_receipt_v2(&receipt)?;
+    Ok(receipt)
+}
+
+#[doc(hidden)]
+pub fn encode_private_oram_owner_prestage_receipt_v2(
+    receipt: &PrivateOramOwnerPrestageReceiptV2,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    validate_private_oram_owner_prestage_receipt_v2(receipt)?;
+    let encoded = serde_json::to_vec(receipt).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if encoded.is_empty() || encoded.len() as u64 > PRESTAGE_MAX_RECEIPT_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(encoded)
+}
+
+#[doc(hidden)]
+pub fn decode_private_oram_owner_prestage_receipt_v2(
+    encoded: &[u8],
+) -> Result<PrivateOramOwnerPrestageReceiptV2, PrivateOramOwnerJournalError> {
+    if encoded.is_empty() || encoded.len() as u64 > PRESTAGE_MAX_RECEIPT_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let receipt: PrivateOramOwnerPrestageReceiptV2 =
+        serde_json::from_slice(encoded).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    validate_private_oram_owner_prestage_receipt_v2(&receipt)?;
+    if serde_json::to_vec(&receipt).map_err(|_| PrivateOramOwnerJournalError::Corrupt)? != encoded {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(receipt)
+}
+
+#[doc(hidden)]
+pub fn encode_private_oram_owner_prepare_parent_v2(
+    parent: &PrivateOramOwnerPrepareParentV2,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    validate_owner_prepare_parent_fields(
+        parent.parent_descriptor_digest(),
+        parent.parent_lease_acquired_record_digest(),
+        parent.requirements(),
+    )?;
+    if parent.owner_peer_id() == 0 {
+        return Err(PrivateOramOwnerJournalError::InvalidInput("owner_peer_id"));
+    }
+    encode_owner_adoption_canonical(parent)
+}
+
+#[doc(hidden)]
+pub fn decode_private_oram_owner_prepare_parent_v2(
+    encoded: &[u8],
+) -> Result<PrivateOramOwnerPrepareParentV2, PrivateOramOwnerJournalError> {
+    let parent: PrivateOramOwnerPrepareParentV2 = decode_owner_adoption_canonical(encoded)?;
+    validate_owner_prepare_parent_fields(
+        parent.parent_descriptor_digest(),
+        parent.parent_lease_acquired_record_digest(),
+        parent.requirements(),
+    )?;
+    if parent.owner_peer_id() == 0 {
+        return Err(PrivateOramOwnerJournalError::InvalidInput("owner_peer_id"));
+    }
+    Ok(parent)
+}
+
+#[doc(hidden)]
+pub fn encode_private_oram_owner_prepared_evidence_v2(
+    evidence: &PrivateOramOwnerPreparedEvidenceV2,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    validate_private_oram_owner_prepared_evidence_v2(evidence)?;
+    encode_owner_adoption_canonical(evidence)
+}
+
+#[doc(hidden)]
+pub fn decode_private_oram_owner_prepared_evidence_v2(
+    encoded: &[u8],
+) -> Result<PrivateOramOwnerPreparedEvidenceV2, PrivateOramOwnerJournalError> {
+    let evidence: PrivateOramOwnerPreparedEvidenceV2 = decode_owner_adoption_canonical(encoded)?;
+    validate_private_oram_owner_prepared_evidence_v2(&evidence)?;
+    Ok(evidence)
+}
+
+fn validate_private_oram_owner_prepared_evidence_v2(
+    evidence: &PrivateOramOwnerPreparedEvidenceV2,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    if evidence.owner_peer_id == 0
+        || evidence.indexes.is_empty()
+        || evidence.indexes.len() > MAX_PAIRED_OWNER_INDEXES
+        || evidence.indexes[0].kind != PrivateOramIndexKindV2::Hnsw
+        || evidence
+            .indexes
+            .windows(2)
+            .any(|pair| pair[0].kind == pair[1].kind)
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    for digest in [
+        &evidence.journal_descriptor_digest,
+        &evidence.parent_descriptor_digest,
+        &evidence.parent_lease_acquired_record_digest,
+    ] {
+        validate_digest(digest, "owner_prepared_evidence")?;
+    }
+    for index in &evidence.indexes {
+        validate_resource_id(&index.index_name, "index_name")?;
+        validate_digest(&index.prepared_journal_digest, "prepared_journal_digest")?;
+    }
+    Ok(())
+}
+
+fn encode_owner_adoption_canonical<T: Serialize>(
+    value: &T,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    let encoded = serde_json::to_vec(value).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if encoded.is_empty() || encoded.len() > MAX_OWNER_ADOPTION_CANONICAL_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(encoded)
+}
+
+fn decode_owner_adoption_canonical<T>(encoded: &[u8]) -> Result<T, PrivateOramOwnerJournalError>
+where
+    T: for<'de> Deserialize<'de> + Serialize,
+{
+    if encoded.is_empty() || encoded.len() > MAX_OWNER_ADOPTION_CANONICAL_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let value =
+        serde_json::from_slice(encoded).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if serde_json::to_vec(&value).map_err(|_| PrivateOramOwnerJournalError::Corrupt)? != encoded {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(value)
+}
+
+#[doc(hidden)]
+pub fn validate_private_oram_owner_prestage_receipt_v2(
+    receipt: &PrivateOramOwnerPrestageReceiptV2,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    if receipt.version != PRESTAGE_RECEIPT_VERSION
+        || receipt.lease_generation == 0
+        || receipt.writer_fence == 0
+        || receipt.activation_registry_generation == 0
+        || receipt.package_len == 0
+        || receipt.package_len > PRESTAGE_MAX_PACKAGE_BYTES
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    for value in [
+        &receipt.intent_key,
+        &receipt.mutation_id,
+        &receipt.mutation_digest,
+        &receipt.expected_aggregate_digest,
+        &receipt.parent_descriptor_digest,
+        &receipt.parent_lease_acquired_record_digest,
+        &receipt.owner_roster_digest,
+        &receipt.activation_manifest_digest,
+        &receipt.package_sha256,
+        &receipt.owner_request_digest,
+        &receipt.owner_journal_descriptor_digest,
+        &receipt.prepared_state_digest,
+        &receipt.receipt_digest,
+    ] {
+        validate_digest(value, "prestage_receipt")?;
+    }
+    if receipt.collection_id.is_empty()
+        || receipt.collection_id.len() > MAX_RESOURCE_ID_BYTES
+        || receipt.receipt_digest != private_oram_owner_prestage_receipt_digest_v2(receipt)?
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(())
+}
+
+fn private_oram_owner_prestage_receipt_digest_v2(
+    receipt: &PrivateOramOwnerPrestageReceiptV2,
+) -> Result<String, PrivateOramOwnerJournalError> {
+    let mut hasher = Sha256::new();
+    hasher.update(PRESTAGE_RECEIPT_DIGEST_DOMAIN);
+    hasher.update(receipt.version.to_be_bytes());
+    for value in [
+        &receipt.intent_key,
+        &receipt.collection_id,
+        &receipt.mutation_id,
+        &receipt.mutation_digest,
+        &receipt.expected_aggregate_digest,
+        &receipt.parent_descriptor_digest,
+        &receipt.parent_lease_acquired_record_digest,
+        &receipt.owner_roster_digest,
+        &receipt.activation_manifest_digest,
+        &receipt.package_sha256,
+        &receipt.owner_request_digest,
+        &receipt.owner_journal_descriptor_digest,
+        &receipt.prepared_state_digest,
+    ] {
+        hasher.update(
+            u64::try_from(value.len())
+                .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?
+                .to_be_bytes(),
+        );
+        hasher.update(value.as_bytes());
+    }
+    hasher.update(receipt.lease_generation.to_be_bytes());
+    hasher.update(receipt.writer_fence.to_be_bytes());
+    hasher.update(receipt.owner_peer_id.to_be_bytes());
+    hasher.update(receipt.activation_registry_generation.to_be_bytes());
+    hasher.update(receipt.package_len.to_be_bytes());
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn private_oram_owner_prestage_superblock_digest_v2(
+    superblock: &PrivateOramOwnerPrestageSuperblockV2,
+) -> Result<String, PrivateOramOwnerJournalError> {
+    validate_digest(
+        &superblock.owner_store_incarnation_digest,
+        "owner_store_incarnation_digest",
+    )?;
+    validate_digest(&superblock.lifecycle_state_root, "lifecycle_state_root")?;
+    superblock.lifecycle_state()?;
+    let mut hasher = Sha256::new();
+    hasher.update(PRESTAGE_SUPERBLOCK_DIGEST_DOMAIN);
+    hasher.update(superblock.version.to_be_bytes());
+    lifecycle_hash_string(&mut hasher, &superblock.owner_store_incarnation_digest)?;
+    hasher.update(superblock.lifecycle_generation.to_be_bytes());
+    lifecycle_hash_string(&mut hasher, &superblock.lifecycle_state_root)?;
+    hasher.update(superblock.minimum_lifecycle_reader_version.to_be_bytes());
+    lifecycle_hash_string(&mut hasher, &superblock.lifecycle_capability)?;
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn encode_private_oram_owner_prestage_superblock_v2(
+    superblock: &PrivateOramOwnerPrestageSuperblockV2,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    if superblock.version != PRESTAGE_SUPERBLOCK_VERSION
+        || superblock.superblock_digest
+            != private_oram_owner_prestage_superblock_digest_v2(superblock)?
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let bytes =
+        serde_json::to_vec(superblock).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if bytes.is_empty() || bytes.len() as u64 > PRESTAGE_MAX_SUPERBLOCK_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(bytes)
+}
+
+fn decode_private_oram_owner_prestage_superblock_v2(
+    bytes: &[u8],
+) -> Result<PrivateOramOwnerPrestageSuperblockV2, PrivateOramOwnerJournalError> {
+    if bytes.is_empty() || bytes.len() as u64 > PRESTAGE_MAX_SUPERBLOCK_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let superblock: PrivateOramOwnerPrestageSuperblockV2 =
+        serde_json::from_slice(bytes).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if encode_private_oram_owner_prestage_superblock_v2(&superblock)? != bytes {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(superblock)
+}
+
+fn private_oram_owner_reservation_fence_digest_v1(
+    record: &PrivateOramOwnerReservationFenceRecordV1,
+) -> Result<String, PrivateOramOwnerJournalError> {
+    validate_private_oram_owner_reservation_prepare_challenge_v1(&record.challenge)
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    validate_private_oram_owner_lifecycle_state_v1(&record.lifecycle_state)
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if record.version != PRESTAGE_RESERVATION_FENCE_VERSION
+        || record.challenge.owner_store_incarnation_digest
+            != record.lifecycle_state.owner_store_incarnation_digest
+        || record.terminal_record_limit != PRESTAGE_MAX_TERMINAL_RECORDS as u64
+        || record.terminal_record_count >= record.terminal_record_limit
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let challenge_bytes =
+        serde_json::to_vec(&record.challenge).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    let lifecycle_bytes = serde_json::to_vec(&record.lifecycle_state)
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    let mut hasher = Sha256::new();
+    hasher.update(PRESTAGE_RESERVATION_FENCE_DIGEST_DOMAIN);
+    hasher.update(record.version.to_be_bytes());
+    hasher.update(
+        u64::try_from(challenge_bytes.len())
+            .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?
+            .to_be_bytes(),
+    );
+    hasher.update(challenge_bytes);
+    hasher.update(
+        u64::try_from(lifecycle_bytes.len())
+            .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?
+            .to_be_bytes(),
+    );
+    hasher.update(lifecycle_bytes);
+    hasher.update(record.terminal_record_count.to_be_bytes());
+    hasher.update(record.terminal_record_limit.to_be_bytes());
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn encode_private_oram_owner_reservation_fence_v1(
+    record: &PrivateOramOwnerReservationFenceRecordV1,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    validate_digest(&record.fence_record_digest, "fence_record_digest")?;
+    if record.fence_record_digest != private_oram_owner_reservation_fence_digest_v1(record)? {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let bytes = serde_json::to_vec(record).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if bytes.is_empty() || bytes.len() as u64 > PRESTAGE_MAX_RESERVATION_FENCE_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(bytes)
+}
+
+fn decode_private_oram_owner_reservation_fence_v1(
+    bytes: &[u8],
+) -> Result<PrivateOramOwnerReservationFenceRecordV1, PrivateOramOwnerJournalError> {
+    if bytes.is_empty() || bytes.len() as u64 > PRESTAGE_MAX_RESERVATION_FENCE_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let record: PrivateOramOwnerReservationFenceRecordV1 =
+        serde_json::from_slice(bytes).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if encode_private_oram_owner_reservation_fence_v1(&record)? != bytes {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(record)
+}
+
+fn validate_private_oram_owner_reservation_resolution_input_v1(
+    resolution: &PrivateOramOwnerReservationResolutionV1,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    for (value, field) in [
+        (
+            &resolution.committed_challenge_digest,
+            "committed_challenge_digest",
+        ),
+        (
+            &resolution.reservation_intent_digest,
+            "reservation_intent_digest",
+        ),
+        (&resolution.attempt_id, "attempt_id"),
+    ] {
+        validate_digest(value, field)?;
+    }
+    if resolution.challenge_applied_term == 0
+        || resolution.challenge_applied_index == 0
+        || resolution.resolution_applied_term == 0
+        || resolution.resolution_applied_index <= resolution.challenge_applied_index
+        || resolution.resolution_applied_term < resolution.challenge_applied_term
+        || matches!(
+            resolution.kind,
+            PrivateOramOwnerReservationResolutionKindV1::Finalized
+        ) != resolution.finalized_reservation_digest.is_some()
+    {
+        return Err(PrivateOramOwnerJournalError::InvalidInput(
+            "reservation_resolution",
+        ));
+    }
+    if let Some(digest) = resolution.finalized_reservation_digest.as_deref() {
+        validate_digest(digest, "finalized_reservation_digest")?;
+    }
+    Ok(())
+}
+
+fn private_oram_owner_reservation_resolution_matches_input_v1(
+    record: &PrivateOramOwnerReservationResolutionRecordV1,
+    resolution: &PrivateOramOwnerReservationResolutionV1,
+) -> bool {
+    record.kind == resolution.kind
+        && record.committed_challenge_digest == resolution.committed_challenge_digest
+        && record.reservation_intent_digest == resolution.reservation_intent_digest
+        && record.attempt_id == resolution.attempt_id
+        && record.challenge_applied_term == resolution.challenge_applied_term
+        && record.challenge_applied_index == resolution.challenge_applied_index
+        && record.resolution_applied_term == resolution.resolution_applied_term
+        && record.resolution_applied_index == resolution.resolution_applied_index
+        && record.finalized_reservation_digest == resolution.finalized_reservation_digest
+}
+
+fn private_oram_owner_reservation_resolution_input_matches_challenge_v1(
+    resolution: &PrivateOramOwnerReservationResolutionV1,
+    challenge: &PrivateOramOwnerReservationPrepareChallengeV1,
+) -> bool {
+    resolution.committed_challenge_digest == challenge.committed_challenge_digest
+        && resolution.reservation_intent_digest == challenge.reservation_intent_digest
+        && resolution.attempt_id == challenge.attempt_id
+        && resolution.challenge_applied_term == challenge.challenge_applied_term
+        && resolution.challenge_applied_index == challenge.challenge_applied_index
+}
+
+fn private_oram_owner_reservation_resolution_matches_challenge_v1(
+    record: &PrivateOramOwnerReservationResolutionRecordV1,
+    challenge: &PrivateOramOwnerReservationPrepareChallengeV1,
+) -> bool {
+    record.committed_challenge_digest == challenge.committed_challenge_digest
+        && record.reservation_intent_digest == challenge.reservation_intent_digest
+        && record.attempt_id == challenge.attempt_id
+        && record.challenge_applied_term == challenge.challenge_applied_term
+        && record.challenge_applied_index == challenge.challenge_applied_index
+        && record.reserved_terminal_intent_key == challenge.reserved_terminal_intent_key
+        && record.owner_store_incarnation_digest == challenge.owner_store_incarnation_digest
+        && record.owner_store_binding_digest == challenge.expected_checkpoint_record_digest
+}
+
+fn private_oram_owner_absent_reservation_fence_digest_v1(
+    challenge: &PrivateOramOwnerReservationPrepareChallengeV1,
+    lifecycle_state: &PrivateOramOwnerLifecycleStateV1,
+) -> Result<String, PrivateOramOwnerJournalError> {
+    validate_private_oram_owner_reservation_prepare_challenge_v1(challenge)
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    validate_private_oram_owner_lifecycle_state_v1(lifecycle_state)
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if challenge.owner_store_incarnation_digest != lifecycle_state.owner_store_incarnation_digest {
+        return Err(PrivateOramOwnerJournalError::InvalidTransition);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(PRESTAGE_RESERVATION_ABSENT_FENCE_DIGEST_DOMAIN);
+    for digest in [
+        challenge.committed_challenge_digest.as_str(),
+        challenge.reservation_intent_digest.as_str(),
+        challenge.attempt_id.as_str(),
+        challenge.expected_checkpoint_record_digest.as_str(),
+        challenge.reserved_terminal_intent_key.as_str(),
+        lifecycle_state.owner_store_incarnation_digest.as_str(),
+        lifecycle_state.state_root.as_str(),
+    ] {
+        validate_digest(digest, "absent_fence_binding")?;
+        hasher.update((digest.len() as u64).to_be_bytes());
+        hasher.update(digest.as_bytes());
+    }
+    hasher.update(challenge.challenge_applied_term.to_be_bytes());
+    hasher.update(challenge.challenge_applied_index.to_be_bytes());
+    hasher.update(lifecycle_state.generation.to_be_bytes());
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn private_oram_owner_reservation_resolution_digest_v1(
+    record: &PrivateOramOwnerReservationResolutionRecordV1,
+) -> Result<String, PrivateOramOwnerJournalError> {
+    validate_digest(&record.fence_record_digest, "fence_record_digest")?;
+    validate_digest(
+        &record.committed_challenge_digest,
+        "committed_challenge_digest",
+    )?;
+    validate_digest(
+        &record.reservation_intent_digest,
+        "reservation_intent_digest",
+    )?;
+    validate_digest(&record.attempt_id, "attempt_id")?;
+    validate_digest(
+        &record.reserved_terminal_intent_key,
+        "reserved_terminal_intent_key",
+    )?;
+    validate_digest(
+        &record.owner_store_incarnation_digest,
+        "owner_store_incarnation_digest",
+    )?;
+    validate_digest(
+        &record.owner_store_binding_digest,
+        "owner_store_binding_digest",
+    )?;
+    if !matches!(
+        record.version,
+        PRESTAGE_RESERVATION_RESOLUTION_VERSION_V2 | PRESTAGE_RESERVATION_RESOLUTION_VERSION
+    ) || (record.version == PRESTAGE_RESERVATION_RESOLUTION_VERSION_V2
+        && !record.fence_was_present)
+        || (record.kind == PrivateOramOwnerReservationResolutionKindV1::Finalized
+            && !record.fence_was_present)
+        || record.challenge_applied_term == 0
+        || record.challenge_applied_index == 0
+        || record.resolution_applied_term == 0
+        || record.resolution_applied_index <= record.challenge_applied_index
+        || record.resolution_applied_term < record.challenge_applied_term
+        || matches!(
+            record.kind,
+            PrivateOramOwnerReservationResolutionKindV1::Finalized
+        ) != record.finalized_reservation_digest.is_some()
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    if let Some(digest) = record.finalized_reservation_digest.as_deref() {
+        validate_digest(digest, "finalized_reservation_digest")?;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(PRESTAGE_RESERVATION_RESOLUTION_DIGEST_DOMAIN);
+    hasher.update(record.version.to_be_bytes());
+    hasher.update([match record.kind {
+        PrivateOramOwnerReservationResolutionKindV1::Finalized => 1,
+        PrivateOramOwnerReservationResolutionKindV1::Cancelled => 2,
+    }]);
+    if record.version >= PRESTAGE_RESERVATION_RESOLUTION_VERSION {
+        hasher.update([u8::from(record.fence_was_present)]);
+    }
+    for value in [
+        record.fence_record_digest.as_str(),
+        record.committed_challenge_digest.as_str(),
+        record.reservation_intent_digest.as_str(),
+        record.attempt_id.as_str(),
+    ] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    hasher.update(record.challenge_applied_term.to_be_bytes());
+    hasher.update(record.challenge_applied_index.to_be_bytes());
+    hasher.update(record.resolution_applied_term.to_be_bytes());
+    hasher.update(record.resolution_applied_index.to_be_bytes());
+    hasher.update((record.reserved_terminal_intent_key.len() as u64).to_be_bytes());
+    hasher.update(record.reserved_terminal_intent_key.as_bytes());
+    if let Some(digest) = record.finalized_reservation_digest.as_deref() {
+        hasher.update([1]);
+        hasher.update((digest.len() as u64).to_be_bytes());
+        hasher.update(digest.as_bytes());
+    } else {
+        hasher.update([0]);
+    }
+    for digest in [
+        record.owner_store_incarnation_digest.as_str(),
+        record.owner_store_binding_digest.as_str(),
+    ] {
+        hasher.update((digest.len() as u64).to_be_bytes());
+        hasher.update(digest.as_bytes());
+    }
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn encode_private_oram_owner_reservation_resolution_v1(
+    record: &PrivateOramOwnerReservationResolutionRecordV1,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    validate_digest(&record.resolution_record_digest, "resolution_record_digest")?;
+    if record.resolution_record_digest
+        != private_oram_owner_reservation_resolution_digest_v1(record)?
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let bytes = serde_json::to_vec(record).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if bytes.is_empty() || bytes.len() as u64 > PRESTAGE_MAX_RESERVATION_RESOLUTION_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(bytes)
+}
+
+fn decode_private_oram_owner_reservation_resolution_v1(
+    bytes: &[u8],
+) -> Result<PrivateOramOwnerReservationResolutionRecordV1, PrivateOramOwnerJournalError> {
+    if bytes.is_empty() || bytes.len() as u64 > PRESTAGE_MAX_RESERVATION_RESOLUTION_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let record: PrivateOramOwnerReservationResolutionRecordV1 =
+        serde_json::from_slice(bytes).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if encode_private_oram_owner_reservation_resolution_v1(&record)? != bytes {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(record)
+}
+
+fn private_oram_owner_reservation_abort_release_digest_v1(
+    record: &PrivateOramOwnerReservationAbortReleaseRecordV1,
+) -> Result<String, PrivateOramOwnerJournalError> {
+    if record.version != PRESTAGE_RESERVATION_ABORT_RELEASE_VERSION {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    for (value, field) in [
+        (
+            record.resolution_record_digest.as_str(),
+            "resolution_record_digest",
+        ),
+        (record.fence_record_digest.as_str(), "fence_record_digest"),
+        (
+            record.abort_release_authority_digest.as_str(),
+            "abort_release_authority_digest",
+        ),
+        (
+            record.owner_store_incarnation_digest.as_str(),
+            "owner_store_incarnation_digest",
+        ),
+        (
+            record.owner_store_binding_digest.as_str(),
+            "owner_store_binding_digest",
+        ),
+    ] {
+        validate_digest(value, field)?;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(PRESTAGE_RESERVATION_ABORT_RELEASE_DIGEST_DOMAIN);
+    hasher.update(record.version.to_be_bytes());
+    for value in [
+        record.resolution_record_digest.as_str(),
+        record.fence_record_digest.as_str(),
+        record.abort_release_authority_digest.as_str(),
+        record.owner_store_incarnation_digest.as_str(),
+        record.owner_store_binding_digest.as_str(),
+    ] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn encode_private_oram_owner_reservation_abort_release_v1(
+    record: &PrivateOramOwnerReservationAbortReleaseRecordV1,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    validate_digest(&record.release_marker_digest, "release_marker_digest")?;
+    if record.release_marker_digest
+        != private_oram_owner_reservation_abort_release_digest_v1(record)?
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let bytes = serde_json::to_vec(record).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if bytes.is_empty() || bytes.len() as u64 > PRESTAGE_MAX_RESERVATION_ABORT_RELEASE_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(bytes)
+}
+
+fn decode_private_oram_owner_reservation_abort_release_v1(
+    bytes: &[u8],
+) -> Result<PrivateOramOwnerReservationAbortReleaseRecordV1, PrivateOramOwnerJournalError> {
+    if bytes.is_empty() || bytes.len() as u64 > PRESTAGE_MAX_RESERVATION_ABORT_RELEASE_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let record: PrivateOramOwnerReservationAbortReleaseRecordV1 =
+        serde_json::from_slice(bytes).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if encode_private_oram_owner_reservation_abort_release_v1(&record)? != bytes {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(record)
+}
+
+fn private_oram_owner_lifecycle_marker_v2(
+    kind: PrivateOramOwnerLifecycleMarkerKindV2,
+    owner_store_incarnation_digest: &str,
+    receipt: &PrivateOramOwnerPrestageReceiptV2,
+    terminal_authority_digest: Option<&str>,
+) -> Result<PrivateOramOwnerLifecycleMarkerV2, PrivateOramOwnerJournalError> {
+    validate_private_oram_owner_prestage_receipt_v2(receipt)?;
+    let mut marker = PrivateOramOwnerLifecycleMarkerV2 {
+        version: PRESTAGE_LIFECYCLE_MARKER_VERSION,
+        kind,
+        owner_store_incarnation_digest: owner_store_incarnation_digest.to_string(),
+        intent_key: receipt.intent_key.clone(),
+        collection_id: receipt.collection_id.clone(),
+        mutation_id: receipt.mutation_id.clone(),
+        mutation_digest: receipt.mutation_digest.clone(),
+        expected_aggregate_digest: receipt.expected_aggregate_digest.clone(),
+        lease_generation: receipt.lease_generation,
+        writer_fence: receipt.writer_fence,
+        owner_peer_id: receipt.owner_peer_id,
+        parent_descriptor_digest: receipt.parent_descriptor_digest.clone(),
+        parent_lease_acquired_record_digest: receipt.parent_lease_acquired_record_digest.clone(),
+        package_sha256: receipt.package_sha256.clone(),
+        prestage_receipt_digest: Some(receipt.receipt_digest.clone()),
+        owner_journal_descriptor_digest: Some(receipt.owner_journal_descriptor_digest.clone()),
+        terminal_authority_digest: terminal_authority_digest.map(ToOwned::to_owned),
+        cleanup_authority_signer: None,
+        signed_cleanup_authorization: None,
+        signed_cleanup_receipt: None,
+        marker_digest: String::new(),
+    };
+    marker.marker_digest = private_oram_owner_lifecycle_marker_digest_v2(&marker)?;
+    validate_private_oram_owner_lifecycle_marker_v2(&marker)?;
+    Ok(marker)
+}
+
+fn private_oram_owner_cleanup_lifecycle_marker_v2(
+    verified_authorization: &VerifiedPrivateOramOwnerCleanupAuthorizationV1,
+    signed_receipt: &SignedPrivateOramOwnerCleanupReceiptV1,
+) -> Result<PrivateOramOwnerLifecycleMarkerV2, PrivateOramOwnerJournalError> {
+    validate_signed_private_oram_owner_cleanup_receipt_v1(signed_receipt, verified_authorization)
+        .map_err(|_| PrivateOramOwnerJournalError::InvalidInput("cleanup_receipt"))?;
+    let authorization = verified_authorization.authorization();
+    let receipt = &signed_receipt.receipt;
+    let kind = match receipt.terminal_state {
+        PrivateOramOwnerCleanupTerminalStateV1::TombstonedAbsent => {
+            PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent
+        }
+        PrivateOramOwnerCleanupTerminalStateV1::Quarantined => {
+            PrivateOramOwnerLifecycleMarkerKindV2::Quarantined
+        }
+    };
+    let mut marker = PrivateOramOwnerLifecycleMarkerV2 {
+        version: PRESTAGE_LIFECYCLE_MARKER_VERSION,
+        kind,
+        owner_store_incarnation_digest: receipt
+            .previous_lifecycle_state
+            .owner_store_incarnation_digest
+            .clone(),
+        intent_key: authorization.target.intent_key.clone(),
+        collection_id: authorization.authority.collection_id.clone(),
+        mutation_id: authorization.attempt.mutation_id.clone(),
+        mutation_digest: authorization.attempt.mutation_digest.clone(),
+        expected_aggregate_digest: authorization.attempt.expected_aggregate_digest.clone(),
+        lease_generation: authorization.attempt.lease_generation,
+        writer_fence: authorization.attempt.writer_fence,
+        owner_peer_id: authorization.target.owner_peer_id,
+        parent_descriptor_digest: authorization.target.parent_descriptor_digest.clone(),
+        parent_lease_acquired_record_digest: authorization
+            .target
+            .parent_lease_acquired_record_digest
+            .clone(),
+        package_sha256: authorization.target.package_sha256.clone(),
+        prestage_receipt_digest: authorization.target.prestage_receipt_digest.clone(),
+        owner_journal_descriptor_digest: authorization
+            .target
+            .owner_journal_descriptor_digest
+            .clone(),
+        terminal_authority_digest: Some(authorization.authorization_digest.clone()),
+        cleanup_authority_signer: Some(verified_authorization.authority_signer().clone()),
+        signed_cleanup_authorization: Some(verified_authorization.signed().clone()),
+        signed_cleanup_receipt: Some(signed_receipt.clone()),
+        marker_digest: String::new(),
+    };
+    marker.marker_digest = private_oram_owner_lifecycle_marker_digest_v2(&marker)?;
+    validate_private_oram_owner_lifecycle_marker_v2(&marker)?;
+    Ok(marker)
+}
+
+fn committed_private_oram_owner_cleanup_receipt_v2(
+    signed_receipt: &SignedPrivateOramOwnerCleanupReceiptV1,
+    terminal: &PrivateOramOwnerLifecycleMarkerV2,
+    repair_state: PrivateOramOwnerCleanupRepairStateV2,
+) -> CommittedPrivateOramOwnerCleanupReceiptV2 {
+    CommittedPrivateOramOwnerCleanupReceiptV2 {
+        signed_receipt: signed_receipt.clone(),
+        storage_terminal_marker_digest: terminal.marker_digest.clone(),
+        repair_state,
+    }
+}
+
+fn private_oram_owner_terminal_matches_receipt_v2(
+    terminal: &PrivateOramOwnerLifecycleMarkerV2,
+    receipt: &PrivateOramOwnerPrestageReceiptV2,
+) -> Result<bool, PrivateOramOwnerJournalError> {
+    if !matches!(
+        terminal.kind,
+        PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent
+            | PrivateOramOwnerLifecycleMarkerKindV2::Quarantined
+    ) {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    if let (Some(authority_signer), Some(signed_authorization), Some(signed_receipt)) = (
+        &terminal.cleanup_authority_signer,
+        &terminal.signed_cleanup_authorization,
+        &terminal.signed_cleanup_receipt,
+    ) {
+        validate_self_consistent_signed_private_oram_owner_cleanup_authorization_v1(
+            signed_authorization,
+            authority_signer,
+        )
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+        validate_self_consistent_signed_private_oram_owner_cleanup_receipt_v1(
+            signed_receipt,
+            &signed_authorization.authorization,
+        )
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+        let authorization = &signed_authorization.authorization;
+        let expected_intent_marker = private_oram_owner_lifecycle_marker_v2(
+            PrivateOramOwnerLifecycleMarkerKindV2::Intent,
+            &terminal.owner_store_incarnation_digest,
+            receipt,
+            None,
+        )?;
+        return Ok(receipt.intent_key == authorization.target.intent_key
+            && receipt.collection_id == authorization.authority.collection_id
+            && receipt.mutation_id == authorization.attempt.mutation_id
+            && receipt.mutation_digest == authorization.attempt.mutation_digest
+            && receipt.expected_aggregate_digest
+                == authorization.attempt.expected_aggregate_digest
+            && receipt.lease_generation == authorization.attempt.lease_generation
+            && receipt.writer_fence == authorization.attempt.writer_fence
+            && receipt.owner_peer_id == authorization.target.owner_peer_id
+            && receipt.parent_descriptor_digest == authorization.target.parent_descriptor_digest
+            && receipt.parent_lease_acquired_record_digest
+                == authorization.target.parent_lease_acquired_record_digest
+            && receipt.owner_roster_digest == authorization.authority.owner_roster_digest
+            && receipt.activation_registry_generation
+                == authorization.authority.activation_registry_generation
+            && receipt.activation_manifest_digest
+                == authorization.authority.activation_manifest_digest
+            && receipt.package_sha256 == authorization.target.package_sha256
+            && receipt.package_len == authorization.target.package_len
+            && receipt.owner_request_digest == authorization.target.owner_request_digest
+            && authorization.target.prestage_receipt_digest.as_deref()
+                == Some(receipt.receipt_digest.as_str())
+            && authorization.target.intent_marker_digest.as_deref()
+                == Some(expected_intent_marker.marker_digest.as_str())
+            && authorization
+                .target
+                .owner_journal_descriptor_digest
+                .as_deref()
+                == Some(receipt.owner_journal_descriptor_digest.as_str()));
+    }
+    Ok(*terminal
+        == private_oram_owner_lifecycle_marker_v2(
+            terminal.kind,
+            &terminal.owner_store_incarnation_digest,
+            receipt,
+            terminal.terminal_authority_digest.as_deref(),
+        )?)
+}
+
+fn validate_private_oram_owner_lifecycle_marker_v2(
+    marker: &PrivateOramOwnerLifecycleMarkerV2,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    let terminal = matches!(
+        marker.kind,
+        PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent
+            | PrivateOramOwnerLifecycleMarkerKindV2::Quarantined
+    );
+    if marker.version != PRESTAGE_LIFECYCLE_MARKER_VERSION
+        || marker.collection_id.is_empty()
+        || marker.collection_id.len() > MAX_RESOURCE_ID_BYTES
+        || marker.lease_generation == 0
+        || marker.writer_fence == 0
+        || marker.owner_peer_id == 0
+        || terminal != marker.terminal_authority_digest.is_some()
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    for digest in [
+        &marker.owner_store_incarnation_digest,
+        &marker.intent_key,
+        &marker.mutation_id,
+        &marker.mutation_digest,
+        &marker.expected_aggregate_digest,
+        &marker.parent_descriptor_digest,
+        &marker.parent_lease_acquired_record_digest,
+        &marker.package_sha256,
+        &marker.marker_digest,
+    ] {
+        validate_digest(digest, "lifecycle_marker")?;
+    }
+    if let Some(digest) = &marker.terminal_authority_digest {
+        validate_digest(digest, "terminal_authority_digest")?;
+    }
+    if let Some(digest) = &marker.prestage_receipt_digest {
+        validate_digest(digest, "prestage_receipt_digest")?;
+    }
+    if let Some(digest) = &marker.owner_journal_descriptor_digest {
+        validate_digest(digest, "owner_journal_descriptor_digest")?;
+    }
+    match (
+        &marker.cleanup_authority_signer,
+        &marker.signed_cleanup_authorization,
+        &marker.signed_cleanup_receipt,
+    ) {
+        (Some(authority_signer), Some(signed_authorization), Some(signed_receipt)) => {
+            validate_self_consistent_signed_private_oram_owner_cleanup_authorization_v1(
+                signed_authorization,
+                authority_signer,
+            )
+            .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+            validate_self_consistent_signed_private_oram_owner_cleanup_receipt_v1(
+                signed_receipt,
+                &signed_authorization.authorization,
+            )
+            .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+            let authorization = &signed_authorization.authorization;
+            let receipt = &signed_receipt.receipt;
+            let expected_kind = match receipt.terminal_state {
+                PrivateOramOwnerCleanupTerminalStateV1::TombstonedAbsent => {
+                    PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent
+                }
+                PrivateOramOwnerCleanupTerminalStateV1::Quarantined => {
+                    PrivateOramOwnerLifecycleMarkerKindV2::Quarantined
+                }
+            };
+            if marker.kind != expected_kind
+                || marker.terminal_authority_digest.as_deref()
+                    != Some(authorization.authorization_digest.as_str())
+                || marker.owner_store_incarnation_digest
+                    != authorization
+                        .target
+                        .expected_lifecycle_state
+                        .owner_store_incarnation_digest
+                || marker.intent_key != authorization.target.intent_key
+                || marker.collection_id != authorization.authority.collection_id
+                || marker.mutation_id != authorization.attempt.mutation_id
+                || marker.mutation_digest != authorization.attempt.mutation_digest
+                || marker.expected_aggregate_digest
+                    != authorization.attempt.expected_aggregate_digest
+                || marker.lease_generation != authorization.attempt.lease_generation
+                || marker.writer_fence != authorization.attempt.writer_fence
+                || marker.owner_peer_id != authorization.target.owner_peer_id
+                || marker.parent_descriptor_digest != authorization.target.parent_descriptor_digest
+                || marker.parent_lease_acquired_record_digest
+                    != authorization.target.parent_lease_acquired_record_digest
+                || marker.package_sha256 != authorization.target.package_sha256
+                || marker.prestage_receipt_digest != authorization.target.prestage_receipt_digest
+                || marker.owner_journal_descriptor_digest
+                    != authorization.target.owner_journal_descriptor_digest
+                || receipt.previous_lifecycle_state != authorization.target.expected_lifecycle_state
+            {
+                return Err(PrivateOramOwnerJournalError::Corrupt);
+            }
+        }
+        (None, None, None) if marker.prestage_receipt_digest.is_some() => {}
+        _ => {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+    }
+    if marker.marker_digest != private_oram_owner_lifecycle_marker_digest_v2(marker)? {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(())
+}
+
+fn private_oram_owner_lifecycle_marker_digest_v2(
+    marker: &PrivateOramOwnerLifecycleMarkerV2,
+) -> Result<String, PrivateOramOwnerJournalError> {
+    let mut hasher = Sha256::new();
+    hasher.update(PRESTAGE_LIFECYCLE_MARKER_DIGEST_DOMAIN);
+    hasher.update(marker.version.to_be_bytes());
+    hasher.update([match marker.kind {
+        PrivateOramOwnerLifecycleMarkerKindV2::Intent => 1,
+        PrivateOramOwnerLifecycleMarkerKindV2::AdoptionPending => 2,
+        PrivateOramOwnerLifecycleMarkerKindV2::Adopted => 3,
+        PrivateOramOwnerLifecycleMarkerKindV2::TombstonedAbsent => 4,
+        PrivateOramOwnerLifecycleMarkerKindV2::Quarantined => 5,
+    }]);
+    for value in [
+        &marker.owner_store_incarnation_digest,
+        &marker.intent_key,
+        &marker.collection_id,
+        &marker.mutation_id,
+        &marker.mutation_digest,
+        &marker.expected_aggregate_digest,
+        &marker.parent_descriptor_digest,
+        &marker.parent_lease_acquired_record_digest,
+        &marker.package_sha256,
+    ] {
+        lifecycle_hash_string(&mut hasher, value)?;
+    }
+    hasher.update(marker.lease_generation.to_be_bytes());
+    hasher.update(marker.writer_fence.to_be_bytes());
+    hasher.update(marker.owner_peer_id.to_be_bytes());
+    match &marker.prestage_receipt_digest {
+        Some(digest) => {
+            hasher.update([1]);
+            lifecycle_hash_string(&mut hasher, digest)?;
+        }
+        None => hasher.update([0]),
+    }
+    match &marker.owner_journal_descriptor_digest {
+        Some(digest) => {
+            hasher.update([1]);
+            lifecycle_hash_string(&mut hasher, digest)?;
+        }
+        None => hasher.update([0]),
+    }
+    match &marker.terminal_authority_digest {
+        Some(digest) => {
+            hasher.update([1]);
+            lifecycle_hash_string(&mut hasher, digest)?;
+        }
+        None => hasher.update([0]),
+    }
+    lifecycle_hash_optional_json(&mut hasher, marker.cleanup_authority_signer.as_ref())?;
+    lifecycle_hash_optional_json(&mut hasher, marker.signed_cleanup_authorization.as_ref())?;
+    lifecycle_hash_optional_json(&mut hasher, marker.signed_cleanup_receipt.as_ref())?;
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn lifecycle_hash_optional_json<T: Serialize>(
+    hasher: &mut Sha256,
+    value: Option<&T>,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            let bytes =
+                serde_json::to_vec(value).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+            hasher.update(
+                u64::try_from(bytes.len())
+                    .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?
+                    .to_be_bytes(),
+            );
+            hasher.update(bytes);
+        }
+        None => hasher.update([0]),
+    }
+    Ok(())
+}
+
+fn encode_private_oram_owner_lifecycle_marker_v2(
+    marker: &PrivateOramOwnerLifecycleMarkerV2,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    validate_private_oram_owner_lifecycle_marker_v2(marker)?;
+    let bytes = serde_json::to_vec(marker).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if bytes.is_empty() || bytes.len() as u64 > PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(bytes)
+}
+
+fn decode_private_oram_owner_lifecycle_marker_v2(
+    bytes: &[u8],
+) -> Result<PrivateOramOwnerLifecycleMarkerV2, PrivateOramOwnerJournalError> {
+    if bytes.is_empty() || bytes.len() as u64 > PRESTAGE_MAX_LIFECYCLE_MARKER_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let marker: PrivateOramOwnerLifecycleMarkerV2 =
+        serde_json::from_slice(bytes).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    if encode_private_oram_owner_lifecycle_marker_v2(&marker)? != bytes {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(marker)
+}
+
+fn lifecycle_hash_string(
+    hasher: &mut Sha256,
+    value: &str,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    hasher.update(
+        u64::try_from(value.len())
+            .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?
+            .to_be_bytes(),
+    );
+    hasher.update(value.as_bytes());
+    Ok(())
+}
+
+fn validate_private_oram_owner_prestage_root_entries(
+    root: &File,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    let names = directory_entry_names_open(root)?;
+    let expected = BTreeSet::from([
+        OsStr::new(PRESTAGE_INTENTS_DIR).to_owned(),
+        OsStr::new(PRESTAGE_TEMP_DIR).to_owned(),
+        OsStr::new(PRESTAGE_TERMINALS_DIR).to_owned(),
+        OsStr::new(PRESTAGE_RETIRED_DIR).to_owned(),
+        OsStr::new(PRESTAGE_QUARANTINE_DIR).to_owned(),
+        OsStr::new(PRESTAGE_RESERVATION_FENCE_DIR).to_owned(),
+        OsStr::new(PRESTAGE_SUPERBLOCK_FILE).to_owned(),
+    ]);
+    if names.into_iter().collect::<BTreeSet<_>>() != expected {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(())
+}
+
+fn validate_private_oram_owner_reservation_fence_entries(
+    fence_dir: &File,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    let names = directory_entry_names_open(fence_dir)?;
+    let allowed = BTreeSet::from([
+        OsStr::new(PRESTAGE_RESERVATION_FENCE_FILE).to_owned(),
+        OsStr::new(PRESTAGE_RESERVATION_RESOLUTION_FILE).to_owned(),
+        OsStr::new(PRESTAGE_RESERVATION_ABORT_RELEASE_FILE).to_owned(),
+    ]);
+    if !names.is_subset(&allowed) {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(())
+}
+
+fn validate_private_oram_owner_prestage_intent_entries(
+    intent_path: &Path,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    let intent = open_private_directory(intent_path)?;
+    let names = directory_entry_names_open(&intent)?;
+    let required = BTreeSet::from([
+        OsStr::new(PRESTAGE_PACKAGE_FILE).to_owned(),
+        OsStr::new(PRESTAGE_RECEIPT_FILE).to_owned(),
+        OsStr::new(PRESTAGE_INTENT_MARKER_FILE).to_owned(),
+        OsStr::new(DESCRIPTOR_FILE).to_owned(),
+        OsStr::new(FINAL_BUCKETS_FILE).to_owned(),
+        OsStr::new(STATE_FILE).to_owned(),
+    ]);
+    let names = names.into_iter().collect::<BTreeSet<_>>();
+    let allowed = required
+        .iter()
+        .cloned()
+        .chain([
+            OsStr::new(PRESTAGE_ADOPTION_PENDING_MARKER_FILE).to_owned(),
+            OsStr::new(PRESTAGE_ADOPTED_MARKER_FILE).to_owned(),
+        ])
+        .collect::<BTreeSet<_>>();
+    if !required.is_subset(&names)
+        || !names.is_subset(&allowed)
+        || (names.contains(OsStr::new(PRESTAGE_ADOPTED_MARKER_FILE))
+            && !names.contains(OsStr::new(PRESTAGE_ADOPTION_PENDING_MARKER_FILE)))
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(())
+}
+
 impl PrivateOramOwnerJournal {
     /// Creates a paired owner journal below the primary HNSW store root.
     pub fn new(primary_hnsw_store_root: impl AsRef<Path>) -> Self {
@@ -1202,6 +6054,53 @@ impl PrivateOramOwnerJournal {
     > {
         let desired = ValidatedOwnerJournal::build(validated, context)?;
         self.prepare_validated(desired)
+    }
+
+    /// Test-only direct canonical prepare. Production prestaged adoption must use the lifecycle
+    /// transaction so the prestage lock is always acquired before the canonical lock.
+    #[cfg(test)]
+    pub(crate) fn prepare_for_parent_v2(
+        &self,
+        validated: &PrivateOramValidatedOwnerPrepareV1,
+        parent: &PrivateOramOwnerPrepareParentV2,
+    ) -> Result<PrivateOramOwnerPreparedEvidenceV2, PrivateOramOwnerJournalError> {
+        let requirements = parent
+            .requirements
+            .iter()
+            .map(|requirement| PrivateOramOwnerJournalRequirementV1 {
+                kind: requirement.kind,
+                index_name: &requirement.index_name,
+                old_epoch: requirement.old_epoch,
+                new_epoch: requirement.new_epoch,
+                old_root_hash: &requirement.old_root_hash,
+                new_root_hash: &requirement.new_root_hash,
+                writeback_digest: &requirement.writeback_digest,
+            })
+            .collect::<Vec<_>>();
+        let (_, token) = self.prepare(
+            validated,
+            PrivateOramOwnerJournalPrepareContextV1 {
+                parent_descriptor_digest: &parent.parent_descriptor_digest,
+                parent_lease_acquired_record_digest: &parent.parent_lease_acquired_record_digest,
+                owner_peer_id: parent.owner_peer_id,
+                requirements: &requirements,
+            },
+        )?;
+        Ok(PrivateOramOwnerPreparedEvidenceV2 {
+            owner_peer_id: token.owner_peer_id,
+            journal_descriptor_digest: token.journal_descriptor_digest,
+            parent_descriptor_digest: token.parent_descriptor_digest,
+            parent_lease_acquired_record_digest: token.parent_lease_acquired_record_digest,
+            indexes: token
+                .indexes
+                .into_iter()
+                .map(|index| PrivateOramOwnerPreparedIndexEvidenceV2 {
+                    kind: index.kind,
+                    index_name: index.index_name,
+                    prepared_journal_digest: index.prepared_journal_digest,
+                })
+                .collect(),
+        })
     }
 
     /// Loads a self-consistent but untrusted snapshot without minting durable owner evidence.
@@ -1610,7 +6509,24 @@ impl PrivateOramOwnerJournal {
         #[cfg(not(target_os = "linux"))]
         ensure_supported_platform()?;
         let root_file = self.ensure_root()?;
-        let _root_lock = lock_private_journal_root(&root_file)?;
+        let root_lock = lock_private_journal_root(&root_file)?;
+        self.prepare_validated_under_exclusive_lock(&root_lock, desired)
+    }
+
+    fn prepare_validated_under_exclusive_lock(
+        &self,
+        root_lock: &PrivateJournalRootLock<'_>,
+        desired: ValidatedOwnerJournal,
+    ) -> Result<
+        (
+            PrivateOramOwnerJournalSnapshotV1,
+            PrivateOramDurableOwnerPreparedTokenV1,
+        ),
+        PrivateOramOwnerJournalError,
+    > {
+        root_lock.require_exclusive()?;
+        let root_file = root_lock.root;
+        validate_open_directory_at_path(root_file, &self.root)?;
         if Self::stable_root_entry_from(&root_file)? == StableRootEntry::Active {
             let existing = self.load_active_structural_from(&root_file, true, None)?;
             if !existing.exactly_matches(&desired) {
@@ -1651,12 +6567,12 @@ impl PrivateOramOwnerJournal {
         sync_private_directory(candidate.path()).map_err(|_| PrivateOramOwnerJournalError::Io)?;
         let candidate_file = open_private_directory(candidate.path())?;
 
-        validate_open_directory_at_path(&root_file, &self.root)?;
+        validate_open_directory_at_path(root_file, &self.root)?;
         let candidate_name = candidate
             .path()
             .file_name()
             .ok_or(PrivateOramOwnerJournalError::Corrupt)?;
-        match rename_directory_noreplace(&root_file, candidate_name, OsStr::new(ACTIVE_DIR)) {
+        match rename_directory_noreplace(root_file, candidate_name, OsStr::new(ACTIVE_DIR)) {
             Ok(()) => {
                 validate_open_directory_at_path(&root_file, &self.root)
                     .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
@@ -1679,6 +6595,22 @@ impl PrivateOramOwnerJournal {
             }
             Err(error) => Err(error),
         }
+    }
+
+    fn prepare_validated_with_lifecycle_guard(
+        &self,
+        lifecycle_lock: &PrivateOramOwnerLifecycleRootLock<'_>,
+        canonical_lock: &PrivateJournalRootLock<'_>,
+        desired: ValidatedOwnerJournal,
+    ) -> Result<
+        (
+            PrivateOramOwnerJournalSnapshotV1,
+            PrivateOramDurableOwnerPreparedTokenV1,
+        ),
+        PrivateOramOwnerJournalError,
+    > {
+        lifecycle_lock.require_exclusive()?;
+        self.prepare_validated_under_exclusive_lock(canonical_lock, desired)
     }
 
     fn record_terminal(
@@ -3829,6 +8761,35 @@ struct PrivateJournalRootLock<'a> {
     mode: PrivateJournalRootLockMode,
 }
 
+/// Rank-1 guard for a prestage lifecycle transaction. A canonical owner-journal lock may only be
+/// nested after this guard has been acquired and revalidated.
+struct PrivateOramOwnerLifecycleRootLock<'a> {
+    root_lock: PrivateJournalRootLock<'a>,
+    parent_lock: PrivateJournalRootLock<'a>,
+    expected_parent: &'a Path,
+    expected_root: &'a Path,
+}
+
+impl PrivateOramOwnerLifecycleRootLock<'_> {
+    fn root_lock(&self) -> &PrivateJournalRootLock<'_> {
+        &self.root_lock
+    }
+
+    fn validate_held(&self) -> Result<(), PrivateOramOwnerJournalError> {
+        if self.root_lock.mode != self.parent_lock.mode {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        validate_open_directory_at_path(self.parent_lock.root, self.expected_parent)?;
+        validate_open_directory_at_path(self.root_lock.root, self.expected_root)
+    }
+
+    fn require_exclusive(&self) -> Result<(), PrivateOramOwnerJournalError> {
+        self.parent_lock.require_exclusive()?;
+        self.root_lock.require_exclusive()?;
+        self.validate_held()
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PrivateJournalRootLockMode {
     Shared,
@@ -3857,6 +8818,42 @@ fn lock_private_journal_root(
     root: &File,
 ) -> Result<PrivateJournalRootLock<'_>, PrivateOramOwnerJournalError> {
     lock_private_journal_root_with_mode(root, PrivateJournalRootLockMode::Exclusive)
+}
+
+fn lock_private_oram_owner_lifecycle_root<'a>(
+    parent: &'a File,
+    expected_parent: &'a Path,
+    root: &'a File,
+    expected_root: &'a Path,
+) -> Result<PrivateOramOwnerLifecycleRootLock<'a>, PrivateOramOwnerJournalError> {
+    let parent_lock = lock_private_journal_root(parent)?;
+    let root_lock = lock_private_journal_root(root)?;
+    let guard = PrivateOramOwnerLifecycleRootLock {
+        root_lock,
+        parent_lock,
+        expected_parent,
+        expected_root,
+    };
+    guard.require_exclusive()?;
+    Ok(guard)
+}
+
+fn lock_private_oram_owner_lifecycle_root_shared<'a>(
+    parent: &'a File,
+    expected_parent: &'a Path,
+    root: &'a File,
+    expected_root: &'a Path,
+) -> Result<PrivateOramOwnerLifecycleRootLock<'a>, PrivateOramOwnerJournalError> {
+    let parent_lock = lock_private_journal_root_shared(parent)?;
+    let root_lock = lock_private_journal_root_shared(root)?;
+    let guard = PrivateOramOwnerLifecycleRootLock {
+        root_lock,
+        parent_lock,
+        expected_parent,
+        expected_root,
+    };
+    guard.validate_held()?;
+    Ok(guard)
 }
 
 #[cfg(target_os = "linux")]
@@ -3980,12 +8977,23 @@ fn validate_open_directory_at_path(
 fn directory_entry_names(
     path: &Path,
 ) -> Result<BTreeSet<std::ffi::OsString>, PrivateOramOwnerJournalError> {
+    directory_entry_names_bounded(path, usize::MAX, PrivateOramOwnerJournalError::Corrupt)
+}
+
+fn directory_entry_names_bounded(
+    path: &Path,
+    max_entries: usize,
+    overflow_error: PrivateOramOwnerJournalError,
+) -> Result<BTreeSet<std::ffi::OsString>, PrivateOramOwnerJournalError> {
     let mut names = BTreeSet::new();
     let entries = fs::read_dir(path).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
     for entry in entries {
         let entry = entry.map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
         if !names.insert(entry.file_name()) {
             return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        if names.len() > max_entries {
+            return Err(overflow_error);
         }
     }
     Ok(names)
@@ -4017,6 +9025,14 @@ fn open_directory_entry_path(
 fn directory_entry_names_open(
     directory: &File,
 ) -> Result<BTreeSet<std::ffi::OsString>, PrivateOramOwnerJournalError> {
+    directory_entry_names_open_bounded(directory, usize::MAX, PrivateOramOwnerJournalError::Corrupt)
+}
+
+fn directory_entry_names_open_bounded(
+    directory: &File,
+    max_entries: usize,
+    overflow_error: PrivateOramOwnerJournalError,
+) -> Result<BTreeSet<std::ffi::OsString>, PrivateOramOwnerJournalError> {
     let before = directory
         .metadata()
         .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
@@ -4026,13 +9042,13 @@ fn directory_entry_names_open(
     #[cfg(not(target_os = "linux"))]
     return Err(PrivateOramOwnerJournalError::Unsupported);
     #[allow(unreachable_code)]
-    let names = directory_entry_names(&path)?;
+    let names = directory_entry_names_bounded(&path, max_entries, overflow_error);
     let after = directory
         .metadata()
         .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
     validate_directory_metadata(&after)?;
     ensure_same_inode(&before, &after)?;
-    Ok(names)
+    names
 }
 
 fn validate_active_entry_set(path: &Path) -> Result<(), PrivateOramOwnerJournalError> {
@@ -4189,6 +9205,37 @@ fn rename_entry_noreplace(
     }
 }
 
+#[cfg(target_os = "linux")]
+fn rename_entry_replace(
+    source_directory: &File,
+    source_name: &OsStr,
+    destination_directory: &File,
+    destination_name: &OsStr,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    let source = checked_single_component_cstring(source_name)?;
+    let destination = checked_single_component_cstring(destination_name)?;
+    // SAFETY: both names are validated single components and the live, no-follow directory
+    // descriptors remain pinned across the atomic replacement.
+    let result = unsafe {
+        nix::libc::renameat(
+            source_directory.as_raw_fd(),
+            source.as_ptr(),
+            destination_directory.as_raw_fd(),
+            destination.as_ptr(),
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(nix::libc::EXDEV | nix::libc::EINVAL | nix::libc::EOPNOTSUPP) => {
+                Err(PrivateOramOwnerJournalError::Unsupported)
+            }
+            _ => Err(PrivateOramOwnerJournalError::Io),
+        }
+    }
+}
+
 #[cfg(not(target_os = "linux"))]
 fn rename_directory_noreplace(
     _root: &File,
@@ -4200,6 +9247,16 @@ fn rename_directory_noreplace(
 
 #[cfg(not(target_os = "linux"))]
 fn rename_entry_noreplace(
+    _source_directory: &File,
+    _source_name: &OsStr,
+    _destination_directory: &File,
+    _destination_name: &OsStr,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    Err(PrivateOramOwnerJournalError::Unsupported)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rename_entry_replace(
     _source_directory: &File,
     _source_name: &OsStr,
     _destination_directory: &File,
@@ -4228,6 +9285,12 @@ const fn ensure_supported_platform() -> Result<(), PrivateOramOwnerJournalError>
 
 #[cfg(test)]
 mod tests {
+    use qdrant_sec::{
+        PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_VERSION_V1, private_oram_owner_cleanup_signer_v1,
+        sign_private_oram_owner_reservation_prepare_v1,
+        validate_private_oram_owner_reservation_prepare_v1,
+    };
+    use ring::signature::Ed25519KeyPair;
     use tempfile::TempDir;
 
     use super::*;
@@ -4481,6 +9544,117 @@ mod tests {
             hnsw_root,
             journal,
         }
+    }
+
+    fn reservation_challenge(
+        lifecycle: &PrivateOramOwnerLifecycleStateV1,
+        committed_seed: u8,
+    ) -> PrivateOramOwnerReservationPrepareChallengeV1 {
+        PrivateOramOwnerReservationPrepareChallengeV1 {
+            version: PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_VERSION_V1,
+            consensus_history_id_digest: digest(1),
+            raft_group_id_digest: digest(2),
+            collection_id: "collection-a".to_string(),
+            collection_lifetime_id_digest: digest(3),
+            collection_incarnation_digest: digest(4),
+            activation_anchor_digest: digest(5),
+            capability_epoch: 7,
+            protocol_capability_digest: digest(6),
+            membership_epoch: 9,
+            reservation_intent_digest: digest(7),
+            checkpoint_context_digest: digest(8),
+            committed_challenge_digest: digest(committed_seed),
+            challenge_applied_term: 3,
+            challenge_applied_index: u64::from(committed_seed),
+            attempt_id: digest(10),
+            challenge_nonce: BASE64URL_NOPAD.encode(&[11; 16]),
+            expected_checkpoint_record_digest: digest(12),
+            expected_checkpoint_sequence: 1,
+            expected_owner_target_digest: digest(13),
+            reserved_terminal_intent_key: digest(14),
+            owner_index: 0,
+            owner_count: 1,
+            owner_enrollment_id: digest(15),
+            owner_peer_id: 11,
+            owner_store_incarnation_digest: lifecycle.owner_store_incarnation_digest.clone(),
+            authority_registry_digest: digest(16),
+            owner_registry_digest: digest(17),
+        }
+    }
+
+    #[test]
+    fn reservation_prepare_does_not_create_an_unenrolled_store() {
+        let fixture = fixture();
+        let store = PrivateOramOwnerPrestageStoreV2::new(&fixture.hnsw_root);
+        let lifecycle = private_oram_owner_lifecycle_genesis_state_v1(digest(20)).unwrap();
+        let challenge = reservation_challenge(&lifecycle, 21);
+
+        assert_eq!(
+            store.prepare_reservation_fence_v1(&challenge, &lifecycle),
+            Err(PrivateOramOwnerJournalError::NotEnrolled)
+        );
+        assert!(!store.root_path().exists());
+    }
+
+    #[test]
+    fn bounded_directory_scan_rejects_before_collecting_beyond_the_limit() {
+        let temp = TempDir::new().unwrap();
+        let directory_path = temp.path().join("bounded");
+        create_private_directory(&directory_path).unwrap();
+        for index in 0..=PRESTAGE_MAX_TERMINAL_RECORDS {
+            fs::write(directory_path.join(format!("entry-{index}")), []).unwrap();
+        }
+        let directory = open_private_directory(&directory_path).unwrap();
+
+        assert_eq!(
+            directory_entry_names_open_bounded(
+                &directory,
+                PRESTAGE_MAX_TERMINAL_RECORDS,
+                PrivateOramOwnerJournalError::Corrupt,
+            ),
+            Err(PrivateOramOwnerJournalError::Corrupt)
+        );
+    }
+
+    #[test]
+    fn reservation_prepare_requires_durable_exclusive_fence_before_signing() {
+        let fixture = fixture();
+        let store = PrivateOramOwnerPrestageStoreV2::new(&fixture.hnsw_root);
+        let lifecycle = store
+            .inspect_lifecycle_v2(&digest(14))
+            .unwrap()
+            .lifecycle_state()
+            .clone();
+        let challenge = reservation_challenge(&lifecycle, 18);
+        let fence = store
+            .prepare_reservation_fence_v1(&challenge, &lifecycle)
+            .unwrap();
+        let replay = store
+            .prepare_reservation_fence_v1(&challenge, &lifecycle)
+            .unwrap();
+        assert_eq!(fence, replay);
+
+        let key = Ed25519KeyPair::from_seed_unchecked(&[41; 32]).unwrap();
+        let signer = private_oram_owner_cleanup_signer_v1(&key, 2).unwrap();
+        let prepare = sign_private_oram_owner_reservation_prepare_v1(
+            &key,
+            fence.challenge().clone(),
+            fence.lifecycle_state().clone(),
+            fence.local_terminal_generation(),
+            fence.fence_record_digest().to_string(),
+            signer.clone(),
+        )
+        .unwrap();
+        let _verified = validate_private_oram_owner_reservation_prepare_v1(
+            &prepare, &challenge, &signer, &lifecycle,
+        )
+        .unwrap();
+
+        let conflicting = reservation_challenge(&lifecycle, 19);
+        assert_eq!(
+            store.prepare_reservation_fence_v1(&conflicting, &lifecycle),
+            Err(PrivateOramOwnerJournalError::ConcurrentMutation)
+        );
     }
 
     fn active_path(fixture: &JournalFixture) -> PathBuf {
