@@ -148,6 +148,27 @@ impl PrivateOramActivationAuthorityLocatorV1 {
     pub fn manifest_digest(&self) -> &str {
         &self.manifest_digest
     }
+
+    pub(in crate::content_manager) fn from_verified_parts(
+        registry_generation: u64,
+        manifest_digest: String,
+    ) -> Self {
+        Self {
+            registry_generation,
+            manifest_digest,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_parts_for_test(
+        registry_generation: u64,
+        manifest_digest: impl Into<String>,
+    ) -> Self {
+        Self {
+            registry_generation,
+            manifest_digest: manifest_digest.into(),
+        }
+    }
 }
 
 /// Authority verified from the dedicated persistent value while its read lock was held.
@@ -209,6 +230,15 @@ impl PrivateOramActivationAuthorityCurrentAtReadV1 {
         match &self.view {
             PrivateOramActivationAuthorityAtReadViewV1::Empty => None,
             PrivateOramActivationAuthorityAtReadViewV1::V1(verified) => Some(verified.manifest()),
+        }
+    }
+
+    pub(crate) fn verified_manifest(
+        &self,
+    ) -> Option<&VerifiedSignedPrivateOramActivationAuthorityManifestV1> {
+        match &self.view {
+            PrivateOramActivationAuthorityAtReadViewV1::Empty => None,
+            PrivateOramActivationAuthorityAtReadViewV1::V1(verified) => Some(verified),
         }
     }
 
@@ -440,7 +470,7 @@ pub(crate) fn private_oram_activation_authority_fixture_v1_for_test() -> (
         required_binary_capability_digest: BASE64URL_NOPAD.encode(&[2; 32]),
         authority_key_epoch: authority.key_epoch,
         authority_key_id: authority.key_id.clone(),
-        peers: vec![peer(11, 21), peer(13, 22)],
+        peers: vec![peer(7, 8), peer(9, 19), peer(11, 21), peer(13, 22)],
     };
     let trust_anchor = PrivateOramActivationAuthorityTrustAnchorV1::from_external_configuration(
         authority,

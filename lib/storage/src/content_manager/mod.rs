@@ -71,6 +71,10 @@ pub mod consensus_ops {
     pub const PRIVATE_ORAM_MUTATION_RECEIPT_VERSION: u16 = 2;
     pub const PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION: u16 = 2;
     pub const PRIVATE_ORAM_MUTATION_CLEAR_RECEIPT_VERSION: u16 = 1;
+    pub const PRIVATE_ORAM_MUTATION_ACTIVATION_BARRIER_VERSION: u16 = 1;
+    pub const PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION: u16 = 6;
+    pub const PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION_V7: u16 = 7;
+    pub const PRIVATE_ORAM_MUTATION_ACTIVATION_PROOF_MAX_BYTES: usize = 4 * 1024 * 1024;
 
     #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone, Copy)]
     #[serde(rename_all = "snake_case")]
@@ -464,6 +468,39 @@ pub mod consensus_ops {
         }
     }
 
+    /// A Raft-applied, read-only fence for coordinator recovery side effects.
+    ///
+    /// The expected slot is deliberately carried through consensus. Applying this operation
+    /// confirms that the exact mutation generation is still authoritative and commits the Raft
+    /// apply cursor in the same durable persistent-state transaction.
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct ConfirmPrivateOramMutationAuthorityV2 {
+        pub key: PrivateOramMutationKey,
+        pub expected: PrivateOramMutationLeaseSlotV2,
+    }
+
+    impl fmt::Debug for ConfirmPrivateOramMutationAuthorityV2 {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("ConfirmPrivateOramMutationAuthorityV2")
+                .field("collection_id", &"[redacted]")
+                .field("generation", &"[redacted]")
+                .field(
+                    "owner_peer_id",
+                    &self
+                        .expected
+                        .active
+                        .as_ref()
+                        .map(|lease| lease.owner_peer_id),
+                )
+                .field(
+                    "active_phase",
+                    &self.expected.active.as_ref().map(|lease| &lease.phase),
+                )
+                .finish()
+        }
+    }
+
     #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
     #[serde(deny_unknown_fields)]
     pub struct ApplyPrivateOramMutation {
@@ -486,6 +523,576 @@ pub mod consensus_ops {
                 .field("new_state_sequence", &self.new_state.state_sequence)
                 .field("index_count", &self.new_state.indexes.len())
                 .finish()
+        }
+    }
+
+    /// Post-activation mutation command. The committed Raft entry supplies its own apply locator;
+    /// neither that locator nor the resulting outer authority binding is accepted from callers.
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct ApplyPrivateOramMutationMaterialV2 {
+        version: u16,
+        key: PrivateOramMutationKey,
+        expected_aggregate_digest: String,
+        transition: PrivateOramMutationMaterialTransitionV2,
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(rename_all = "snake_case", deny_unknown_fields)]
+    pub(crate) enum PrivateOramMutationMaterialTransitionV2 {
+        OwnerEnrollmentPrepared {
+            prepared_canonical_json: String,
+        },
+        OwnerEnrollmentActivated {
+            commitment_canonical_json: String,
+        },
+        AppendReservationChallengePrepared {
+            challenge_canonical_json: String,
+        },
+        AppendReservationFinalizedV3 {
+            reservation_canonical_json: String,
+        },
+        AppendReservationChallengeCancelled {
+            cancellation_canonical_json: String,
+        },
+        AppendReservationOutcomeAcknowledged {
+            acknowledgement_canonical_json: String,
+        },
+        AppendReservation {
+            reservation_canonical_json: String,
+        },
+        AppendPrepared {
+            recovery_manifest_canonical_json: String,
+        },
+        ReservedAttemptRejected {
+            reservation_canonical_json: String,
+        },
+        Admission {
+            lease: PrivateOramMutationLease,
+            recovery_manifest_canonical_json: String,
+        },
+        AdmissionRejected {
+            lease: PrivateOramMutationLease,
+            recovery_manifest_canonical_json: String,
+        },
+        Renewal {
+            lease: PrivateOramMutationLease,
+        },
+        AbortDecision {
+            lease: PrivateOramMutationLease,
+        },
+        ConsensusCommit {
+            mutation_lease_generation: u64,
+            new_state: PrivateOramConsensusCollectionStateV2,
+        },
+        ParentProgress {
+            watermark_canonical_json: String,
+        },
+        RecoveryCapsulesReady {
+            expectation_canonical_json: String,
+        },
+        CleanupWitness {
+            expectation_canonical_json: String,
+        },
+        ClearPending {
+            clear_attempt_id_digest: String,
+        },
+        Clear,
+        ClearAcknowledgement,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum PrivateOramMutationMaterialTransitionKindV2 {
+        OwnerEnrollmentPrepared,
+        OwnerEnrollmentActivated,
+        AppendReservationChallengePrepared,
+        AppendReservationFinalizedV3,
+        AppendReservationChallengeCancelled,
+        AppendReservationOutcomeAcknowledged,
+        AppendReservation,
+        AppendPrepared,
+        ReservedAttemptRejected,
+        Admission,
+        AdmissionRejected,
+        Renewal,
+        AbortDecision,
+        ConsensusCommit,
+        ParentProgress,
+        RecoveryCapsulesReady,
+        CleanupWitness,
+        ClearPending,
+        Clear,
+        ClearAcknowledgement,
+    }
+
+    impl ApplyPrivateOramMutationMaterialV2 {
+        pub(crate) fn owner_enrollment_prepared(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            prepared_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::OwnerEnrollmentPrepared {
+                    prepared_canonical_json,
+                },
+            }
+        }
+
+        pub(crate) fn owner_enrollment_activated(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            commitment_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::OwnerEnrollmentActivated {
+                    commitment_canonical_json,
+                },
+            }
+        }
+
+        pub(crate) fn append_reservation(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            reservation_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::AppendReservation {
+                    reservation_canonical_json,
+                },
+            }
+        }
+
+        pub(crate) fn append_reservation_challenge_prepared_v3(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            challenge_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION_V7,
+                key,
+                expected_aggregate_digest,
+                transition:
+                    PrivateOramMutationMaterialTransitionV2::AppendReservationChallengePrepared {
+                        challenge_canonical_json,
+                    },
+            }
+        }
+
+        pub(crate) fn append_reservation_finalized_v3(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            reservation_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION_V7,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::AppendReservationFinalizedV3 {
+                    reservation_canonical_json,
+                },
+            }
+        }
+
+        pub(crate) fn append_reservation_challenge_cancelled_v3(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            cancellation_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION_V7,
+                key,
+                expected_aggregate_digest,
+                transition:
+                    PrivateOramMutationMaterialTransitionV2::AppendReservationChallengeCancelled {
+                        cancellation_canonical_json,
+                    },
+            }
+        }
+
+        pub(crate) fn append_reservation_outcome_acknowledged_v3(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            acknowledgement_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION_V7,
+                key,
+                expected_aggregate_digest,
+                transition:
+                    PrivateOramMutationMaterialTransitionV2::AppendReservationOutcomeAcknowledged {
+                        acknowledgement_canonical_json,
+                    },
+            }
+        }
+
+        pub(crate) fn append_prepared(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            recovery_manifest_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::AppendPrepared {
+                    recovery_manifest_canonical_json,
+                },
+            }
+        }
+
+        pub(crate) fn reserved_attempt_rejected(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            reservation_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::ReservedAttemptRejected {
+                    reservation_canonical_json,
+                },
+            }
+        }
+
+        pub(crate) fn admission(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            lease: PrivateOramMutationLease,
+            recovery_manifest_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::Admission {
+                    lease,
+                    recovery_manifest_canonical_json,
+                },
+            }
+        }
+
+        pub(crate) fn admission_rejected(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            lease: PrivateOramMutationLease,
+            recovery_manifest_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::AdmissionRejected {
+                    lease,
+                    recovery_manifest_canonical_json,
+                },
+            }
+        }
+
+        pub(crate) fn renewal(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            lease: PrivateOramMutationLease,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::Renewal { lease },
+            }
+        }
+
+        pub(crate) fn abort_decision(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            lease: PrivateOramMutationLease,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::AbortDecision { lease },
+            }
+        }
+
+        pub(crate) fn consensus_commit(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            mutation_lease_generation: u64,
+            new_state: PrivateOramConsensusCollectionStateV2,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::ConsensusCommit {
+                    mutation_lease_generation,
+                    new_state,
+                },
+            }
+        }
+
+        pub(in crate::content_manager) fn parent_progress(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            watermark_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::ParentProgress {
+                    watermark_canonical_json,
+                },
+            }
+        }
+
+        pub(in crate::content_manager) fn recovery_capsules_ready(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            expectation_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::RecoveryCapsulesReady {
+                    expectation_canonical_json,
+                },
+            }
+        }
+
+        pub(in crate::content_manager) fn cleanup_witness(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            expectation_canonical_json: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::CleanupWitness {
+                    expectation_canonical_json,
+                },
+            }
+        }
+
+        pub(in crate::content_manager) fn clear_pending(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+            clear_attempt_id_digest: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::ClearPending {
+                    clear_attempt_id_digest,
+                },
+            }
+        }
+
+        pub(in crate::content_manager) fn clear(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::Clear,
+            }
+        }
+
+        pub(in crate::content_manager) fn clear_acknowledgement(
+            key: PrivateOramMutationKey,
+            expected_aggregate_digest: String,
+        ) -> Self {
+            Self {
+                version: PRIVATE_ORAM_MUTATION_MATERIAL_OPERATION_VERSION,
+                key,
+                expected_aggregate_digest,
+                transition: PrivateOramMutationMaterialTransitionV2::ClearAcknowledgement,
+            }
+        }
+
+        pub(crate) fn version(&self) -> u16 {
+            self.version
+        }
+
+        pub(crate) fn key(&self) -> &PrivateOramMutationKey {
+            &self.key
+        }
+
+        pub(crate) fn expected_aggregate_digest(&self) -> &str {
+            &self.expected_aggregate_digest
+        }
+
+        pub(crate) fn transition(&self) -> &PrivateOramMutationMaterialTransitionV2 {
+            &self.transition
+        }
+
+        pub(crate) fn transition_kind(&self) -> PrivateOramMutationMaterialTransitionKindV2 {
+            match &self.transition {
+                PrivateOramMutationMaterialTransitionV2::OwnerEnrollmentPrepared { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::OwnerEnrollmentPrepared
+                }
+                PrivateOramMutationMaterialTransitionV2::OwnerEnrollmentActivated { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::OwnerEnrollmentActivated
+                }
+                PrivateOramMutationMaterialTransitionV2::AppendReservationChallengePrepared {
+                    ..
+                } => {
+                    PrivateOramMutationMaterialTransitionKindV2::AppendReservationChallengePrepared
+                }
+                PrivateOramMutationMaterialTransitionV2::AppendReservationFinalizedV3 {
+                    ..
+                } => PrivateOramMutationMaterialTransitionKindV2::AppendReservationFinalizedV3,
+                PrivateOramMutationMaterialTransitionV2::AppendReservationChallengeCancelled {
+                    ..
+                } => {
+                    PrivateOramMutationMaterialTransitionKindV2::AppendReservationChallengeCancelled
+                }
+                PrivateOramMutationMaterialTransitionV2::AppendReservationOutcomeAcknowledged {
+                    ..
+                } => {
+                    PrivateOramMutationMaterialTransitionKindV2::AppendReservationOutcomeAcknowledged
+                }
+                PrivateOramMutationMaterialTransitionV2::AppendReservation { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::AppendReservation
+                }
+                PrivateOramMutationMaterialTransitionV2::AppendPrepared { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::AppendPrepared
+                }
+                PrivateOramMutationMaterialTransitionV2::ReservedAttemptRejected { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::ReservedAttemptRejected
+                }
+                PrivateOramMutationMaterialTransitionV2::Admission { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::Admission
+                }
+                PrivateOramMutationMaterialTransitionV2::AdmissionRejected { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::AdmissionRejected
+                }
+                PrivateOramMutationMaterialTransitionV2::Renewal { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::Renewal
+                }
+                PrivateOramMutationMaterialTransitionV2::AbortDecision { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::AbortDecision
+                }
+                PrivateOramMutationMaterialTransitionV2::ConsensusCommit { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::ConsensusCommit
+                }
+                PrivateOramMutationMaterialTransitionV2::ParentProgress { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::ParentProgress
+                }
+                PrivateOramMutationMaterialTransitionV2::RecoveryCapsulesReady { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::RecoveryCapsulesReady
+                }
+                PrivateOramMutationMaterialTransitionV2::CleanupWitness { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::CleanupWitness
+                }
+                PrivateOramMutationMaterialTransitionV2::ClearPending { .. } => {
+                    PrivateOramMutationMaterialTransitionKindV2::ClearPending
+                }
+                PrivateOramMutationMaterialTransitionV2::Clear => {
+                    PrivateOramMutationMaterialTransitionKindV2::Clear
+                }
+                PrivateOramMutationMaterialTransitionV2::ClearAcknowledgement => {
+                    PrivateOramMutationMaterialTransitionKindV2::ClearAcknowledgement
+                }
+            }
+        }
+    }
+
+    impl fmt::Debug for ApplyPrivateOramMutationMaterialV2 {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let mut debug = f.debug_struct("ApplyPrivateOramMutationMaterialV2");
+            debug
+                .field("version", &self.version)
+                .field("collection_id", &"[redacted]")
+                .field("expected_aggregate_digest", &"[redacted]")
+                .field("transition_kind", &self.transition_kind());
+            match &self.transition {
+                PrivateOramMutationMaterialTransitionV2::OwnerEnrollmentPrepared {
+                    prepared_canonical_json,
+                } => debug.field("payload_bytes", &prepared_canonical_json.len()),
+                PrivateOramMutationMaterialTransitionV2::OwnerEnrollmentActivated {
+                    commitment_canonical_json,
+                } => debug.field("payload_bytes", &commitment_canonical_json.len()),
+                PrivateOramMutationMaterialTransitionV2::AppendReservationChallengePrepared {
+                    challenge_canonical_json,
+                } => debug.field("payload_bytes", &challenge_canonical_json.len()),
+                PrivateOramMutationMaterialTransitionV2::AppendReservationChallengeCancelled {
+                    cancellation_canonical_json,
+                } => debug.field("payload_bytes", &cancellation_canonical_json.len()),
+                PrivateOramMutationMaterialTransitionV2::AppendReservationOutcomeAcknowledged {
+                    acknowledgement_canonical_json,
+                } => debug.field("payload_bytes", &acknowledgement_canonical_json.len()),
+                PrivateOramMutationMaterialTransitionV2::AppendReservationFinalizedV3 {
+                    reservation_canonical_json,
+                }
+                | PrivateOramMutationMaterialTransitionV2::AppendReservation {
+                    reservation_canonical_json,
+                }
+                | PrivateOramMutationMaterialTransitionV2::ReservedAttemptRejected {
+                    reservation_canonical_json,
+                } => debug.field("payload_bytes", &reservation_canonical_json.len()),
+                PrivateOramMutationMaterialTransitionV2::AppendPrepared {
+                    recovery_manifest_canonical_json,
+                } => debug.field(
+                    "recovery_manifest_bytes",
+                    &recovery_manifest_canonical_json.len(),
+                ),
+                PrivateOramMutationMaterialTransitionV2::Admission {
+                    lease,
+                    recovery_manifest_canonical_json,
+                }
+                | PrivateOramMutationMaterialTransitionV2::AdmissionRejected {
+                    lease,
+                    recovery_manifest_canonical_json,
+                } => debug
+                    .field("generation", &"[redacted]")
+                    .field("owner_peer_id", &lease.owner_peer_id)
+                    .field("phase", &lease.phase)
+                    .field(
+                        "recovery_manifest_bytes",
+                        &recovery_manifest_canonical_json.len(),
+                    ),
+                PrivateOramMutationMaterialTransitionV2::Renewal { lease }
+                | PrivateOramMutationMaterialTransitionV2::AbortDecision { lease } => debug
+                    .field("generation", &"[redacted]")
+                    .field("owner_peer_id", &lease.owner_peer_id)
+                    .field("phase", &lease.phase),
+                PrivateOramMutationMaterialTransitionV2::ConsensusCommit {
+                    mutation_lease_generation: _,
+                    new_state,
+                } => debug
+                    .field("generation", &"[redacted]")
+                    .field("new_state_sequence", &new_state.state_sequence)
+                    .field("index_count", &new_state.indexes.len()),
+                PrivateOramMutationMaterialTransitionV2::ParentProgress {
+                    watermark_canonical_json,
+                } => debug.field("payload_bytes", &watermark_canonical_json.len()),
+                PrivateOramMutationMaterialTransitionV2::RecoveryCapsulesReady {
+                    expectation_canonical_json,
+                } => debug.field("payload_bytes", &expectation_canonical_json.len()),
+                PrivateOramMutationMaterialTransitionV2::CleanupWitness {
+                    expectation_canonical_json,
+                } => debug.field("payload_bytes", &expectation_canonical_json.len()),
+                PrivateOramMutationMaterialTransitionV2::ClearPending { .. }
+                | PrivateOramMutationMaterialTransitionV2::Clear
+                | PrivateOramMutationMaterialTransitionV2::ClearAcknowledgement => &mut debug,
+            };
+            debug.finish()
         }
     }
 
@@ -1933,6 +2540,90 @@ pub mod consensus_ops {
         StorageError::bad_request("private ORAM resharding layout transition is invalid")
     }
 
+    #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone, Copy)]
+    #[serde(rename_all = "snake_case", deny_unknown_fields)]
+    pub enum PrivateOramMutationActivationBarrierPhaseV2 {
+        PrepareTaggedWrites,
+        EnableMutationV2,
+        PrepareReservationV3Reads,
+        EnableReservationV3Writes,
+    }
+
+    /// Canonical aggregate evidence carried by the two-entry mixed-version activation barrier.
+    ///
+    /// The proof is stored as exact canonical JSON so this consensus operation remains hashable
+    /// without treating a caller-supplied digest as the authority for nested evidence.
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct PrivateOramMutationActivationBarrierV2 {
+        version: u16,
+        phase: PrivateOramMutationActivationBarrierPhaseV2,
+        proof_canonical_json: String,
+        proof_digest: String,
+    }
+
+    impl fmt::Debug for PrivateOramMutationActivationBarrierV2 {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramMutationActivationBarrierV2")
+                .field("version", &self.version)
+                .field("phase", &self.phase)
+                .field("proof_bytes", &self.proof_canonical_json.len())
+                .field("proof_digest", &"[redacted]")
+                .finish()
+        }
+    }
+
+    impl PrivateOramMutationActivationBarrierV2 {
+        pub fn try_new(
+            phase: PrivateOramMutationActivationBarrierPhaseV2,
+            proof: &qdrant_sec::PrivateOramMixedVersionActivationProofV1,
+        ) -> Result<Self, StorageError> {
+            let proof_canonical_json = serde_json::to_string(proof).map_err(|_| {
+                StorageError::bad_request(
+                    "private ORAM mutation activation proof encoding is invalid",
+                )
+            })?;
+            let operation = Self {
+                version: PRIVATE_ORAM_MUTATION_ACTIVATION_BARRIER_VERSION,
+                phase,
+                proof_digest: proof.proof_digest().to_string(),
+                proof_canonical_json,
+            };
+            operation.decode_proof()?;
+            Ok(operation)
+        }
+
+        pub fn phase(&self) -> PrivateOramMutationActivationBarrierPhaseV2 {
+            self.phase
+        }
+
+        pub fn proof_digest(&self) -> &str {
+            &self.proof_digest
+        }
+
+        pub fn decode_proof(
+            &self,
+        ) -> Result<qdrant_sec::PrivateOramMixedVersionActivationProofV1, StorageError> {
+            let invalid =
+                || StorageError::bad_request("private ORAM mutation activation proof is invalid");
+            if self.version != PRIVATE_ORAM_MUTATION_ACTIVATION_BARRIER_VERSION
+                || self.proof_canonical_json.is_empty()
+                || self.proof_canonical_json.len()
+                    > PRIVATE_ORAM_MUTATION_ACTIVATION_PROOF_MAX_BYTES
+                || decode_private_oram_sha256_digest(&self.proof_digest).is_none()
+            {
+                return Err(invalid());
+            }
+            let proof: qdrant_sec::PrivateOramMixedVersionActivationProofV1 =
+                serde_json::from_str(&self.proof_canonical_json).map_err(|_| invalid())?;
+            let canonical = serde_json::to_string(&proof).map_err(|_| invalid())?;
+            if canonical != self.proof_canonical_json || proof.proof_digest() != self.proof_digest {
+                return Err(invalid());
+            }
+            Ok(proof)
+        }
+    }
+
     /// Operation that should pass consensus
     #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
     pub enum ConsensusOperations {
@@ -1954,7 +2645,10 @@ pub mod consensus_ops {
         CompareAndSwapPrivateOramSessionLease(CompareAndSwapPrivateOramSessionLease),
         InitializePrivateOramMutationState(InitializePrivateOramMutationState),
         CompareAndSwapPrivateOramMutationLease(CompareAndSwapPrivateOramMutationLease),
+        ConfirmPrivateOramMutationAuthorityV2(ConfirmPrivateOramMutationAuthorityV2),
         ApplyPrivateOramMutation(ApplyPrivateOramMutation),
+        ActivatePrivateOramMutationV2(PrivateOramMutationActivationBarrierV2),
+        ApplyPrivateOramMutationMaterialV2(ApplyPrivateOramMutationMaterialV2),
         CompareAndSwapPrivateOramLayout(CompareAndSwapPrivateOramLayout),
         RequestSnapshot,
         ReportSnapshot {
@@ -2155,6 +2849,10 @@ pub mod consensus_ops {
                     .field("expected_has_active", &operation.expected.active.is_some())
                     .field("new_has_active", &operation.new.active.is_some())
                     .finish(),
+                ConsensusOperations::ConfirmPrivateOramMutationAuthorityV2(operation) => f
+                    .debug_tuple("ConfirmPrivateOramMutationAuthorityV2")
+                    .field(operation)
+                    .finish(),
                 ConsensusOperations::ApplyPrivateOramMutation(operation) => f
                     .debug_struct("ApplyPrivateOramMutation")
                     .field(
@@ -2167,6 +2865,14 @@ pub mod consensus_ops {
                     )
                     .field("new_state_sequence", &operation.new_state.state_sequence)
                     .field("index_count", &operation.new_state.indexes.len())
+                    .finish(),
+                ConsensusOperations::ActivatePrivateOramMutationV2(operation) => f
+                    .debug_tuple("ActivatePrivateOramMutationV2")
+                    .field(operation)
+                    .finish(),
+                ConsensusOperations::ApplyPrivateOramMutationMaterialV2(operation) => f
+                    .debug_tuple("ApplyPrivateOramMutationMaterialV2")
+                    .field(operation)
                     .finish(),
                 ConsensusOperations::ApplyPrivateOramExternalRecovery(operation) => f
                     .debug_tuple("ApplyPrivateOramExternalRecovery")
@@ -2329,12 +3035,14 @@ mod test {
     use uuid::Uuid;
 
     use super::collection_meta_ops::CollectionMetaOperations;
+    use super::consensus::private_oram_mutation_activation_barrier::private_oram_mutation_activation_barrier_fixture_v2_for_test;
     use super::consensus_ops::{
         ApplyPrivateOramMutation, CompareAndSwapPrivateOramEpoch,
         CompareAndSwapPrivateOramExternalRecovery, CompareAndSwapPrivateOramLayout,
         CompareAndSwapPrivateOramMutationLease, CompareAndSwapPrivateOramSessionLease,
         ConsensusOperations, InitializePrivateOramMutationState,
-        PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION, PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
+        PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION,
+        PRIVATE_ORAM_MUTATION_ACTIVATION_PROOF_MAX_BYTES, PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
         PRIVATE_ORAM_MUTATION_RECEIPT_VERSION, PrivateOramCollectionLayoutTransition,
         PrivateOramConsensusCollectionIndexStateV2, PrivateOramConsensusCollectionStateV2,
         PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramConsensusTransitionV2,
@@ -2342,12 +3050,12 @@ mod test {
         PrivateOramExternalRecoveryLeasePhase, PrivateOramExternalRecoveryOperation,
         PrivateOramExternalRecoveryPhase, PrivateOramExternalRecoveryState, PrivateOramIndexKind,
         PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding,
-        PrivateOramLayoutTransitionState, PrivateOramMutationKey, PrivateOramMutationLease,
-        PrivateOramMutationLeasePhase, PrivateOramMutationLeaseSlotV2,
-        PrivateOramMutationReceiptV2, PrivateOramReshardingLayoutTransition,
-        PrivateOramSessionLease, PrivateOramShardKeyLayoutChange,
-        PrivateOramShardKeyLayoutChangeKind, PrivateOramShardLayoutEntry,
-        canonical_private_oram_index_state_digest,
+        PrivateOramLayoutTransitionState, PrivateOramMutationActivationBarrierV2,
+        PrivateOramMutationKey, PrivateOramMutationLease, PrivateOramMutationLeasePhase,
+        PrivateOramMutationLeaseSlotV2, PrivateOramMutationReceiptV2,
+        PrivateOramReshardingLayoutTransition, PrivateOramSessionLease,
+        PrivateOramShardKeyLayoutChange, PrivateOramShardKeyLayoutChangeKind,
+        PrivateOramShardLayoutEntry, canonical_private_oram_index_state_digest,
         canonical_private_oram_resharding_post_layout_digest,
         canonical_private_oram_shard_layout_digest,
         classify_private_oram_replica_removal_layout_transition,
@@ -3812,6 +4520,49 @@ mod test {
             );
             assert!(!error.contains(malformed_digest_sentinel), "{error}");
         }
+    }
+
+    #[test]
+    fn private_oram_activation_operation_is_canonical_bounded_and_redacted() {
+        let fixture = private_oram_mutation_activation_barrier_fixture_v2_for_test();
+        let operation = fixture.prepare_operation;
+        let encoded = serde_cbor::to_vec(&operation).unwrap();
+        let decoded: PrivateOramMutationActivationBarrierV2 =
+            serde_cbor::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, operation);
+        assert_eq!(
+            decoded.decode_proof().unwrap().proof_digest(),
+            operation.proof_digest()
+        );
+
+        let rendered = format!(
+            "{:?} {:?}",
+            operation,
+            ConsensusOperations::ActivatePrivateOramMutationV2(operation.clone()).redacted_log()
+        );
+        assert!(!rendered.contains(operation.proof_digest()));
+        assert!(!rendered.contains("proof_canonical_json"));
+
+        let mut noncanonical = serde_json::to_value(&operation).unwrap();
+        let proof = noncanonical["proof_canonical_json"].as_str().unwrap();
+        noncanonical["proof_canonical_json"] = serde_json::Value::String(format!(" {proof}"));
+        let noncanonical: PrivateOramMutationActivationBarrierV2 =
+            serde_json::from_value(noncanonical).unwrap();
+        assert!(noncanonical.decode_proof().is_err());
+
+        let mut wrong_digest = serde_json::to_value(&operation).unwrap();
+        wrong_digest["proof_digest"] = serde_json::Value::String(BASE64URL_NOPAD.encode(&[99; 32]));
+        let wrong_digest: PrivateOramMutationActivationBarrierV2 =
+            serde_json::from_value(wrong_digest).unwrap();
+        assert!(wrong_digest.decode_proof().is_err());
+
+        let mut oversized = serde_json::to_value(&operation).unwrap();
+        oversized["proof_canonical_json"] = serde_json::Value::String(
+            "x".repeat(PRIVATE_ORAM_MUTATION_ACTIVATION_PROOF_MAX_BYTES + 1),
+        );
+        let oversized: PrivateOramMutationActivationBarrierV2 =
+            serde_json::from_value(oversized).unwrap();
+        assert!(oversized.decode_proof().is_err());
     }
 
     #[test]
