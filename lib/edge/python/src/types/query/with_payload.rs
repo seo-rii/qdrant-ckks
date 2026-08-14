@@ -1,6 +1,7 @@
 use bytemuck::{TransparentWrapper, TransparentWrapperAlloc as _};
 use derive_more::Into;
 use pyo3::IntoPyObjectExt as _;
+use pyo3::exceptions::PyNotImplementedError;
 use pyo3::prelude::*;
 use segment::types::{
     PayloadSelector, PayloadSelectorExclude, PayloadSelectorInclude, WithPayloadInterface,
@@ -28,6 +29,7 @@ impl FromPyObject<'_, '_> for PyWithPayload {
             match with_payload {
                 WithPayloadInterface::Bool(_) => {}
                 WithPayloadInterface::Fields(_) => {}
+                WithPayloadInterface::Encrypted(_) => {}
                 WithPayloadInterface::Selector(_) => {}
             }
         }
@@ -68,6 +70,9 @@ impl<'py> IntoPyObject<'py> for &PyWithPayload {
             WithPayloadInterface::Selector(selector) => PyPayloadSelector::wrap_ref(selector)
                 .clone()
                 .into_bound_py_any(py),
+            WithPayloadInterface::Encrypted(_) => Err(PyNotImplementedError::new_err(
+                "encrypted payload read policies are not supported by qdrant-edge Python",
+            )),
         }
     }
 }
@@ -80,6 +85,7 @@ impl Repr for PyWithPayload {
             WithPayloadInterface::Selector(selector) => {
                 PyPayloadSelector::wrap_ref(selector).fmt(f)
             }
+            WithPayloadInterface::Encrypted(_) => f.write_str("Encrypted([redacted])"),
         }
     }
 }
@@ -162,5 +168,26 @@ impl Repr for PyPayloadSelectorInterface {
         };
 
         f.complex_enum::<Self>(repr, &[("keys", keys)])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use segment::types::{EncryptedPayloadReadMode, PayloadEncryptedReadPolicy};
+
+    use super::*;
+
+    #[test]
+    fn encrypted_payload_policy_repr_is_redacted() {
+        for encrypted_payload in [
+            EncryptedPayloadReadMode::Raw,
+            EncryptedPayloadReadMode::Redacted,
+            EncryptedPayloadReadMode::Decrypted,
+        ] {
+            let with_payload = PyWithPayload(WithPayloadInterface::Encrypted(
+                PayloadEncryptedReadPolicy { encrypted_payload },
+            ));
+            assert_eq!(with_payload.repr(), "Encrypted([redacted])");
+        }
     }
 }
