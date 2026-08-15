@@ -3355,19 +3355,53 @@ where
     let mut pending = VecDeque::from([params.entry_node_id]);
     let mut queued = BTreeSet::from([params.entry_node_id]);
     let mut visited = BTreeSet::new();
-    let mut hits = Vec::new();
+    let mut expansion_frontier: Vec<(f32, [u8; 32], Vec<[u8; 32]>)> = Vec::new();
+    let mut hits: Vec<PrivateHnswSearchHit> = Vec::new();
     let mut accessed_leaf_labels = Vec::new();
 
     'search: for _ in 0..params.fixed_steps {
         let (node_id, padding_access) = loop {
-            if hits.len() < params.ef {
-                if let Some(candidate_node_id) = pending.pop_front() {
-                    queued.remove(&candidate_node_id);
-                    if visited.insert(candidate_node_id) {
-                        break (candidate_node_id, false);
-                    }
+            if let Some(candidate_node_id) = pending.pop_front() {
+                queued.remove(&candidate_node_id);
+                if visited.insert(candidate_node_id) {
+                    break (candidate_node_id, false);
+                }
+                continue;
+            }
+
+            // Neighbor distances are unknown until their ORAM blocks are fetched, so choose the
+            // nearest expansion only after the current adjacency batch has been evaluated.
+            let next_frontier_index = expansion_frontier
+                .iter()
+                .enumerate()
+                .min_by(|(_, lhs), (_, rhs)| {
+                    lhs.0.total_cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1))
+                })
+                .map(|(index, _)| index);
+            if let Some(frontier_index) = next_frontier_index {
+                let (candidate_distance, _, neighbor_ids) =
+                    expansion_frontier.swap_remove(frontier_index);
+                // Fixed-budget searches spend the remaining accesses on padding anyway, so only
+                // variable-cost searches use the HNSW early-stop heuristic.
+                if params.padding_node_id.is_none()
+                    && hits.len() >= params.ef
+                    && hits
+                        .last()
+                        .is_some_and(|worst_hit| candidate_distance > worst_hit.distance)
+                {
+                    expansion_frontier.clear();
                     continue;
                 }
+                for neighbor_id in neighbor_ids {
+                    if !visited.contains(&neighbor_id)
+                        && (state.position(&neighbor_id).is_some()
+                            || node_cache.is_some_and(|cache| cache.contains(&neighbor_id)))
+                        && queued.insert(neighbor_id)
+                    {
+                        pending.push_back(neighbor_id);
+                    }
+                }
+                continue;
             }
 
             let Some(padding_node_id) = params.padding_node_id else {
@@ -3418,18 +3452,9 @@ where
             payload_fetch_token: block.payload_fetch_token,
             distance,
         });
+        expansion_frontier.push((distance, block.node_id, block.neighbors.clone()));
         sort_hits(&mut hits);
         hits.truncate(params.ef);
-
-        for neighbor_id in &block.neighbors {
-            if !visited.contains(neighbor_id) && queued.insert(*neighbor_id) {
-                if state.position(neighbor_id).is_some()
-                    || node_cache.is_some_and(|cache| cache.contains(neighbor_id))
-                {
-                    pending.push_back(*neighbor_id);
-                }
-            }
-        }
     }
 
     sort_hits(&mut hits);
@@ -11398,6 +11423,243 @@ mod tests {
         assert_eq!(state.position(&entry.node_id), Some(3));
         assert_eq!(state.position(&near.node_id), Some(3));
         assert_eq!(state.position(&far.node_id), Some(3));
+    }
+
+    #[test]
+    fn plaintext_oram_hnsw_search_expands_nearest_frontier_within_fixed_budget() {
+        use std::cell::RefCell;
+
+        let config = PrivateHnswOramClientConfig {
+            tree_height: 3,
+            bucket_size: 2,
+            block_size_bytes: 512,
+            fixed_neighbor_slots: 2,
+        };
+        let entry = node_block_with_vector(1, &[10.0, 0.0], vec![[2; 32], [3; 32]]);
+        let distractor = node_block_with_vector(2, &[9.0, 0.0], vec![[4; 32]]);
+        let gateway = node_block_with_vector(3, &[1.0, 0.0], vec![[5; 32]]);
+        let distractor_tail = node_block_with_vector(4, &[8.0, 0.0], vec![]);
+        let target = node_block_with_vector(5, &[0.0, 0.0], vec![]);
+        let blocks = [
+            entry.clone(),
+            distractor,
+            gateway,
+            distractor_tail,
+            target.clone(),
+        ];
+        let mut state = PrivateHnswOramClientState::with_position_map(
+            blocks
+                .iter()
+                .enumerate()
+                .map(|(leaf, block)| (block.node_id, leaf as u64)),
+            config.tree_height,
+        )
+        .unwrap();
+
+        let store = RefCell::new(BTreeMap::new());
+        for bucket_id in 0..private_hnsw_oram_bucket_count(config.tree_height).unwrap() {
+            store.borrow_mut().insert(
+                bucket_id,
+                empty_private_hnsw_oram_plaintext_bucket(bucket_id, config).unwrap(),
+            );
+        }
+        for (leaf, block) in blocks.into_iter().enumerate() {
+            let leaf_bucket_id =
+                *private_hnsw_oram_bucket_ids_for_leaf(leaf as u64, config.tree_height)
+                    .unwrap()
+                    .last()
+                    .unwrap();
+            store.borrow_mut().get_mut(&leaf_bucket_id).unwrap().blocks[0] = Some(block);
+        }
+
+        let mut remaps = [5, 6, 7, 0].into_iter();
+        let result = search_private_hnsw_oram_plaintext(
+            &mut state,
+            config,
+            &[0.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: entry.node_id,
+                k: 1,
+                ef: 4,
+                fixed_steps: 4,
+                distance: DistanceKind::Euclid,
+                padding_node_id: None,
+            },
+            |leaf| {
+                private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?
+                    .into_iter()
+                    .map(|bucket_id| {
+                        store
+                            .borrow()
+                            .get(&bucket_id)
+                            .cloned()
+                            .ok_or(PrivateHnswClientError::PathBucketMismatch)
+                    })
+                    .collect()
+            },
+            |writeback_buckets| {
+                let mut store = store.borrow_mut();
+                for bucket in writeback_buckets {
+                    store.insert(bucket.bucket_id, bucket.clone());
+                }
+                Ok(())
+            },
+            || remaps.next().ok_or(PrivateHnswClientError::LeafOutOfRange),
+        )
+        .unwrap();
+
+        assert_eq!(result.completed_steps, 4);
+        assert_eq!(result.hits[0].node_id, target.node_id);
+        assert_eq!(result.hits[0].distance, 0.0);
+        assert_eq!(
+            result.accessed_leaf_labels,
+            [0, 1, 2, 4]
+                .into_iter()
+                .map(|leaf| encode_private_hnsw_oram_leaf_label(leaf, config.tree_height).unwrap())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn strict_fixed_budget_search_crosses_worse_bridge_instead_of_padding_early() {
+        let entry = node_block_with_vector(1, &[100.0, 0.0], vec![[2; 32], [3; 32], [4; 32]]);
+        let near_dead_end = node_block_with_vector(2, &[1.0, 0.0], vec![]);
+        let second_dead_end = node_block_with_vector(3, &[2.0, 0.0], vec![]);
+        let bridge = node_block_with_vector(4, &[3.0, 0.0], vec![[5; 32]]);
+        let target = node_block_with_vector(5, &[0.0, 0.0], vec![]);
+        let mut padding = node_block_with_vector(6, &[200.0, 0.0], vec![]);
+        padding.deleted = true;
+        let result = run_fixed_budget_graph_search(
+            &[
+                entry.clone(),
+                near_dead_end,
+                second_dead_end,
+                bridge,
+                target.clone(),
+                padding.clone(),
+            ],
+            &[0.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: entry.node_id,
+                k: 1,
+                ef: 2,
+                fixed_steps: 6,
+                distance: DistanceKind::Euclid,
+                padding_node_id: Some(padding.node_id),
+            },
+        );
+
+        assert_eq!(result.completed_steps, 6);
+        assert_eq!(result.hits[0].node_id, target.node_id);
+        assert_eq!(result.hits[0].distance, 0.0);
+    }
+
+    #[test]
+    fn fixed_budget_search_does_not_prune_equal_distance_bridge_by_node_id() {
+        let entry = node_block_with_vector(1, &[100.0, 0.0], vec![[2; 32], [3; 32]]);
+        let lower_id_dead_end = node_block_with_vector(2, &[1.0, 0.0], vec![]);
+        let equal_distance_bridge = node_block_with_vector(3, &[-1.0, 0.0], vec![[4; 32]]);
+        let target = node_block_with_vector(4, &[0.0, 0.0], vec![]);
+        let mut padding = node_block_with_vector(5, &[200.0, 0.0], vec![]);
+        padding.deleted = true;
+        let result = run_fixed_budget_graph_search(
+            &[
+                entry.clone(),
+                lower_id_dead_end,
+                equal_distance_bridge,
+                target.clone(),
+                padding.clone(),
+            ],
+            &[0.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: entry.node_id,
+                k: 1,
+                ef: 1,
+                fixed_steps: 5,
+                distance: DistanceKind::Euclid,
+                padding_node_id: Some(padding.node_id),
+            },
+        );
+
+        assert_eq!(result.completed_steps, 5);
+        assert_eq!(result.hits[0].node_id, target.node_id);
+        assert_eq!(result.hits[0].distance, 0.0);
+    }
+
+    fn run_fixed_budget_graph_search(
+        blocks: &[PrivateHnswNodeBlockPlaintext],
+        query: &[f32],
+        params: PrivateHnswSearchParams,
+    ) -> PrivateHnswSearchResult {
+        use std::cell::RefCell;
+
+        let config = PrivateHnswOramClientConfig {
+            tree_height: 3,
+            bucket_size: 2,
+            block_size_bytes: 512,
+            fixed_neighbor_slots: blocks
+                .iter()
+                .map(|block| block.neighbors.len())
+                .max()
+                .unwrap_or(0),
+        };
+        let mut state = PrivateHnswOramClientState::with_position_map(
+            blocks
+                .iter()
+                .enumerate()
+                .map(|(leaf, block)| (block.node_id, leaf as u64)),
+            config.tree_height,
+        )
+        .unwrap();
+        let store = RefCell::new(BTreeMap::new());
+        for bucket_id in 0..private_hnsw_oram_bucket_count(config.tree_height).unwrap() {
+            store.borrow_mut().insert(
+                bucket_id,
+                empty_private_hnsw_oram_plaintext_bucket(bucket_id, config).unwrap(),
+            );
+        }
+        for (leaf, block) in blocks.iter().cloned().enumerate() {
+            let leaf_bucket_id =
+                *private_hnsw_oram_bucket_ids_for_leaf(leaf as u64, config.tree_height)
+                    .unwrap()
+                    .last()
+                    .unwrap();
+            store.borrow_mut().get_mut(&leaf_bucket_id).unwrap().blocks[0] = Some(block);
+        }
+
+        let leaf_count = private_hnsw_oram_leaf_count(config.tree_height).unwrap();
+        let mut next_leaf = 0;
+        search_private_hnsw_oram_plaintext(
+            &mut state,
+            config,
+            query,
+            params,
+            |leaf| {
+                private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?
+                    .into_iter()
+                    .map(|bucket_id| {
+                        store
+                            .borrow()
+                            .get(&bucket_id)
+                            .cloned()
+                            .ok_or(PrivateHnswClientError::PathBucketMismatch)
+                    })
+                    .collect()
+            },
+            |writeback_buckets| {
+                let mut store = store.borrow_mut();
+                for bucket in writeback_buckets {
+                    store.insert(bucket.bucket_id, bucket.clone());
+                }
+                Ok(())
+            },
+            || {
+                let leaf = next_leaf;
+                next_leaf = (next_leaf + 1) % leaf_count;
+                Ok(leaf)
+            },
+        )
+        .unwrap()
     }
 
     #[test]
