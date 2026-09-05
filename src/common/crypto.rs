@@ -2506,6 +2506,7 @@ fn openfhe_backend_from_config(
         signature_b64: backend.signature_b64.clone(),
         size: pool_size.get(),
         timeout_ms: backend.timeout_ms,
+        max_output_bytes: backend.max_output_bytes,
         sensitive_env_names: sensitive_env_names.clone(),
     };
     if let Some(cached) = cached_openfhe_backend(&cache_key) {
@@ -2517,6 +2518,14 @@ fn openfhe_backend_from_config(
             .map_err(|_| StorageError::bad_input("crypto backend program path is invalid"))?;
     if let Some(timeout_ms) = backend.timeout_ms {
         command_backend = command_backend.with_timeout(Duration::from_millis(timeout_ms));
+    }
+    if let Some(max_output_bytes) = backend.max_output_bytes {
+        if max_output_bytes == 0 {
+            return Err(StorageError::bad_input(format!(
+                "crypto backend {backend_name} max_output_bytes must be positive",
+            )));
+        }
+        command_backend = command_backend.with_max_output_bytes(max_output_bytes);
     }
     command_backend = command_backend.with_sensitive_env_names(sensitive_env_names);
     if openfhe_backend_kind_uses_network_namespace(&backend.kind) {
@@ -2543,6 +2552,7 @@ struct OpenFheBackendCacheKey {
     signature_b64: Option<String>,
     size: usize,
     timeout_ms: Option<u64>,
+    max_output_bytes: Option<usize>,
     sensitive_env_names: Vec<String>,
 }
 

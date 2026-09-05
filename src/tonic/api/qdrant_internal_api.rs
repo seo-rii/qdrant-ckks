@@ -144,6 +144,11 @@ const PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(
 /// Waiting the whole stream timeout let unauthenticated internal-port callers park every
 /// further install for minutes behind one slow stream.
 const PRIVATE_ORAM_INSTALL_STREAM_SLOT_WAIT: Duration = Duration::from_secs(30);
+/// Minimum spacing between two fresh-preinstall restarts of the same fixed-layout transfer. A
+/// target only asks again while its preinstalled stores are missing, so a repeat after this
+/// interval means it lost them again; repeats inside it are absorbed while the previous
+/// preinstall lands.
+const PRIVATE_ORAM_RESUME_RESTART_MIN_INTERVAL: Duration = Duration::from_secs(60);
 const PRIVATE_ORAM_ACTIVATION_ACK_MAX_JSON_BYTES: usize = 64 * 1024;
 const PRIVATE_ORAM_ACTIVATION_ACK_CACHE_MAX_ENTRIES: usize = 4096;
 const PRIVATE_ORAM_ACTIVATION_ACK_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
@@ -448,6 +453,8 @@ pub struct QdrantInternalService {
     private_oram_activation_ack_cache: Mutex<PrivateOramActivationAckCache>,
     private_oram_replication_lock: Mutex<()>,
     private_oram_install_stream_slots: Semaphore,
+    /// When each fixed-layout transfer was last restarted with a fresh preinstall.
+    private_oram_resume_restarts: Mutex<HashMap<String, Instant>>,
 }
 
 /// Upper bound for waiting on the private ORAM replication lock. Handlers hold the lock across
@@ -487,6 +494,7 @@ impl QdrantInternalService {
             private_oram_install_stream_slots: Semaphore::new(
                 PRIVATE_ORAM_INSTALL_STREAM_CONCURRENCY,
             ),
+            private_oram_resume_restarts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -4885,10 +4893,31 @@ impl QdrantInternal for QdrantInternalService {
                 }
                 return Err(error.into());
             }
+            let restart_key = format!(
+                "{}/{}/{}->{}",
+                request.collection_name, transfer.shard_id, transfer.from, transfer.to
+            );
             if !first_resume_request && !transfer_task_requires_restart {
-                return Ok(Response::new(RequestPrivateOramShardRecoveryResponse {
-                    accepted: true,
-                }));
+                // The target keeps asking only while its preinstalled stores are missing, so a
+                // repeat while the restarted task is streaming means it lost the stores again
+                // and needs another fresh preinstall; accepting it silently left the target
+                // Active without stores. Only a restart that may still be landing is absorbed.
+                let recently_restarted = self
+                    .private_oram_resume_restarts
+                    .lock()
+                    .await
+                    .get(&restart_key)
+                    .is_some_and(|restarted_at| {
+                        restarted_at.elapsed() < PRIVATE_ORAM_RESUME_RESTART_MIN_INTERVAL
+                    });
+                if recently_restarted {
+                    return Ok(Response::new(RequestPrivateOramShardRecoveryResponse {
+                        accepted: true,
+                    }));
+                }
+                log::warn!(
+                    "Private ORAM fixed-layout transfer target requested another fresh preinstall while the restarted transfer task is running; restarting the transfer again"
+                );
             }
 
             log::info!(
@@ -4929,6 +4958,13 @@ impl QdrantInternal for QdrantInternalService {
                 collection
                     .clear_private_oram_fixed_transfer_resume(&transfer)
                     .await;
+            }
+            if accepted {
+                let mut restarts = self.private_oram_resume_restarts.lock().await;
+                restarts.retain(|_, restarted_at| {
+                    restarted_at.elapsed() < PRIVATE_ORAM_RESUME_RESTART_MIN_INTERVAL * 10
+                });
+                restarts.insert(restart_key, Instant::now());
             }
             return Ok(Response::new(RequestPrivateOramShardRecoveryResponse {
                 accepted,

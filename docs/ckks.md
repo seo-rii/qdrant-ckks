@@ -4450,13 +4450,72 @@ Server and consensus:
   lock and 30 seconds for an install-stream slot, returning a retryable
   unavailability instead of parking indefinitely.
 
+### Second pass
+
+Crypto crate:
+
+- Blind-index token bindings are compared in constant time.
+- Every `AeadCipher` counts its AES-GCM invocations and refuses to encrypt
+  after 2^32 (NIST SP 800-38D random-nonce bound), warning at half; the count
+  is per process and resets when the resource key rotates.
+- Decrypted buffers, plaintext copies taken from JSON values during
+  encryption, and derived-key stack copies are zeroized.
+- `validate_client_payload_value` never reports a signature digest for a
+  signature it could not verify; a digest now always means "verified against
+  the expected key".
+
+Consensus and shard transfer:
+
+- A Raft snapshot rejected by validation no longer arms the indeterminate
+  fence; only failures after local side effects started do.
+- Private ORAM snapshot recovery markers that cannot be reconciled with the
+  consensus state are logged and skipped per collection instead of stopping
+  the Raft thread; a corrupt source preinstall intent is quarantined
+  (`private_oram_source_preinstall.json.invalid-<unix>`) and ignored.
+- A transfer target that lost its preinstalled stores a second time triggers
+  another fresh preinstall (the target only re-requests while its stores are
+  missing; the source rate-limits restarts to one per minute), and a resume
+  target whose transfer was aborted releases its marker so dead-replica
+  recovery can run.
+- Automatic dead-replica recovery works for custom-sharded ORAM collections
+  with several shard keys (the layout check uses the shard key mapping).
+- Layout CAS entries apply the collection meta-op before advancing the
+  consensus layout, so a deterministic meta-op failure cannot leave the layout
+  ahead of the collection state.
+
+Stores, bridge and API layer:
+
+- Epoch commit history behind the current epoch is pruned to 1024 records when
+  the epoch advances; owner verification refused directories above 4096
+  entries, which made long-lived indexes unrecoverable.
+- Bridge requests are written from a helper thread under the request timeout;
+  a bridge that stops draining stdin is killed instead of parking a worker
+  forever. The response line cap defaults to 64 MiB and is configurable per
+  backend as `max_output_bytes`. Workers are spawned outside the pool lock.
+- Public gRPC services cap message sizes at `service.max_request_size_mb`
+  like REST; internal peer services stay unbounded.
+- Mutation v2 read handlers check collection access before touching the
+  session registry.
+- Staged owner writebacks release the session commit slot when dropped without
+  an outcome; standalone reads and commits run store I/O outside the session
+  registry mutex on a blocking thread.
+
 Known remaining limitations:
 
 - A private ORAM mutation generation whose owner disappears before the
   recovery capsules are ready cannot be reclaimed; an owner-eviction or early
   abort certificate is still missing.
-- Terminal mutation archives, leaked staging directories and external recovery
-  uploads are not garbage collected.
+- Terminal mutation archives, leaked staging directories, external recovery
+  uploads and orphaned preinstalled transfer stores are not garbage collected.
 - Crypto migration completion is verified by point counts only.
-- The Raft snapshot "indeterminate" fence is armed on some side-effect-free
-  validation failures.
+- Standalone private ORAM session `open`/`close` are gated by collection write
+  access only, not by an owner-key signature, so a write-scoped key can hold
+  the writer slot; read signatures carry no nonce and can be replayed within
+  an epoch. Both need a protocol change (signed open/close, per-session
+  nonces) on the client side as well.
+- Bridge responses carry no request id; a stray stdout line desynchronizes a
+  worker until it is killed. Idle bridge stdout is queued without bound.
+- The internal replication lock is held across outbound peer calls and
+  consensus waits during private ORAM recovery requests.
+- A mutation activation floor without an activation authority accepts a
+  missing pending token (pre-release fixture compatibility).

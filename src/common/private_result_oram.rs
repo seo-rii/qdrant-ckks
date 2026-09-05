@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use collection::config::{
@@ -111,6 +112,26 @@ pub(crate) struct PrivateResultOramOwnerWritebackContext {
     public_key: Vec<u8>,
     batch: PrivateResultOramWritebackBatch,
     transition: PrivateResultOramConsensusWriteback,
+    /// Set once the staged commit was finalized, aborted or cancelled; shared by clones.
+    settled: Arc<AtomicBool>,
+}
+
+impl Drop for PrivateResultOramOwnerWritebackContext {
+    fn drop(&mut self) {
+        // See `PrivateHnswOwnerWritebackContext`: release the session commit slot when the
+        // last clone is dropped without any recorded outcome.
+        if Arc::strong_count(&self.settled) != 1 || self.settled.load(Ordering::Acquire) {
+            return;
+        }
+        let Ok(mut registry) = session_registry().try_lock() else {
+            return;
+        };
+        log::warn!(
+            "private result ORAM staged owner writeback was dropped without an outcome; \
+             releasing the session commit slot"
+        );
+        let _ = registry.cancel_commit(&self.collection_id, &self.session_id);
+    }
 }
 
 impl Debug for PrivateResultOramOwnerWritebackContext {
@@ -163,6 +184,7 @@ impl PrivateResultOramOwnerWritebackContext {
     }
 
     pub(crate) fn abort_local(&self) -> StorageResult<()> {
+        self.settled.store(true, Ordering::Release);
         self.store
             .abort_replica_writeback_with_signature(
                 &self.transition,
@@ -179,6 +201,7 @@ impl PrivateResultOramOwnerWritebackContext {
     }
 
     pub(crate) fn finalize_local(&self, lease_expires_unix: u64) -> StorageResult<()> {
+        self.settled.store(true, Ordering::Release);
         let committed = self
             .store
             .commit_replica_writeback_with_signature(
@@ -201,6 +224,7 @@ impl PrivateResultOramOwnerWritebackContext {
     }
 
     pub(crate) fn cancel_staged_session(&self) -> StorageResult<()> {
+        self.settled.store(true, Ordering::Release);
         session_registry()
             .lock()
             .map_err(|_| {
@@ -267,6 +291,25 @@ struct PrivateResultOramSession {
     owner: PrivateResultOramSessionOwner,
     /// Paths read through this session so far; bounds the writeback a commit may carry.
     read_path_count: u64,
+}
+
+/// Everything a validated bucket read needs once the session registry lock is released.
+struct PrivateResultOramReadPlan {
+    collection_path: std::path::PathBuf,
+    index_epoch: u64,
+    root_hash: String,
+    bucket_ids: Vec<u64>,
+    bucket_count: u64,
+    max_bucket_ciphertext_bytes: usize,
+    manifest: PrivateResultOramManifest,
+}
+
+/// Everything a validated single-node commit needs once the registry lock is released.
+struct PrivateResultOramCommitPlan {
+    store: PrivateResultOramStore,
+    bucket_count: u64,
+    max_bucket_ciphertext_bytes: usize,
+    public_key: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1631,7 +1674,7 @@ async fn do_read_private_result_oram_buckets_inner(
     let mut registry = session_registry().lock().map_err(|_| {
         StorageError::service_error("private result ORAM session registry poisoned")
     })?;
-    registry.with_session_mut_owned(
+    let plan = registry.with_session_mut_owned(
         &request_context.collection_crypto_id,
         session_id,
         now_unix,
@@ -1667,44 +1710,57 @@ async fn do_read_private_result_oram_buckets_inner(
             )
             .map_err(private_result_oram_error)?;
             validate_bucket_read_request_details(&session.manifest, &bucket_ids)?;
-            let store = PrivateResultOramStore::new(&session.collection_path);
-            ensure_private_result_oram_active_session_current_epoch(
-                &store,
-                session.index_epoch,
-                &session.root_hash,
-            )?;
-            let (buckets, proof) = store
-                .read_bucket_batch_with_proof(
-                    &bucket_ids,
-                    session.index_epoch,
-                    &session.root_hash,
-                    session.bucket_count,
-                    session.max_bucket_ciphertext_bytes,
-                )
-                .map_err(private_result_oram_read_store_error)?;
-            ensure_private_result_oram_read_proof_matches_buckets(&proof, &buckets)?;
-            validate_private_result_oram_read_bucket_ciphertexts_fixed_size(
-                &session.manifest,
-                &buckets,
-            )?;
             // Every path served through this session extends the writeback the client may commit.
             let path_len = u64::from(session.manifest.oram.tree_height).saturating_add(1);
             let read_paths = u64::try_from(bucket_ids.len()).unwrap_or(u64::MAX) / path_len;
             session.read_path_count = session.read_path_count.saturating_add(read_paths);
-            let proof_value = serde_json::to_string(&proof).map_err(|_| {
-                StorageError::service_error("failed to serialize private result ORAM Merkle proof")
-            })?;
-            Ok(PrivateResultOramReadBucketsResponse {
+            Ok(PrivateResultOramReadPlan {
+                collection_path: session.collection_path.clone(),
                 index_epoch: session.index_epoch,
                 root_hash: session.root_hash.clone(),
-                buckets,
-                proof: PrivateResultOramReadProof {
-                    kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
-                    value: proof_value,
-                },
+                bucket_ids,
+                bucket_count: session.bucket_count,
+                max_bucket_ciphertext_bytes: session.max_bucket_ciphertext_bytes,
+                manifest: session.manifest.clone(),
             })
         },
-    )
+    )?;
+    drop(registry);
+    // Store I/O runs off the registry mutex and off the async worker thread.
+    let (plan, buckets, proof) = tokio::task::spawn_blocking(move || -> StorageResult<_> {
+        let store = PrivateResultOramStore::new(&plan.collection_path);
+        ensure_private_result_oram_active_session_current_epoch(
+            &store,
+            plan.index_epoch,
+            &plan.root_hash,
+        )?;
+        let (buckets, proof) = store
+            .read_bucket_batch_with_proof(
+                &plan.bucket_ids,
+                plan.index_epoch,
+                &plan.root_hash,
+                plan.bucket_count,
+                plan.max_bucket_ciphertext_bytes,
+            )
+            .map_err(private_result_oram_read_store_error)?;
+        ensure_private_result_oram_read_proof_matches_buckets(&proof, &buckets)?;
+        validate_private_result_oram_read_bucket_ciphertexts_fixed_size(&plan.manifest, &buckets)?;
+        Ok((plan, buckets, proof))
+    })
+    .await
+    .map_err(|_| StorageError::service_error("private result ORAM read task failed"))??;
+    let proof_value = serde_json::to_string(&proof).map_err(|_| {
+        StorageError::service_error("failed to serialize private result ORAM Merkle proof")
+    })?;
+    Ok(PrivateResultOramReadBucketsResponse {
+        index_epoch: plan.index_epoch,
+        root_hash: plan.root_hash,
+        buckets,
+        proof: PrivateResultOramReadProof {
+            kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
+            value: proof_value,
+        },
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1849,6 +1905,7 @@ pub(crate) async fn do_stage_private_result_oram_owner_writeback(
                     public_key,
                     batch,
                     transition,
+                    settled: Arc::new(AtomicBool::new(false)),
                 })
             },
         )
@@ -1905,7 +1962,7 @@ pub async fn do_commit_private_result_oram_buckets(
     let mut registry = session_registry().lock().map_err(|_| {
         StorageError::service_error("private result ORAM session registry poisoned")
     })?;
-    registry.with_session_mut(
+    let plan = registry.begin_commit(
         &request_context.collection_crypto_id,
         session_id,
         now_unix,
@@ -1966,34 +2023,65 @@ pub async fn do_commit_private_result_oram_buckets(
                 old_epoch,
                 &old_root_hash,
             )?;
-            let old = PrivateResultOramEpochState {
-                index_epoch: old_epoch,
-                root_hash: old_root_hash,
-            };
-            let new = PrivateResultOramEpochState {
-                index_epoch: new_epoch,
-                root_hash: new_root_hash,
-            };
-            let committed = store
-                .commit_writeback_with_signature(
-                    &old,
-                    &new,
-                    session.bucket_count,
-                    &updated_buckets,
-                    session.max_bucket_ciphertext_bytes,
-                    &commit_signature,
-                    PrivateResultOramSignatureVerification {
-                        expected_key_id: &commit_signature.key_id,
-                        public_key: &public_key,
-                    },
-                )
-                .map_err(private_result_oram_commit_writeback_store_error)?;
-            session.index_epoch = committed.index_epoch;
-            session.root_hash = committed.root_hash.clone();
-            session.lease_expires_unix = session_lease_expires_unix(now_unix)?;
-            Ok(committed)
+            Ok(PrivateResultOramCommitPlan {
+                store,
+                bucket_count: session.bucket_count,
+                max_bucket_ciphertext_bytes: session.max_bucket_ciphertext_bytes,
+                public_key,
+            })
         },
-    )
+    )?;
+    drop(registry);
+    // Bucket writes and fsyncs run off the registry mutex and off the async worker; the session
+    // stays `commit_in_progress` until the outcome is recorded below.
+    let old = PrivateResultOramEpochState {
+        index_epoch: old_epoch,
+        root_hash: old_root_hash,
+    };
+    let new = PrivateResultOramEpochState {
+        index_epoch: new_epoch,
+        root_hash: new_root_hash,
+    };
+    let committed = tokio::task::spawn_blocking(move || {
+        plan.store
+            .commit_writeback_with_signature(
+                &old,
+                &new,
+                plan.bucket_count,
+                &updated_buckets,
+                plan.max_bucket_ciphertext_bytes,
+                &commit_signature,
+                PrivateResultOramSignatureVerification {
+                    expected_key_id: &commit_signature.key_id,
+                    public_key: &plan.public_key,
+                },
+            )
+            .map_err(private_result_oram_commit_writeback_store_error)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(StorageError::service_error(
+            "private result ORAM commit task failed",
+        ))
+    });
+    let mut registry = session_registry().lock().map_err(|_| {
+        StorageError::service_error("private result ORAM session registry poisoned")
+    })?;
+    match committed {
+        Ok(committed) => {
+            registry.complete_commit(
+                &request_context.collection_crypto_id,
+                session_id,
+                &committed,
+                session_lease_expires_unix(now_unix)?,
+            )?;
+            Ok(committed)
+        }
+        Err(error) => {
+            let _ = registry.cancel_commit(&request_context.collection_crypto_id, session_id);
+            Err(error)
+        }
+    }
 }
 
 pub async fn do_close_private_result_oram_session(

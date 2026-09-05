@@ -144,6 +144,39 @@ fn read_private_oram_fixed_transfer_preinstall_intent(
     Ok(Some(intent))
 }
 
+/// Reads the intent for the paths that only need to know whether one exists (local sync,
+/// finish, abort, a new preinstall). An unreadable or invalid file is moved aside and treated
+/// as "no intent": the file is only meaningful on the source of one transfer, and a damaged
+/// copy must not turn every finish, abort or local sync of the collection into a
+/// consensus-stopping error. Callers that consume the reservation lease hash keep the strict
+/// reader.
+fn read_private_oram_fixed_transfer_preinstall_intent_or_quarantine(
+    collection_path: &Path,
+) -> Option<PrivateOramFixedTransferPreinstallIntent> {
+    match read_private_oram_fixed_transfer_preinstall_intent(collection_path) {
+        Ok(intent) => intent,
+        Err(error) => {
+            let intent_path = private_oram_fixed_transfer_preinstall_intent_path(collection_path);
+            let unix_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_secs())
+                .unwrap_or_default();
+            let quarantine_path = intent_path.with_extension(format!("json.invalid-{unix_secs}"));
+            match fs_err::rename(&intent_path, &quarantine_path) {
+                Ok(()) => log::warn!(
+                    "Quarantined an invalid private ORAM source preinstall intent as {}: {error}",
+                    quarantine_path.display(),
+                ),
+                Err(rename_error) => log::warn!(
+                    "Ignoring an invalid private ORAM source preinstall intent that could not be \
+                     quarantined ({rename_error}): {error}",
+                ),
+            }
+            None
+        }
+    }
+}
+
 fn write_private_oram_fixed_transfer_preinstall_intent(
     collection_path: &Path,
     transfer: &ShardTransfer,
@@ -155,7 +188,9 @@ fn write_private_oram_fixed_transfer_preinstall_intent(
         reservation_lease_id_hash: reservation_lease_id_hash.to_string(),
     };
     validate_private_oram_fixed_transfer_preinstall_intent(&intent)?;
-    if let Some(existing) = read_private_oram_fixed_transfer_preinstall_intent(collection_path)? {
+    if let Some(existing) =
+        read_private_oram_fixed_transfer_preinstall_intent_or_quarantine(collection_path)
+    {
         if existing.transfer != *transfer {
             return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
         }
@@ -201,14 +236,20 @@ fn remove_private_oram_fixed_transfer_preinstall_intent(
     collection_path: &Path,
     transfer: &ShardTransfer,
 ) -> CollectionResult<()> {
-    let Some(existing) = read_private_oram_fixed_transfer_preinstall_intent(collection_path)?
+    let Some(existing) =
+        read_private_oram_fixed_transfer_preinstall_intent_or_quarantine(collection_path)
     else {
         let intent_path = private_oram_fixed_transfer_preinstall_intent_path(collection_path);
         return common::fs::sync_parent_dir(&intent_path)
             .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent());
     };
     if existing.transfer != *transfer {
-        return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+        // Another transfer's intent: leave it for the sync that reconciles it with the active
+        // transfers instead of failing this transfer's finish or abort.
+        log::warn!(
+            "Leaving a private ORAM source preinstall intent of a different transfer in place"
+        );
+        return Ok(());
     }
     let intent_path = private_oram_fixed_transfer_preinstall_intent_path(collection_path);
     fs_err::remove_file(&intent_path)
@@ -301,7 +342,7 @@ impl Collection {
         &self,
     ) -> CollectionResult<Option<ShardTransfer>> {
         Ok(
-            read_private_oram_fixed_transfer_preinstall_intent(&self.path)?
+            read_private_oram_fixed_transfer_preinstall_intent_or_quarantine(&self.path)
                 .map(|intent| intent.transfer),
         )
     }

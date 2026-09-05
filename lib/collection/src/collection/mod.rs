@@ -15,7 +15,7 @@ mod snapshots;
 mod state_management;
 mod telemetry;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::ops::Deref;
@@ -961,7 +961,12 @@ impl Collection {
         on_convert_to_listener: ChangePeerState,
         on_convert_from_listener: ChangePeerState,
     ) -> CollectionResult<()> {
-        let (encrypted_collection, private_oram_bucket_store_collection, configured_shard_count) = {
+        let (
+            encrypted_collection,
+            private_oram_bucket_store_collection,
+            configured_shard_count,
+            sharding_method,
+        ) = {
             let config = self.collection_config.read().await;
             let encryption = config.params.effective_encryption();
             (
@@ -970,11 +975,28 @@ impl Collection {
                     .as_ref()
                     .is_some_and(collection_encryption_uses_private_oram_bucket_store),
                 config.params.shard_number.get() as usize,
+                config.params.sharding_method.unwrap_or_default(),
             )
         };
 
         // Check for disabled replicas
         let shard_holder = self.shards_holder.read().await;
+        let private_oram_recovery_layout_is_stable = {
+            let shard_ids = shard_holder
+                .all_shards()
+                .map(|replica_set| replica_set.shard_id)
+                .collect::<BTreeSet<_>>();
+            let mapped_shard_ids = shard_holder
+                .get_shard_key_to_ids_mapping()
+                .iter_shard_ids()
+                .collect::<Vec<_>>();
+            private_oram_shard_layout_is_stable(
+                sharding_method,
+                configured_shard_count,
+                &shard_ids,
+                &mapped_shard_ids,
+            )
+        };
 
         let get_shard_transfers = |shard_id, from| {
             shard_holder.get_transfers(|transfer| transfer.is_source(from, shard_id))
@@ -1012,9 +1034,15 @@ impl Collection {
                         )
                     })
             {
-                return Err(CollectionError::service_error(
-                    "private ORAM source preinstall intent does not match the active transfer",
-                ));
+                // The intent only drives an automatic exact restart; one that does not fit the
+                // active transfer is ignored (not deleted: replica states may still be moving)
+                // instead of failing every local sync of the collection.
+                log::warn!(
+                    "Ignoring a private ORAM source preinstall intent that does not match the \
+                     active transfer of collection {}",
+                    self.name(),
+                );
+                durable_fixed_transfer_resume_intent = None;
             }
         }
         let fixed_transfer_resume_intents = {
@@ -1189,8 +1217,7 @@ impl Collection {
                 self.name(),
                 shard_id,
                 private_oram_bucket_store_collection,
-                configured_shard_count,
-                shard_holder.len(),
+                private_oram_recovery_layout_is_stable,
             ) {
                 log::warn!("{err}");
                 continue;
@@ -1737,16 +1764,36 @@ fn collection_encryption_uses_private_oram_bucket_store(
     })
 }
 
+/// Whether the shard layout is the configured stable one that private ORAM automatic recovery
+/// can reason about: auto sharding needs exactly `shard_number` shards and no key mapping,
+/// custom sharding needs every shard to be reachable through the shard key mapping (the shard
+/// count is `shard_number` per key there, so a raw count comparison rejected every collection
+/// with more than one shard key).
+pub(crate) fn private_oram_shard_layout_is_stable(
+    sharding_method: ShardingMethod,
+    configured_shard_number: usize,
+    shard_ids: &BTreeSet<ShardId>,
+    mapped_shard_ids: &[ShardId],
+) -> bool {
+    match sharding_method {
+        ShardingMethod::Auto => {
+            mapped_shard_ids.is_empty() && configured_shard_number == shard_ids.len()
+        }
+        ShardingMethod::Custom => {
+            !shard_ids.is_empty()
+                && mapped_shard_ids.len() == shard_ids.len()
+                && mapped_shard_ids.iter().copied().collect::<BTreeSet<_>>() == *shard_ids
+        }
+    }
+}
+
 fn validate_private_oram_automatic_transfer_recovery_layout(
     _collection_name: &str,
     _shard_id: ShardId,
     private_oram_bucket_store_collection: bool,
-    configured_shard_count: usize,
-    shard_count: usize,
+    layout_is_stable: bool,
 ) -> CollectionResult<()> {
-    if !private_oram_bucket_store_collection
-        || (shard_count > 0 && shard_count == configured_shard_count)
-    {
+    if !private_oram_bucket_store_collection || layout_is_stable {
         return Ok(());
     }
 
@@ -2272,24 +2319,14 @@ mod tests {
                 collection_name,
                 3,
                 false,
-                1,
-                2,
+                false,
             )
             .unwrap();
             validate_private_oram_automatic_transfer_recovery_layout(
                 collection_name,
                 3,
                 true,
-                1,
-                1,
-            )
-            .unwrap();
-            validate_private_oram_automatic_transfer_recovery_layout(
-                collection_name,
-                3,
                 true,
-                2,
-                2,
             )
             .unwrap();
 
@@ -2297,8 +2334,7 @@ mod tests {
                 collection_name,
                 3,
                 true,
-                2,
-                0,
+                false,
             )
             .unwrap_err();
             let rendered = format!("{err:?}");
@@ -2313,16 +2349,56 @@ mod tests {
             assert!(!rendered.contains("private_result_oram"));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
-
-            validate_private_oram_automatic_transfer_recovery_layout(
-                collection_name,
-                3,
-                true,
-                2,
-                1,
-            )
-            .unwrap_err();
         }
+    }
+
+    #[test]
+    fn private_oram_shard_layout_stability_accounts_for_custom_shard_keys() {
+        let shard_ids = [0, 1, 2, 3].into_iter().collect::<BTreeSet<ShardId>>();
+        assert!(private_oram_shard_layout_is_stable(
+            ShardingMethod::Auto,
+            4,
+            &shard_ids,
+            &[]
+        ));
+        assert!(!private_oram_shard_layout_is_stable(
+            ShardingMethod::Auto,
+            2,
+            &shard_ids,
+            &[]
+        ));
+        assert!(!private_oram_shard_layout_is_stable(
+            ShardingMethod::Auto,
+            4,
+            &shard_ids,
+            &[0]
+        ));
+        // Two shard keys with two shards each: every shard is reachable through the mapping,
+        // even though the shard count is twice the configured shard number.
+        assert!(private_oram_shard_layout_is_stable(
+            ShardingMethod::Custom,
+            2,
+            &shard_ids,
+            &[0, 1, 2, 3]
+        ));
+        assert!(!private_oram_shard_layout_is_stable(
+            ShardingMethod::Custom,
+            2,
+            &shard_ids,
+            &[0, 1]
+        ));
+        assert!(!private_oram_shard_layout_is_stable(
+            ShardingMethod::Custom,
+            2,
+            &shard_ids,
+            &[0, 1, 2, 9]
+        ));
+        assert!(!private_oram_shard_layout_is_stable(
+            ShardingMethod::Custom,
+            2,
+            &BTreeSet::new(),
+            &[]
+        ));
     }
 
     #[test]

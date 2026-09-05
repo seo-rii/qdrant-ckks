@@ -387,6 +387,8 @@ crypto:
   #     sha256_b64: base64url-no-pad-sha256-of-bridge
   #     size: 4
   #     timeout_ms: 5000
+  #     # Largest bridge response line (and total stderr) accepted per worker; default 64 MiB.
+  #     max_output_bytes: 67108864
 
 cluster:
   # Use `enabled: true` to run Qdrant in distributed deployment mode

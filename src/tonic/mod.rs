@@ -206,19 +206,19 @@ pub fn init(
                 QdrantServer::new(qdrant_service)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(usize::MAX),
+                    .max_decoding_message_size(private_oram_max_decoding_message_size),
             )
             .add_service(
                 CollectionsServer::new(collections_service)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(usize::MAX),
+                    .max_decoding_message_size(private_oram_max_decoding_message_size),
             )
             .add_service(
                 PointsServer::new(PointsTelemetryWrapper::new(points_service))
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(usize::MAX),
+                    .max_decoding_message_size(private_oram_max_decoding_message_size),
             )
             .add_service(
                 PrivateHnswOramServer::new(PrivateHnswOramTelemetryWrapper::new(
@@ -240,13 +240,13 @@ pub fn init(
                 SnapshotsServer::new(SnapshotsTelemetryWrapper::new(snapshot_service))
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(usize::MAX),
+                    .max_decoding_message_size(private_oram_max_decoding_message_size),
             )
             .add_service(
                 HealthServer::new(health_service)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(usize::MAX),
+                    .max_decoding_message_size(private_oram_max_decoding_message_size),
             )
             .serve_with_shutdown(socket, async {
                 wait_stop_signal("gRPC service").await;

@@ -382,6 +382,27 @@ pub struct PrivateOramSnapshotState<'a> {
     pub current_layouts: &'a HashMap<String, PrivateOramConsensusLayout>,
 }
 
+/// Why a collections snapshot could not be applied locally.
+///
+/// The distinction decides whether the node must be fenced: a rejection happened before any
+/// local state changed, so consensus state stays consistent and a restart needs no operator
+/// intervention, while an indeterminate failure may have left collections half-applied.
+#[derive(Debug)]
+pub enum CollectionsSnapshotApplyError {
+    /// Validation refused the snapshot before any local side effect.
+    Rejected(StorageError),
+    /// The apply failed after local side effects started.
+    Indeterminate(StorageError),
+}
+
+impl CollectionsSnapshotApplyError {
+    pub fn into_storage_error(self) -> StorageError {
+        match self {
+            Self::Rejected(error) | Self::Indeterminate(error) => error,
+        }
+    }
+}
+
 impl TryFrom<&[u8]> for SnapshotData {
     type Error = serde_cbor::Error;
 
@@ -3219,10 +3240,10 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         self.persistent
             .read()
             .validate_private_oram_collection_layout_transition(transition)?;
-        self.persistent
-            .write()
-            .compare_and_swap_private_oram_layout(&transition.layout)?;
 
+        // Apply the collection meta-op before the layout CAS: a deterministic meta-op failure
+        // then leaves the layout untouched instead of a layout that already names owners the
+        // collection state never reached (which crash-looped the peer on every re-apply).
         if topology_state == PrivateOramLayoutTransitionState::Pending {
             let apply_result = self
                 .toc
@@ -3236,6 +3257,9 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 ));
             }
         }
+        self.persistent
+            .write()
+            .compare_and_swap_private_oram_layout(&transition.layout)?;
         if self.toc.private_oram_layout_transition_state(transition)?
             != PrivateOramLayoutTransitionState::Applied
         {
@@ -3300,9 +3324,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             .persistent
             .read()
             .validate_private_oram_shard_transfer_finish(operation)?;
-        self.persistent
-            .write()
-            .compare_and_swap_private_oram_layout(&layout)?;
+        // Meta-op first, layout CAS second (see `apply_private_oram_collection_layout_transition`).
         if topology_state == PrivateOramLayoutTransitionState::Pending {
             let apply_result = self
                 .toc
@@ -3318,6 +3340,9 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 ));
             }
         }
+        self.persistent
+            .write()
+            .compare_and_swap_private_oram_layout(&layout)?;
         if self
             .toc
             .private_oram_shard_transfer_finish_state(operation)?
@@ -3368,9 +3393,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             .persistent
             .read()
             .validate_private_oram_resharding_operation(operation)?;
-        self.persistent
-            .write()
-            .compare_and_swap_private_oram_layout(&layout)?;
+        // Meta-op first, layout CAS second (see `apply_private_oram_collection_layout_transition`).
         if topology_state == PrivateOramLayoutTransitionState::Pending {
             let apply_result = self.toc.perform_private_oram_resharding_meta_op(operation);
             if !matches!(apply_result, Ok(true))
@@ -3382,6 +3405,9 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 ));
             }
         }
+        self.persistent
+            .write()
+            .compare_and_swap_private_oram_layout(&layout)?;
         if self.toc.private_oram_resharding_state(operation)?
             != PrivateOramLayoutTransitionState::Applied
         {
@@ -3446,7 +3472,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             &private_oram_mutation_lease_slots,
             meta.index,
         )?;
-        if let Err(error) = self.toc.apply_collections_snapshot_with_private_oram_state(
+        match self.toc.apply_collections_snapshot_with_private_oram_state(
             collections_data,
             PrivateOramSnapshotState {
                 incoming_epochs: &private_oram_epochs,
@@ -3455,8 +3481,17 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 current_layouts: &current_private_oram_layouts,
             },
         ) {
-            persistent.fence_after_snapshot_side_effect_failure();
-            return Err(error);
+            Ok(()) => {}
+            Err(CollectionsSnapshotApplyError::Rejected(error)) => {
+                // Nothing local changed: report the rejection without arming the fence that
+                // would otherwise demand a restart for a state that is still consistent.
+                log::error!("Raft snapshot rejected before any local side effect: {error}");
+                return Err(error);
+            }
+            Err(CollectionsSnapshotApplyError::Indeterminate(error)) => {
+                persistent.fence_after_snapshot_side_effect_failure();
+                return Err(error);
+            }
         }
         if let Err(error) = persistent.update_from_snapshot(
             meta,

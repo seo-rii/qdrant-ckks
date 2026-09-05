@@ -452,6 +452,9 @@ pub struct CryptoBackendConfig {
     pub size: Option<usize>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// Largest bridge response line (and total stderr) accepted per worker, in bytes.
+    #[serde(default)]
+    pub max_output_bytes: Option<usize>,
 }
 
 impl fmt::Debug for CryptoBackendConfig {
@@ -473,6 +476,7 @@ impl fmt::Debug for CryptoBackendConfig {
             )
             .field("size", &self.size)
             .field("timeout_ms", &self.timeout_ms)
+            .field("max_output_bytes", &self.max_output_bytes)
             .finish()
     }
 }

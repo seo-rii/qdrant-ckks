@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use collection::config::{
@@ -122,6 +123,28 @@ pub(crate) struct PrivateHnswOwnerWritebackContext {
     public_key: Vec<u8>,
     batch: PrivateHnswOramWritebackBatch,
     transition: PrivateHnswOramConsensusWriteback,
+    /// Set once the staged commit was finalized, aborted or cancelled; shared by clones.
+    settled: Arc<AtomicBool>,
+}
+
+impl Drop for PrivateHnswOwnerWritebackContext {
+    fn drop(&mut self) {
+        // Only the last clone decides, and only when nobody recorded an outcome: an early
+        // error return or panic between staging and finalize/abort must not leave the
+        // session's writer slot wedged in `commit_in_progress` until restart. `try_lock`
+        // keeps a drop under the registry lock from deadlocking.
+        if Arc::strong_count(&self.settled) != 1 || self.settled.load(Ordering::Acquire) {
+            return;
+        }
+        let Ok(mut registry) = session_registry().try_lock() else {
+            return;
+        };
+        log::warn!(
+            "private HNSW ORAM staged owner writeback was dropped without an outcome; releasing \
+             the session commit slot"
+        );
+        let _ = registry.cancel_commit(&self.collection_id, &self.vector_name, &self.session_id);
+    }
 }
 
 impl Debug for PrivateHnswOwnerWritebackContext {
@@ -182,6 +205,7 @@ impl PrivateHnswOwnerWritebackContext {
                 self.signature_verification(),
             )
             .map_err(private_hnsw_commit_writeback_store_error)?;
+        self.settled.store(true, Ordering::Release);
         session_registry()
             .lock()
             .map_err(|_| {
@@ -199,6 +223,7 @@ impl PrivateHnswOwnerWritebackContext {
                 self.signature_verification(),
             )
             .map_err(private_hnsw_commit_writeback_store_error)?;
+        self.settled.store(true, Ordering::Release);
         session_registry()
             .lock()
             .map_err(|_| {
@@ -214,6 +239,7 @@ impl PrivateHnswOwnerWritebackContext {
     }
 
     pub(crate) fn cancel_staged_session(&self) -> StorageResult<()> {
+        self.settled.store(true, Ordering::Release);
         session_registry()
             .lock()
             .map_err(|_| {
@@ -321,6 +347,25 @@ struct PrivateHnswSession {
 enum PrivateHnswSessionOwner {
     Standalone,
     PairedMutation,
+}
+
+/// Everything a validated path read needs once the session registry lock is released.
+struct PrivateHnswReadPlan {
+    collection_path: std::path::PathBuf,
+    index_epoch: u64,
+    root_hash: String,
+    bucket_ids: Vec<u64>,
+    bucket_count: u64,
+    max_bucket_ciphertext_bytes: usize,
+    manifest: PrivateHnswOramManifest,
+}
+
+/// Everything a validated single-node commit needs once the registry lock is released.
+struct PrivateHnswCommitPlan {
+    store: PrivateHnswOramStore,
+    bucket_count: u64,
+    max_bucket_ciphertext_bytes: usize,
+    public_key: Vec<u8>,
 }
 
 impl Debug for PrivateHnswSession {
@@ -1939,7 +1984,7 @@ async fn do_read_private_hnsw_paths_inner(
     let mut registry = session_registry()
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
-    registry.with_session_mut_owned(
+    let plan = registry.with_session_mut_owned(
         &request_context.collection_crypto_id,
         vector_name,
         session_id,
@@ -1985,41 +2030,59 @@ async fn do_read_private_hnsw_paths_inner(
             validate_private_hnsw_read_path_labels(&paths, session.tree_height)?;
             let bucket_ids =
                 bucket_ids_for_path_batch(&paths, session.tree_height, session.bucket_count)?;
-            let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
-            ensure_private_hnsw_active_session_current_epoch(
-                &store,
-                session.index_epoch,
-                &session.root_hash,
-            )?;
-            let (buckets, proof) = store
-                .read_bucket_batch_with_proof(
-                    &bucket_ids,
-                    session.index_epoch,
-                    &session.root_hash,
-                    session.bucket_count,
-                    session.max_bucket_ciphertext_bytes,
-                )
-                .map_err(private_hnsw_read_batch_store_error)?;
-            ensure_private_hnsw_read_proof_matches_buckets(&proof, &buckets)?;
-            validate_private_hnsw_read_bucket_ciphertexts_fixed_size(&session.manifest, &buckets)?;
             // Every path served through this session extends the writeback the client may commit.
             session.read_path_count = session
                 .read_path_count
                 .saturating_add(u64::try_from(paths.len()).unwrap_or(u64::MAX));
-            let proof_value = serde_json::to_string(&proof).map_err(|_| {
-                StorageError::service_error("failed to serialize private HNSW ORAM Merkle proof")
-            })?;
-            Ok(PrivateHnswReadPathsResponse {
+            Ok(PrivateHnswReadPlan {
+                collection_path: session.collection_path.clone(),
                 index_epoch: session.index_epoch,
                 root_hash: session.root_hash.clone(),
-                buckets,
-                proof: PrivateHnswReadProof {
-                    kind: PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND.to_string(),
-                    value: proof_value,
-                },
+                bucket_ids,
+                bucket_count: session.bucket_count,
+                max_bucket_ciphertext_bytes: session.max_bucket_ciphertext_bytes,
+                manifest: session.manifest.clone(),
             })
         },
-    )
+    )?;
+    drop(registry);
+    // Store I/O runs off the registry mutex and off the async worker thread: one tenant's slow
+    // path reads no longer stall every other private ORAM request on the node.
+    let vector_name = vector_name.to_string();
+    let (plan, buckets, proof) = tokio::task::spawn_blocking(move || -> StorageResult<_> {
+        let store = PrivateHnswOramStore::new(&plan.collection_path, &vector_name)?;
+        ensure_private_hnsw_active_session_current_epoch(
+            &store,
+            plan.index_epoch,
+            &plan.root_hash,
+        )?;
+        let (buckets, proof) = store
+            .read_bucket_batch_with_proof(
+                &plan.bucket_ids,
+                plan.index_epoch,
+                &plan.root_hash,
+                plan.bucket_count,
+                plan.max_bucket_ciphertext_bytes,
+            )
+            .map_err(private_hnsw_read_batch_store_error)?;
+        ensure_private_hnsw_read_proof_matches_buckets(&proof, &buckets)?;
+        validate_private_hnsw_read_bucket_ciphertexts_fixed_size(&plan.manifest, &buckets)?;
+        Ok((plan, buckets, proof))
+    })
+    .await
+    .map_err(|_| StorageError::service_error("private HNSW ORAM read task failed"))??;
+    let proof_value = serde_json::to_string(&proof).map_err(|_| {
+        StorageError::service_error("failed to serialize private HNSW ORAM Merkle proof")
+    })?;
+    Ok(PrivateHnswReadPathsResponse {
+        index_epoch: plan.index_epoch,
+        root_hash: plan.root_hash,
+        buckets,
+        proof: PrivateHnswReadProof {
+            kind: PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND.to_string(),
+            value: proof_value,
+        },
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2176,6 +2239,7 @@ pub(crate) async fn do_stage_private_hnsw_owner_writeback(
                     public_key,
                     batch,
                     transition,
+                    settled: Arc::new(AtomicBool::new(false)),
                 })
             },
         )
@@ -2233,7 +2297,12 @@ pub async fn do_commit_private_hnsw_paths(
     let mut registry = session_registry()
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
-    registry.with_session_mut(&request_context.collection_crypto_id, vector_name, session_id, now_unix, |session| {
+    let plan = registry.begin_commit(
+        &request_context.collection_crypto_id,
+        vector_name,
+        session_id,
+        now_unix,
+        |session| {
         request_context.validate_manifest_runtime_context(&session.manifest)?;
         if session.index_epoch != old_epoch || session.root_hash != old_root_hash {
             return Err(StorageError::bad_request(
@@ -2291,38 +2360,75 @@ pub async fn do_commit_private_hnsw_paths(
 
         let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
         ensure_private_hnsw_active_session_current_epoch(&store, old_epoch, &old_root_hash)?;
-        let old = PrivateHnswOramEpochState {
-            index_epoch: old_epoch,
-            root_hash: old_root_hash,
-        };
-        let new = PrivateHnswOramEpochState {
-            index_epoch: new_epoch,
-            root_hash: new_root_hash,
-        };
-        let store_commit_signature = PrivateHnswOramSignature {
-            alg: commit_signature.alg.clone(),
-            key_id: commit_signature.key_id.clone(),
-            sig: commit_signature.sig.clone(),
-        };
-        let committed = store
+        Ok(PrivateHnswCommitPlan {
+            store,
+            bucket_count: session.bucket_count,
+            max_bucket_ciphertext_bytes: session.max_bucket_ciphertext_bytes,
+            public_key,
+        })
+        },
+    )?;
+    drop(registry);
+    // Bucket writes and fsyncs run off the registry mutex and off the async worker; the session
+    // stays `commit_in_progress` until the outcome is recorded below.
+    let old = PrivateHnswOramEpochState {
+        index_epoch: old_epoch,
+        root_hash: old_root_hash,
+    };
+    let new = PrivateHnswOramEpochState {
+        index_epoch: new_epoch,
+        root_hash: new_root_hash,
+    };
+    let store_commit_signature = PrivateHnswOramSignature {
+        alg: commit_signature.alg.clone(),
+        key_id: commit_signature.key_id.clone(),
+        sig: commit_signature.sig.clone(),
+    };
+    let committed = tokio::task::spawn_blocking(move || {
+        plan.store
             .commit_writeback_with_signature(
                 &old,
                 &new,
-                session.bucket_count,
+                plan.bucket_count,
                 &updated_buckets,
-                session.max_bucket_ciphertext_bytes,
+                plan.max_bucket_ciphertext_bytes,
                 &store_commit_signature,
                 PrivateHnswSignatureVerification {
-                    expected_key_id: &commit_signature.key_id,
-                    public_key: &public_key,
+                    expected_key_id: &store_commit_signature.key_id,
+                    public_key: &plan.public_key,
                 },
             )
-            .map_err(private_hnsw_commit_writeback_store_error)?;
-        session.index_epoch = committed.index_epoch;
-        session.root_hash = committed.root_hash.clone();
-        session.lease_expires_unix = session_lease_expires_unix(now_unix)?;
-        Ok(committed)
+            .map_err(private_hnsw_commit_writeback_store_error)
     })
+    .await
+    .unwrap_or_else(|_| {
+        Err(StorageError::service_error(
+            "private HNSW ORAM commit task failed",
+        ))
+    });
+    let mut registry = session_registry()
+        .lock()
+        .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
+    match committed {
+        Ok(committed) => {
+            registry.complete_commit(
+                &request_context.collection_crypto_id,
+                vector_name,
+                session_id,
+                &committed,
+                session_lease_expires_unix(now_unix)?,
+            )?;
+            Ok(committed)
+        }
+        Err(error) => {
+            let _ = registry.cancel_commit(
+                &request_context.collection_crypto_id,
+                vector_name,
+                session_id,
+            );
+            Err(error)
+        }
+    }
 }
 
 pub async fn do_close_private_hnsw_session(

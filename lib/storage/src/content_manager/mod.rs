@@ -3015,12 +3015,15 @@ pub trait CollectionContainer {
 
     fn apply_collections_snapshot(&self, data: CollectionsSnapshot) -> Result<(), StorageError>;
 
+    /// Applies a collections snapshot, reporting whether a failure happened before or after
+    /// local side effects; the default cannot tell and conservatively reports indeterminate.
     fn apply_collections_snapshot_with_private_oram_state(
         &self,
         data: CollectionsSnapshot,
         _private_oram: consensus_manager::PrivateOramSnapshotState<'_>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), consensus_manager::CollectionsSnapshotApplyError> {
         self.apply_collections_snapshot(data)
+            .map_err(consensus_manager::CollectionsSnapshotApplyError::Indeterminate)
     }
 
     fn remove_peer(&self, peer_id: PeerId) -> Result<(), StorageError>;

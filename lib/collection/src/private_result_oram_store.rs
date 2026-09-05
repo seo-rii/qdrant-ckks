@@ -58,6 +58,13 @@ const MAX_PENDING_WRITEBACK_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_OWNER_EPOCH_DIRECTORY_ENTRIES: usize = 4_096;
 #[cfg(test)]
 const MAX_OWNER_EPOCH_DIRECTORY_ENTRIES: usize = 16;
+/// Epoch commit records retained behind the current epoch. Owner verification hashes every
+/// commit file and refuses directories above `MAX_OWNER_EPOCH_DIRECTORY_ENTRIES`, so an
+/// unbounded history made every v2 owner verification of a long-lived index fail for good.
+#[cfg(not(test))]
+const EPOCH_COMMIT_HISTORY_KEEP: u64 = 1_024;
+#[cfg(test)]
+const EPOCH_COMMIT_HISTORY_KEEP: u64 = 4;
 const BUCKET_JSON_OVERHEAD_BYTES: usize = 32 * 1024;
 const OWNER_EXACT_OLD_STORE_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-owner-result-store-exact-old/v1";
@@ -1492,7 +1499,42 @@ impl PrivateResultOramStore {
             &self.temp_dir(),
             &self.current_epoch_path(),
             new,
-        )
+        )?;
+        self.prune_epoch_commit_history(new.index_epoch);
+        Ok(())
+    }
+
+    /// Drops epoch commit records older than the retained window. Pruning only runs here, when
+    /// the epoch advances under the owner lock, so the epoch-directory digest a verifier sees
+    /// for a given epoch never changes underneath it. Failures are logged: the commit is
+    /// already durable and the next advance retries.
+    fn prune_epoch_commit_history(&self, current_epoch: u64) {
+        let Some(floor) = current_epoch.checked_sub(EPOCH_COMMIT_HISTORY_KEEP) else {
+            return;
+        };
+        let epochs_dir = self.epochs_dir();
+        let Ok(entries) = fs_err::read_dir(&epochs_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(epoch) = name
+                .strip_suffix(".commit")
+                .and_then(|encoded| encoded.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            if epoch >= floor || name != format!("{epoch:08}.commit") {
+                continue;
+            }
+            if let Err(error) = remove_private_file(&entry.path(), &epochs_dir, MAX_EPOCH_BYTES) {
+                log::warn!("failed to prune private result ORAM epoch commit history: {error}");
+                return;
+            }
+        }
     }
 
     pub fn commit_writeback(

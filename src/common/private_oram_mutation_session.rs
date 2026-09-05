@@ -1881,6 +1881,13 @@ pub(crate) async fn do_read_private_oram_mutation_hnsw_paths_v2(
     padding: PrivateHnswReadPadding,
     client_signature: PrivateHnswClientSignature,
 ) -> StorageResult<PrivateHnswReadPathsResponse> {
+    // Authorize before the registry is touched: an unauthorized caller must neither flip the
+    // session's read-in-progress state nor learn from distinct errors whether it exists.
+    auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "private_oram_mutation_read_hnsw_paths",
+    )?;
     let leader = current_active_mutation_leader_token(dispatcher)?;
     let now_unix = current_unix_secs()?;
     reap_expired_sessions(now_unix)?;
@@ -1933,6 +1940,11 @@ pub(crate) async fn do_read_private_oram_mutation_result_buckets_v2(
     bucket_ids: Vec<u64>,
     read_signature: PrivateResultOramSignature,
 ) -> StorageResult<PrivateResultOramReadBucketsResponse> {
+    auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new(),
+        "private_oram_mutation_read_result_buckets",
+    )?;
     let leader = current_active_mutation_leader_token(dispatcher)?;
     let now_unix = current_unix_secs()?;
     reap_expired_sessions(now_unix)?;
