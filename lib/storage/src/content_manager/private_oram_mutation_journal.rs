@@ -8444,6 +8444,74 @@ mod tests {
     }
 
     #[test]
+    fn v2_owner_recovery_capsule_store_supersedes_previous_generation() {
+        let parent_temp = tempfile::tempdir().unwrap();
+        let next_parent_temp = tempfile::tempdir().unwrap();
+        let owner_temp = tempfile::tempdir().unwrap();
+        let next_owner_temp = tempfile::tempdir().unwrap();
+        let (pair, fixture) = paired_store_fixture(&owner_temp);
+        let activation = activation_locator_for_capsule_test(213);
+        let parent_journal = journal(&parent_temp, &fixture);
+        let package = point_stage_owner_capsule_package_v2(
+            &parent_journal,
+            &fixture,
+            &pair,
+            11,
+            activation.clone(),
+        );
+        let owner_store =
+            owner_capsule_store_v2(&owner_temp.path().join("collection"), &fixture, 11);
+        owner_store
+            .install(&package, &activation, pair.resources())
+            .unwrap();
+
+        // The next mutation of the same collection mints a capsule for the next lease
+        // generation; the store must accept it instead of treating the collection as one-shot.
+        let (next_pair, next_base) = paired_store_fixture(&next_owner_temp);
+        let mut next_lease = next_base.preparing_lease.clone();
+        next_lease.generation += 1;
+        next_lease.writer_fence += 1;
+        let next_fixture = Fixture {
+            public_key: next_base.public_key.clone(),
+            immutable_manifest: next_base.immutable_manifest.clone(),
+            mutation_bundle: next_base.mutation_bundle.clone(),
+            preparing_lease: next_lease,
+            committed_lease: next_base.committed_lease.clone(),
+            old_consensus: next_base.old_consensus.clone(),
+            new_consensus: next_base.new_consensus.clone(),
+            staged_frame_bytes: next_base.staged_frame_bytes.clone(),
+        };
+        let next_journal = journal(&next_parent_temp, &next_fixture);
+        let next_package = point_stage_owner_capsule_package_v2(
+            &next_journal,
+            &next_fixture,
+            &next_pair,
+            11,
+            activation.clone(),
+        );
+        assert_ne!(next_package, package);
+        assert_eq!(
+            next_package.lease_generation(),
+            package.lease_generation() + 1
+        );
+        owner_store
+            .install(&next_package, &activation, next_pair.resources())
+            .unwrap();
+        // The current capsule stays idempotent, a replay of the previous generation is refused,
+        // and the store serves the newest material.
+        owner_store
+            .install(&next_package, &activation, next_pair.resources())
+            .unwrap();
+        assert!(matches!(
+            owner_store
+                .install(&package, &activation, pair.resources())
+                .unwrap_err(),
+            PrivateOramMutationJournalError::ConcurrentMutation
+        ));
+        owner_store.load_recovery_material_v2(&activation).unwrap();
+    }
+
+    #[test]
     fn v2_owner_recovery_capsule_requires_point_stage_durable_parent() {
         let parent_temp = tempfile::tempdir().unwrap();
         let owner_temp = tempfile::tempdir().unwrap();

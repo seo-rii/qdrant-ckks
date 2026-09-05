@@ -108,7 +108,7 @@ use storage::content_manager::private_oram_mutation_journal::encode_private_oram
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::{
     Dispatcher, PrivateOramEpochRef, PrivateOramPendingTransitionRef, PrivateOramRecoveryAction,
-    classify_private_oram_recovery,
+    classify_private_oram_recovery, private_oram_writeback_outcome_indeterminate,
 };
 use storage::rbac::{Access, AccessRequirements, Auth};
 use tokio::sync::{Mutex, Semaphore};
@@ -2589,6 +2589,14 @@ pub(crate) async fn commit_private_hnsw_paths_coordinated(
         .await;
     match result {
         Ok(()) => Ok(transition.new),
+        Err(coordinate_error)
+            if private_oram_writeback_outcome_indeterminate(&coordinate_error) =>
+        {
+            // The epoch CAS is still unresolved: the prepared writeback stays on every replica
+            // and the session stays in its commit phase until session recovery classifies the
+            // settled consensus state.
+            Err(coordinate_error)
+        }
         Err(coordinate_error) => {
             let consensus = dispatcher.private_oram_consensus_epoch(&key)?;
             match classify_failed_private_oram_owner_writeback(
@@ -2862,6 +2870,12 @@ pub(crate) async fn commit_private_result_oram_buckets_coordinated(
         .await;
     match result {
         Ok(()) => Ok(transition.new),
+        Err(coordinate_error)
+            if private_oram_writeback_outcome_indeterminate(&coordinate_error) =>
+        {
+            // See the HNSW path: an unresolved CAS must not trigger a rollback.
+            Err(coordinate_error)
+        }
         Err(coordinate_error) => {
             let consensus = dispatcher.private_oram_consensus_epoch(&key)?;
             match classify_failed_private_oram_owner_writeback(

@@ -1287,7 +1287,6 @@ fn validate_directory_metadata(
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
         if metadata.uid() != nix::unistd::Uid::effective().as_raw()
             || metadata.permissions().mode() & 0o7777 != 0o700
-            || metadata.nlink() < 2
         {
             return Err(PrivateOramPointStagingError::Corrupt);
         }

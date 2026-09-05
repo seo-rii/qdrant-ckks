@@ -155,6 +155,10 @@ enum PrivateOramExternalRecoveryConsensusInstallState {
     Staging,
     Installing,
     Committed,
+    /// Consensus no longer carries this marker's lease (no record, no active lease, or a lease
+    /// owned by another peer/operation) and the install was never committed. A marker that
+    /// never replaced the live tree is cancelled locally instead of refusing to boot.
+    Superseded,
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -1489,7 +1493,14 @@ fn reconcile_install_transaction(
         return Ok(());
     }
 
-    if consensus == PrivateOramExternalRecoveryConsensusInstallState::Staging {
+    if matches!(
+        consensus,
+        PrivateOramExternalRecoveryConsensusInstallState::Staging
+            | PrivateOramExternalRecoveryConsensusInstallState::Superseded
+    ) {
+        // A superseded marker whose live tree was never replaced (Prepared over an untouched
+        // tree, or a completed rollback) is cancelled like a staging-phase attempt. Every other
+        // phase still fails closed below.
         return match transaction.marker.phase {
             PrivateOramExternalRecoveryInstallPhase::Prepared
                 if transaction.classify_tree_state()?
@@ -1795,7 +1806,9 @@ fn consensus_install_state(
     marker: &PrivateOramExternalRecoveryInstallMarker,
     state: Option<&PrivateOramExternalRecoveryState>,
 ) -> Result<PrivateOramExternalRecoveryConsensusInstallState, StorageError> {
-    let state = state.ok_or_else(invalid_install_state)?;
+    let Some(state) = state else {
+        return Ok(PrivateOramExternalRecoveryConsensusInstallState::Superseded);
+    };
     let install_intent_digest = private_oram_external_recovery_install_intent_digest(marker);
     if state.committed_backup_generation == marker.backup_generation
         && state.committed_checkpoint_digest.as_deref() == Some(&marker.checkpoint_digest)
@@ -1803,16 +1816,15 @@ fn consensus_install_state(
     {
         return Ok(PrivateOramExternalRecoveryConsensusInstallState::Committed);
     }
-    let lease = state
-        .active_lease
-        .as_ref()
-        .ok_or_else(invalid_install_state)?;
+    let Some(lease) = state.active_lease.as_ref() else {
+        return Ok(PrivateOramExternalRecoveryConsensusInstallState::Superseded);
+    };
     if lease.owner_peer_id != marker.owner_peer_id
         || lease.operation_id_hash != marker.operation_id_hash
         || lease.checkpoint_digest != marker.checkpoint_digest
         || lease.backup_generation != marker.backup_generation
     {
-        return Err(invalid_install_state());
+        return Ok(PrivateOramExternalRecoveryConsensusInstallState::Superseded);
     }
     match lease.phase {
         PrivateOramExternalRecoveryLeasePhase::Staging if lease.install_intent_digest.is_none() => {
@@ -3203,6 +3215,44 @@ mod tests {
 
         let second = staging.prepare_install("docs", &lease).unwrap();
         assert_ne!(second.install_intent_digest(), first_digest);
+    }
+
+    #[test]
+    fn superseded_lease_reconcile_cancels_an_untouched_prepared_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let (staging, lease) = install_fixture(&temp);
+        drop(staging.prepare_install("docs", &lease).unwrap());
+        // Another peer superseded the expired lease with its own operation.
+        let mut foreign = recovery_state(
+            &staging,
+            &lease,
+            PrivateOramExternalRecoveryLeasePhase::Staging,
+        );
+        let foreign_lease = foreign
+            .active_lease
+            .as_mut()
+            .expect("staging recovery must have a lease");
+        foreign_lease.owner_peer_id = foreign_lease.owner_peer_id.wrapping_add(1);
+        foreign_lease.operation_id_hash = BASE64URL_NOPAD.encode(&[64; 32]);
+        reconcile_fixture(&temp, foreign).unwrap();
+        assert!(!staging.install_marker_path().exists());
+        assert_eq!(
+            fs::read(staging.live_collection_path("docs").join("nested/old")).unwrap(),
+            b"old-tree",
+        );
+
+        // The consensus record can also be gone entirely after an abort elsewhere.
+        drop(staging.prepare_install("docs", &lease).unwrap());
+        reconcile_private_oram_external_recovery_installs(temp.path(), |_| None).unwrap();
+        assert!(!staging.install_marker_path().exists());
+
+        // A marker that already replaced the live tree still fails closed under a foreign lease.
+        let mut transaction = staging.prepare_install("docs", &lease).unwrap();
+        transaction.move_live_to_backup().unwrap();
+        transaction.promote_verified_collection().unwrap();
+        transaction.mark_load_in_progress().unwrap();
+        drop(transaction);
+        assert!(reconcile_private_oram_external_recovery_installs(temp.path(), |_| None).is_err());
     }
 
     #[test]

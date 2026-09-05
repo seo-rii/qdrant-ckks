@@ -213,16 +213,19 @@ pub(crate) async fn supervise_private_oram_mutations_v2(
             .await
             {
                 Ok(status) => status,
-                Err(_) => PrivateOramMutationSupervisorStatusV2 {
-                    state: PrivateOramMutationSupervisorStateV2::Blocked,
-                    block_reason: Some(
-                        PrivateOramMutationSupervisorBlockReasonV2::ReconcileFailure,
-                    ),
-                    generation: next_generation,
-                    failed: 1,
-                    last_scan_unix: current_unix_secs().unwrap_or_default(),
-                    ..PrivateOramMutationSupervisorStatusV2::default()
-                },
+                Err(error) => {
+                    log::warn!("private ORAM mutation supervisor pass failed: {error}");
+                    PrivateOramMutationSupervisorStatusV2 {
+                        state: PrivateOramMutationSupervisorStateV2::Blocked,
+                        block_reason: Some(
+                            PrivateOramMutationSupervisorBlockReasonV2::ReconcileFailure,
+                        ),
+                        generation: next_generation,
+                        failed: 1,
+                        last_scan_unix: current_unix_secs().unwrap_or_default(),
+                        ..PrivateOramMutationSupervisorStatusV2::default()
+                    }
+                }
             },
             None => PrivateOramMutationSupervisorStatusV2 {
                 state: PrivateOramMutationSupervisorStateV2::Blocked,
@@ -273,7 +276,17 @@ async fn reconcile_private_oram_mutations_once_v2(
     let access = storage::rbac::Access::full("private ORAM mutation supervisor discovery");
     let mut collection_names = HashMap::new();
     for pass in toc.all_collections(&access).await {
-        let collection = toc.get_collection(&pass).await?;
+        // A collection deleted between the listing and the lookup must not abort the whole
+        // pass for every other collection.
+        let collection = match toc.get_collection(&pass).await {
+            Ok(collection) => collection,
+            Err(error) => {
+                log::debug!(
+                    "private ORAM mutation supervisor skipped a collection that disappeared during discovery: {error}"
+                );
+                continue;
+            }
+        };
         let config = collection.config_snapshot().await;
         let Ok(collection_id) = config.stable_crypto_id(collection.name()) else {
             continue;
@@ -336,7 +349,12 @@ async fn reconcile_private_oram_mutations_once_v2(
                 status.reconciled = status.reconciled.saturating_add(1);
                 status.awaiting_cleanup = status.awaiting_cleanup.saturating_add(1);
             }
-            Err(_) => status.failed = status.failed.saturating_add(1),
+            Err(error) => {
+                log::warn!(
+                    "private ORAM mutation supervisor could not acknowledge a cleared mutation generation {generation}: {error}"
+                );
+                status.failed = status.failed.saturating_add(1);
+            }
         }
     }
     for key in keys {
@@ -344,15 +362,29 @@ async fn reconcile_private_oram_mutations_once_v2(
             status.failed = status.failed.saturating_add(1);
             continue;
         };
-        if private_oram_detached_job_exists_for_collection_v2(&key.collection_id)? {
-            status.process_local_pending = status.process_local_pending.saturating_add(1);
-            continue;
+        match private_oram_detached_job_exists_for_collection_v2(&key.collection_id) {
+            Ok(true) => {
+                status.process_local_pending = status.process_local_pending.saturating_add(1);
+                continue;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                log::warn!(
+                    "private ORAM mutation supervisor could not inspect detached jobs: {error}"
+                );
+                status.failed = status.failed.saturating_add(1);
+                continue;
+            }
         }
-        let slot = consensus
-            .private_oram_mutation_lease_slot(&key)
-            .ok_or_else(|| {
-                StorageError::service_error("private ORAM mutation supervisor state is unavailable")
-            })?;
+        // A key listed as active whose lease slot is missing is a per-collection inconsistency;
+        // report it and keep reconciling the other collections.
+        let Some(slot) = consensus.private_oram_mutation_lease_slot(&key) else {
+            log::warn!(
+                "private ORAM mutation supervisor found an active mutation key without a lease slot"
+            );
+            status.failed = status.failed.saturating_add(1);
+            continue;
+        };
         let Some(lease) = slot.active.as_ref() else {
             continue;
         };
@@ -391,9 +423,19 @@ async fn reconcile_private_oram_mutations_once_v2(
                     status.reconciled = status.reconciled.saturating_add(1);
                     status.awaiting_cleanup = status.awaiting_cleanup.saturating_add(1);
                 }
-                Err(_) => status.failed = status.failed.saturating_add(1),
+                Err(error) => {
+                    log::warn!(
+                        "private ORAM mutation supervisor could not resume a terminal mutation: {error}"
+                    );
+                    status.failed = status.failed.saturating_add(1);
+                }
             },
-            Err(_) => status.failed = status.failed.saturating_add(1),
+            Err(error) => {
+                log::warn!(
+                    "private ORAM mutation supervisor could not reconcile an admitted mutation: {error}"
+                );
+                status.failed = status.failed.saturating_add(1);
+            }
         }
     }
     let (immutable_coordinator_unavailable, oldest_foreign_pending_age_secs) =

@@ -639,11 +639,16 @@ impl TableOfContent {
         let key = PrivateOramExternalRecoveryKey {
             collection_id: config.stable_crypto_id(collection.name())?,
         };
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default();
         Ok(private_oram_external_recovery_fence(
             dispatcher
                 .consensus_state()
                 .private_oram_external_recovery(&key)
                 .as_ref(),
+            now_unix,
         ))
     }
 
@@ -1627,11 +1632,19 @@ impl PrivateOramExternalRecoveryCollectionInstallGuard<'_> {
 
 fn private_oram_external_recovery_fence(
     state: Option<&PrivateOramExternalRecoveryState>,
+    now_unix: u64,
 ) -> Option<PrivateOramExternalRecoveryFence> {
     match state.and_then(|state| state.active_lease.as_ref()) {
-        Some(lease) if lease.phase == PrivateOramExternalRecoveryLeasePhase::Staging => {
+        // An expired staging lease can already be superseded by another peer's `begin`; it must
+        // not keep fencing writes until someone remembers to abort it. Installing leases still
+        // fence unconditionally because the live tree may be mid-replacement.
+        Some(lease)
+            if lease.phase == PrivateOramExternalRecoveryLeasePhase::Staging
+                && lease.expires_at_unix > now_unix =>
+        {
             Some(PrivateOramExternalRecoveryFence::Writes)
         }
+        Some(lease) if lease.phase == PrivateOramExternalRecoveryLeasePhase::Staging => None,
         Some(lease) if lease.phase == PrivateOramExternalRecoveryLeasePhase::Installing => {
             Some(PrivateOramExternalRecoveryFence::All)
         }
@@ -1690,19 +1703,32 @@ mod tests {
             ),
         };
 
-        assert_eq!(private_oram_external_recovery_fence(None), None);
+        assert_eq!(private_oram_external_recovery_fence(None, 150), None);
         assert_eq!(
-            private_oram_external_recovery_fence(Some(&state(
-                PrivateOramExternalRecoveryLeasePhase::Staging,
-            ))),
+            private_oram_external_recovery_fence(
+                Some(&state(PrivateOramExternalRecoveryLeasePhase::Staging)),
+                150,
+            ),
             Some(PrivateOramExternalRecoveryFence::Writes),
         );
+        // An expired staging lease no longer fences writes; it is already supersedable.
         assert_eq!(
-            private_oram_external_recovery_fence(Some(&state(
-                PrivateOramExternalRecoveryLeasePhase::Installing,
-            ))),
-            Some(PrivateOramExternalRecoveryFence::All),
+            private_oram_external_recovery_fence(
+                Some(&state(PrivateOramExternalRecoveryLeasePhase::Staging)),
+                160,
+            ),
+            None,
         );
+        // Installing leases fence regardless of expiry: the live tree may be mid-replacement.
+        for now_unix in [150, 1_000] {
+            assert_eq!(
+                private_oram_external_recovery_fence(
+                    Some(&state(PrivateOramExternalRecoveryLeasePhase::Installing)),
+                    now_unix,
+                ),
+                Some(PrivateOramExternalRecoveryFence::All),
+            );
+        }
     }
 
     const PRIVATE_ORAM_RECEIVING_SHARD_COLLECTION_NAMES: &[&str] = &[

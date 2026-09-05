@@ -33,6 +33,7 @@ use parking_lot::Mutex;
 use segment::types::ShardKey;
 
 use crate::content_manager::collection_meta_ops::AliasOperations;
+use crate::content_manager::consensus_manager::ConsensusProposalOutcome;
 use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
     CompareAndSwapPrivateOramSessionLease, PrivateOramCollectionLayoutTransition,
@@ -63,6 +64,28 @@ use crate::{
     ClusterStatus, CollectionMetaOperations, ConsensusOperations, ConsensusStateRef, StorageError,
     TableOfContent,
 };
+
+/// How many times an unresolved private ORAM epoch CAS is re-proposed before the writeback is
+/// left prepared for recovery.
+const PRIVATE_ORAM_EPOCH_CAS_RESOLVE_ATTEMPTS: usize = 3;
+const PRIVATE_ORAM_WRITEBACK_INDETERMINATE: &str =
+    "private ORAM writeback outcome is indeterminate";
+
+/// Definitive or unresolved outcome of a private ORAM epoch CAS proposal.
+#[derive(Debug)]
+pub enum PrivateOramEpochCasOutcome {
+    Applied,
+    /// The CAS definitively did not apply (rejected, failed, or never submitted).
+    Rejected(StorageError),
+    /// The proposal may still commit; prepared state must not be rolled back on this basis.
+    Indeterminate(StorageError),
+}
+
+/// True when a writeback coordinator error means the consensus outcome is still unknown and the
+/// prepared writeback was intentionally retained; callers must not abort it.
+pub fn private_oram_writeback_outcome_indeterminate(error: &StorageError) -> bool {
+    matches!(error, StorageError::Timeout { .. })
+}
 
 #[derive(Clone)]
 pub struct Dispatcher {
@@ -511,23 +534,99 @@ impl Dispatcher {
         operation: CompareAndSwapPrivateOramEpoch,
         wait_timeout: Option<Duration>,
     ) -> Result<(), StorageError> {
-        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
-            StorageError::service_error(
+        match self
+            .submit_private_oram_epoch_cas_outcome(operation, wait_timeout)
+            .await
+        {
+            PrivateOramEpochCasOutcome::Applied => Ok(()),
+            PrivateOramEpochCasOutcome::Rejected(error)
+            | PrivateOramEpochCasOutcome::Indeterminate(error) => Err(error),
+        }
+    }
+
+    /// Proposes the epoch CAS and reports a definitive or indeterminate outcome.
+    pub async fn submit_private_oram_epoch_cas_outcome(
+        &self,
+        operation: CompareAndSwapPrivateOramEpoch,
+        wait_timeout: Option<Duration>,
+    ) -> PrivateOramEpochCasOutcome {
+        let Some(consensus_state) = self.consensus_state.as_ref() else {
+            return PrivateOramEpochCasOutcome::Rejected(StorageError::service_error(
                 "private ORAM consensus epoch/root CAS requires distributed mode",
-            )
-        })?;
-        let applied = consensus_state
-            .propose_consensus_op_with_await(
+            ));
+        };
+        match consensus_state
+            .propose_consensus_op_with_outcome(
                 ConsensusOperations::CompareAndSwapPrivateOramEpoch(operation),
                 wait_timeout,
             )
-            .await?;
-        if !applied {
-            return Err(StorageError::service_error(
-                "private ORAM consensus epoch/root CAS was not applied",
-            ));
+            .await
+        {
+            ConsensusProposalOutcome::Applied(receipt) if receipt.applied() => {
+                PrivateOramEpochCasOutcome::Applied
+            }
+            ConsensusProposalOutcome::Applied(_) => {
+                PrivateOramEpochCasOutcome::Rejected(StorageError::service_error(
+                    "private ORAM consensus epoch/root CAS was not applied",
+                ))
+            }
+            ConsensusProposalOutcome::NotSubmitted(error)
+            | ConsensusProposalOutcome::Failed(error) => {
+                PrivateOramEpochCasOutcome::Rejected(error)
+            }
+            ConsensusProposalOutcome::Indeterminate(error) => {
+                PrivateOramEpochCasOutcome::Indeterminate(error)
+            }
         }
-        Ok(())
+    }
+
+    /// Drives the epoch CAS to a definitive answer where possible.
+    ///
+    /// An unresolved proposal (timed-out wait, dropped apply channel) is re-proposed: the retry
+    /// is ordered after the original entry, so it either applies (the original never did) or is
+    /// rejected because the consensus record already carries `new` (the original committed).
+    /// Only when every attempt stays unresolved does this return `StorageError::Timeout`, and
+    /// callers holding prepared writebacks must then keep them for recovery instead of aborting.
+    pub async fn resolve_private_oram_epoch_cas(
+        &self,
+        operation: CompareAndSwapPrivateOramEpoch,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        let mut last_indeterminate = None;
+        for attempt in 0..PRIVATE_ORAM_EPOCH_CAS_RESOLVE_ATTEMPTS {
+            match self
+                .submit_private_oram_epoch_cas_outcome(operation.clone(), wait_timeout)
+                .await
+            {
+                PrivateOramEpochCasOutcome::Applied => return Ok(()),
+                PrivateOramEpochCasOutcome::Rejected(error) => {
+                    if attempt > 0
+                        && self.private_oram_consensus_epoch(&operation.key)?.as_ref()
+                            == Some(&operation.new)
+                    {
+                        // The earlier unresolved attempt did commit; the retry lost the CAS
+                        // against the state it produced.
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+                PrivateOramEpochCasOutcome::Indeterminate(error) => {
+                    log::warn!(
+                        "private ORAM epoch CAS outcome is unresolved (attempt {}): {error}",
+                        attempt + 1
+                    );
+                    last_indeterminate = Some(error);
+                }
+            }
+        }
+        let error = last_indeterminate
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        Err(StorageError::Timeout {
+            description: format!(
+                "{PRIVATE_ORAM_WRITEBACK_INDETERMINATE}: the consensus epoch CAS did not resolve; the prepared writeback is retained for recovery ({error})"
+            ),
+        })
     }
 
     pub async fn submit_private_oram_session_lease_cas(
@@ -801,9 +900,13 @@ impl Dispatcher {
     {
         prepare()?;
         if let Err(consensus_error) = self
-            .submit_private_oram_epoch_cas(operation, wait_timeout)
+            .resolve_private_oram_epoch_cas(operation, wait_timeout)
             .await
         {
+            if private_oram_writeback_outcome_indeterminate(&consensus_error) {
+                // The CAS may still commit: rolling back now could orphan the new epoch.
+                return Err(consensus_error);
+            }
             abort()?;
             return Err(consensus_error);
         }
@@ -876,9 +979,15 @@ impl Dispatcher {
         }
 
         if let Err(consensus_error) = self
-            .submit_private_oram_epoch_cas(operation, wait_timeout)
+            .resolve_private_oram_epoch_cas(operation, wait_timeout)
             .await
         {
+            if private_oram_writeback_outcome_indeterminate(&consensus_error) {
+                // The CAS may still commit: aborting the prepared journals now could leave
+                // consensus at the new epoch with no store holding the buckets. Keep every
+                // prepared replica for the recovery path instead.
+                return Err(consensus_error);
+            }
             let remote_abort = abort_replicas().await;
             let local_abort = abort_local();
             remote_abort?;

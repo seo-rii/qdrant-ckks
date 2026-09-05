@@ -17,7 +17,7 @@ use common::cpu::linux_high_thread_priority;
 use raft::eraftpb::Message as RaftMessage;
 use raft::prelude::*;
 use raft::{INVALID_ID, SoftState, StateRole};
-use storage::content_manager::consensus_manager::ConsensusStateRef;
+use storage::content_manager::consensus_manager::{ConsensusStateRef, raft_conf_change_pending};
 use storage::content_manager::consensus_ops::{ConsensusOperations, SnapshotStatus};
 use storage::content_manager::toc::TableOfContent;
 use tokio::runtime::Handle;
@@ -45,6 +45,13 @@ pub enum Message {
 
 /// Aka Consensus Thread
 /// Manages proposed changes to consensus state, ensures that everything is ordered properly
+/// Kind of Raft membership change proposed through the private ORAM topology gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TopologyChange {
+    AddPeer,
+    RemovePeer,
+}
+
 pub struct Consensus {
     /// Raft structure which handles raft-related state
     node: Node,
@@ -636,7 +643,7 @@ impl Consensus {
     fn advance_node_impl(&mut self, message: Message) -> anyhow::Result<()> {
         match message {
             Message::FromClient(ConsensusOperations::AddPeer { peer_id, uri }) => {
-                self.ensure_private_oram_topology_proposal_allowed()?;
+                self.ensure_private_oram_topology_proposal_allowed(TopologyChange::AddPeer)?;
                 let existing_uris = self
                     .broker
                     .consensus_state
@@ -675,7 +682,7 @@ impl Consensus {
             }
 
             Message::FromClient(ConsensusOperations::RemovePeer(peer_id)) => {
-                self.ensure_private_oram_topology_proposal_allowed()?;
+                self.ensure_private_oram_topology_proposal_allowed(TopologyChange::RemovePeer)?;
                 let mut change = ConfChangeV2::default();
 
                 change.set_changes(vec![raft_proto::new_conf_change_single(
@@ -774,21 +781,35 @@ impl Consensus {
         Ok(())
     }
 
-    fn ensure_private_oram_topology_proposal_allowed(&self) -> anyhow::Result<()> {
+    fn ensure_private_oram_topology_proposal_allowed(
+        &self,
+        change: TopologyChange,
+    ) -> anyhow::Result<()> {
         if self
             .broker
             .consensus_state
             .private_oram_mutation_format_floor_installed()
         {
-            return Err(anyhow!(
-                "cluster topology changes are disabled after private ORAM mutation activation"
-            ));
+            match change {
+                // Dropping a dead peer never adds a participant outside the activation-time
+                // private ORAM roster, and without it a degraded cluster could never recover
+                // quorum. Adding peers still requires the roster to be re-established first.
+                TopologyChange::RemovePeer => log::warn!(
+                    "removing a peer after private ORAM mutation activation; the private ORAM                      roster stays bound to the activation-time membership"
+                ),
+                TopologyChange::AddPeer => {
+                    return Err(anyhow!(
+                        "adding peers is disabled after private ORAM mutation activation until the private ORAM roster is re-established"
+                    ));
+                }
+            }
         }
         let commit = self.node.store().hard_state().commit;
         let last_log_index = self.node.store().last_index()?;
+        let applied = self.node.raft.raft_log.applied;
         if commit != last_log_index
-            || self.node.raft.raft_log.applied != commit
-            || self.node.raft.pending_conf_index != 0
+            || applied != commit
+            || raft_conf_change_pending(self.node.raft.pending_conf_index, applied)
         {
             return Err(anyhow!(
                 "cluster topology change requires a fully applied stable Raft log"
@@ -909,9 +930,10 @@ impl Consensus {
             return Ok(false);
         }
 
+        let applied = self.node.raft.raft_log.applied;
         if commit != last_log_entry
-            || self.node.raft.raft_log.applied != commit
-            || self.node.raft.pending_conf_index != 0
+            || applied != commit
+            || raft_conf_change_pending(self.node.raft.pending_conf_index, applied)
         {
             return Ok(false);
         }

@@ -363,6 +363,12 @@ async fn _do_recover_from_snapshot(
     };
     toc.require_private_oram_external_recovery_write_allowed(&collection)
         .await?;
+    // Fail before any replica is demoted through consensus: the per-shard recovery below would
+    // otherwise reject a private ORAM collection only after every local replica was already
+    // proposed into the recovery state.
+    collection
+        .validate_private_oram_shard_snapshot_allowed("collection snapshot recovery")
+        .await?;
 
     let state = collection.state().await;
     validate_existing_collection_crypto_identity(

@@ -111,6 +111,12 @@ impl PrivateOramOwnerRecoveryCapsulePackageV2 {
         &self.capsule.descriptor.mutation_bundle.mutation.mutation_id
     }
 
+    /// Mutation lease generation this capsule was minted for. Successive mutations of a
+    /// collection carry strictly increasing generations.
+    pub fn lease_generation(&self) -> u64 {
+        self.capsule.descriptor.preparing_lease.generation
+    }
+
     pub fn coordinator_peer_id(&self) -> PeerId {
         self.capsule.descriptor.coordinator_peer_id
     }
@@ -287,29 +293,30 @@ impl PrivateOramOwnerRecoveryCapsuleStoreV2 {
         let temp = PrivateOramPinnedDirectoryV2::open_at(root, std::ffi::OsStr::new(TEMP_DIR))?;
         temp.validate_binding(root, std::ffi::OsStr::new(TEMP_DIR))?;
 
+        let mut superseding_previous_generation = false;
         if let Some(existing_file) = optional_private_oram_file_at_v2(
             root,
             std::ffi::OsStr::new(CAPSULE_FILE),
             CAPSULE_MAX_BYTES,
         )? {
             let existing: PrivateOramOwnerRecoveryCapsulePackageV2 = existing_file.deserialize()?;
-            validate_capsule_package_v2(
-                &existing,
-                &self.validator,
-                &self.expected_collection_id,
-                self.expected_owner_peer_id,
-                current_activation_authority,
-            )?;
-            if existing != *package {
+            if existing == *package {
+                existing_file.validate_binding_and_contents(root)?;
+                root.sync_all()
+                    .map_err(|_| PrivateOramMutationJournalError::Indeterminate)?;
+                temp.sync()
+                    .map_err(|_| PrivateOramMutationJournalError::Indeterminate)?;
+                lock.validate_root_identity()?;
+                return capsule_install_receipt_v2(package);
+            }
+            // Only one mutation is ever active per collection, so a capsule minted for a later
+            // lease generation supersedes the previous mutation's capsule; the store is not a
+            // one-shot per collection. Any other difference is a conflicting install for the
+            // same generation (or a replay of an older one) and fails closed.
+            if package.lease_generation() <= existing.lease_generation() {
                 return Err(PrivateOramMutationJournalError::ConcurrentMutation);
             }
-            existing_file.validate_binding_and_contents(root)?;
-            root.sync_all()
-                .map_err(|_| PrivateOramMutationJournalError::Indeterminate)?;
-            temp.sync()
-                .map_err(|_| PrivateOramMutationJournalError::Indeterminate)?;
-            lock.validate_root_identity()?;
-            return capsule_install_receipt_v2(package);
+            superseding_previous_generation = true;
         }
 
         let candidate = PrivateOramJsonCandidateV2::new(&temp, package, CAPSULE_MAX_BYTES)?;
@@ -319,7 +326,7 @@ impl PrivateOramOwnerRecoveryCapsuleStoreV2 {
             candidate.name(),
             root,
             std::ffi::OsStr::new(CAPSULE_FILE),
-            true,
+            !superseding_previous_generation,
         ) {
             if let Some(installed) = optional_private_oram_file_at_v2(
                 root,

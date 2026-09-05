@@ -605,6 +605,32 @@ impl PrivateOramPeerActivationChallengeSetV1 {
     }
 }
 
+/// Whether raft-rs still has an uncommitted/unapplied configuration change in flight.
+///
+/// raft-rs sets `Raft::pending_conf_index` to the last log index every time a node becomes
+/// leader and only treats a configuration change as pending while that index is above the
+/// applied index (`Raft::has_pending_conf`). Comparing the field against zero therefore rejects
+/// every membership change on any leader with a non-empty log; this mirrors raft's own check.
+pub fn raft_conf_change_pending(pending_conf_index: u64, applied_index: u64) -> bool {
+    pending_conf_index > applied_index
+}
+
+/// Outcome of a consensus proposal, distinguishing "never submitted" from "submitted but not
+/// observed". Callers that hold prepared local state must only roll it back on a definitive
+/// outcome: an entry whose wait timed out may still commit later.
+#[derive(Debug)]
+pub enum ConsensusProposalOutcome {
+    /// The entry committed and was applied locally; the receipt carries the operation result.
+    Applied(ConsensusApplyReceipt),
+    /// The entry never reached the Raft thread; nothing was proposed.
+    NotSubmitted(StorageError),
+    /// The entry was handed to Raft but its commit/apply was not observed (the wait timed out
+    /// or the apply channel was dropped). It may still commit.
+    Indeterminate(StorageError),
+    /// The entry was applied and the operation itself failed.
+    Failed(StorageError),
+}
+
 pub struct ConsensusManager<C: CollectionContainer> {
     pub persistent: RwLock<Persistent>,
     /// Notifies if the current node knows who the leader and is not in the process of election
@@ -659,12 +685,17 @@ struct NormalEntryApplyOutcome {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ConsensusApplyReceipt {
+pub struct ConsensusApplyReceipt {
     applied: bool,
     local_applied_index: Option<EntryId>,
 }
 
 impl ConsensusApplyReceipt {
+    /// Whether the applied entry reported success for its operation.
+    pub fn applied(&self) -> bool {
+        self.applied
+    }
+
     const fn configuration_change(applied: bool) -> Self {
         Self {
             applied,
@@ -1017,9 +1048,13 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         raw_node: &mut RawNode<T>,
     ) -> Result<bool, StorageError> {
         if self.private_oram_mutation_format_floor_installed() {
-            return Err(StorageError::service_error(
-                "committed cluster topology change crossed the private ORAM activation floor",
-            ));
+            // A committed configuration change must be applied or this peer's state machine
+            // diverges from the quorum and consensus halts for good. The private ORAM roster is
+            // bound to the activation-time configuration, so ORAM mutation paths keep failing
+            // closed for peers outside it until the authority is re-established.
+            log::warn!(
+                "committed cluster topology change crossed the private ORAM activation floor;                  private ORAM mutation participation is limited to the activation-time roster"
+            );
         }
         let change: ConfChangeV2 = prost_for_raft::Message::decode(entry.get_data())?;
 
@@ -1232,7 +1267,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         if !phase_preconditions_hold
             || last_log_index != hard_commit
             || last_applied_index != hard_commit
-            || pending_conf_index != 0
+            || raft_conf_change_pending(pending_conf_index, last_applied_index)
             || persistent.current_unapplied_entry().is_some()
         {
             return Err(invalid());
@@ -3498,23 +3533,45 @@ impl<C: CollectionContainer> ConsensusManager<C> {
 
     async fn await_receiver(
         &self,
-        mut receiver: Receiver<Result<ConsensusApplyReceipt, StorageError>>,
+        receiver: Receiver<Result<ConsensusApplyReceipt, StorageError>>,
         wait_timeout: Duration,
         operation: &ConsensusOperations,
     ) -> Result<ConsensusApplyReceipt, StorageError> {
-        let timeout_res = tokio::time::timeout(wait_timeout, receiver.recv())
+        match self
+            .await_receiver_outcome(receiver, wait_timeout, operation)
             .await
-            .map_err(|_: Elapsed| {
+        {
+            ConsensusProposalOutcome::Applied(receipt) => Ok(receipt),
+            ConsensusProposalOutcome::NotSubmitted(error)
+            | ConsensusProposalOutcome::Indeterminate(error)
+            | ConsensusProposalOutcome::Failed(error) => Err(error),
+        }
+    }
+
+    async fn await_receiver_outcome(
+        &self,
+        mut receiver: Receiver<Result<ConsensusApplyReceipt, StorageError>>,
+        wait_timeout: Duration,
+        operation: &ConsensusOperations,
+    ) -> ConsensusProposalOutcome {
+        match tokio::time::timeout(wait_timeout, receiver.recv()).await {
+            Err(_elapsed) => {
                 self.on_consensus_op_apply.lock().remove(operation);
-                StorageError::service_error(format!(
+                ConsensusProposalOutcome::Indeterminate(StorageError::service_error(format!(
                     "Waiting for consensus operation commit failed. Timeout set at: {} seconds",
                     wait_timeout.as_secs_f64(),
-                ))
-            })?;
-        // 2 possible errors to forward: channel sender dropped OR operation failed
-        timeout_res.map_err(|err| {
-            StorageError::service_error(format!("Error occurred while waiting for consensus operation. Channel sender dropped ({err})"))
-        })?
+                )))
+            }
+            // The sender was dropped before an apply receipt was delivered: the entry may or
+            // may not have committed.
+            Ok(Err(err)) => {
+                ConsensusProposalOutcome::Indeterminate(StorageError::service_error(format!(
+                    "Error occurred while waiting for consensus operation. Channel sender dropped ({err})"
+                )))
+            }
+            Ok(Ok(Err(apply_error))) => ConsensusProposalOutcome::Failed(apply_error),
+            Ok(Ok(Ok(receipt))) => ConsensusProposalOutcome::Applied(receipt),
+        }
     }
 
     pub fn await_for_multiple_operations(
@@ -3619,6 +3676,24 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         operation: ConsensusOperations,
         wait_timeout: Option<Duration>,
     ) -> Result<ConsensusApplyReceipt, StorageError> {
+        match self
+            .propose_consensus_op_with_outcome(operation, wait_timeout)
+            .await
+        {
+            ConsensusProposalOutcome::Applied(receipt) => Ok(receipt),
+            ConsensusProposalOutcome::NotSubmitted(error)
+            | ConsensusProposalOutcome::Indeterminate(error)
+            | ConsensusProposalOutcome::Failed(error) => Err(error),
+        }
+    }
+
+    /// Proposes `operation` and reports whether it was applied, failed definitively, was never
+    /// submitted, or is still unresolved after `wait_timeout`.
+    pub async fn propose_consensus_op_with_outcome(
+        &self,
+        operation: ConsensusOperations,
+        wait_timeout: Option<Duration>,
+    ) -> ConsensusProposalOutcome {
         let wait_timeout = wait_timeout.unwrap_or(defaults::CONSENSUS_META_OP_WAIT);
 
         let is_leader_established = self.is_leader_established.clone();
@@ -3628,12 +3703,17 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 is_leader_established.await_ready_for_timeout(wait_timeout)
             }));
 
-        let is_leader_established = await_ready_for_timeout_future
-            .await
-            .map_err(|err| StorageError::service_error(err.to_string()))?;
+        let is_leader_established = match await_ready_for_timeout_future.await {
+            Ok(is_leader_established) => is_leader_established,
+            Err(err) => {
+                return ConsensusProposalOutcome::NotSubmitted(StorageError::service_error(
+                    err.to_string(),
+                ));
+            }
+        };
 
         if !is_leader_established {
-            return Err(StorageError::service_error(format!(
+            return ConsensusProposalOutcome::NotSubmitted(StorageError::service_error(format!(
                 "Failed to propose operation: leader is not established within {wait_timeout:?}"
             )));
         }
@@ -3651,14 +3731,16 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 }
                 None => {
                     // propose operation to consensus thread
-                    self.propose_sender.send(operation.clone())?;
+                    if let Err(err) = self.propose_sender.send(operation.clone()) {
+                        return ConsensusProposalOutcome::NotSubmitted(err.into());
+                    }
                     // insert new sender
                     on_apply_lock.insert(operation.clone(), sender);
                 }
             };
         }
 
-        self.await_receiver(receiver, wait_timeout, &operation)
+        self.await_receiver_outcome(receiver, wait_timeout, &operation)
             .await
     }
 

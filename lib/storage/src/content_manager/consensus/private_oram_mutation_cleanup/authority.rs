@@ -2091,9 +2091,6 @@ pub(crate) fn apply_private_oram_mutation_authority_create_append_reservation_v3
         || aggregate.lifecycle.active.is_some()
         || aggregate.lease_slot.active.is_some()
         || !terminal_material_is_transferable_to_next_admission_v2(aggregate)
-        || aggregate.rejected_admissions.len() >= MAX_REJECTED_ADMISSIONS
-        || aggregate.append_outcomes.len() >= MAX_APPEND_OUTCOMES
-        || aggregate.reservation_challenge_outcomes.len() >= MAX_RESERVATION_CHALLENGE_OUTCOMES
     {
         return Err(PrivateOramMutationJournalError::InvalidTransition);
     }
@@ -2221,8 +2218,6 @@ pub(crate) fn apply_private_oram_mutation_authority_create_append_reservation_v2
         || aggregate.lease_slot.active.is_some()
         || aggregate.owner_checkpoint_table.has_active_leases()
         || !terminal_material_is_transferable_to_next_admission_v2(aggregate)
-        || aggregate.rejected_admissions.len() >= MAX_REJECTED_ADMISSIONS
-        || aggregate.append_outcomes.len() >= MAX_APPEND_OUTCOMES
     {
         return Err(PrivateOramMutationJournalError::InvalidTransition);
     }
@@ -2419,6 +2414,41 @@ pub(crate) fn apply_private_oram_mutation_authority_acknowledge_reservation_outc
     )
 }
 
+/// Recovery manifest of the admission that produced `append_outcome`.
+///
+/// The reservation-outcome acknowledgement may legitimately arrive after the generation was
+/// already cleared (the owner-driven lifecycle does not wait for the controller's ack), so the
+/// manifest is also looked up in the retained tombstone witness instead of only in the active
+/// admission. Without that fallback the ack could never apply and owner checkpoint leases stayed
+/// held forever.
+fn admission_recovery_manifest_for_outcome_v2(
+    aggregate: &PrivateOramMutationConsensusAggregateV2,
+    append_outcome: &PrivateOramMutationAppendOutcomeV2,
+) -> Result<PrivateOramMutationAllOwnersPrestagedV2, PrivateOramMutationJournalError> {
+    let request_digest = append_outcome
+        .admission_request_digest
+        .as_deref()
+        .ok_or(PrivateOramMutationJournalError::InvalidTransition)?;
+    let admitted = aggregate
+        .lifecycle
+        .active
+        .as_ref()
+        .map(active_admitted)
+        .filter(|admitted| admitted.admission_request_digest == request_digest)
+        .or_else(|| {
+            aggregate
+                .lifecycle
+                .last_cleared
+                .as_ref()
+                .map(|cleared| &cleared.cleanup_witness.admitted)
+                .filter(|admitted| admitted.admission_request_digest == request_digest)
+        })
+        .ok_or(PrivateOramMutationJournalError::InvalidTransition)?;
+    decode_private_oram_mutation_admission_recovery_manifest_v2(
+        &admitted.recovery_manifest_canonical_json,
+    )
+}
+
 fn expected_owner_reservation_completions_v1(
     outcome: &PrivateOramMutationReservationChallengeOutcomeV1,
     aggregate: &PrivateOramMutationConsensusAggregateV2,
@@ -2467,10 +2497,9 @@ fn expected_owner_reservation_completions_v1(
                 return Err(PrivateOramMutationJournalError::Corrupt);
             }
             match append_outcome.kind {
-                PrivateOramMutationAppendOutcomeKindV2::Admitted => aggregate
-                    .active_admission_recovery_manifest()?
-                    .ok_or(PrivateOramMutationJournalError::InvalidTransition)
-                    .map(Some)?,
+                PrivateOramMutationAppendOutcomeKindV2::Admitted => Some(
+                    admission_recovery_manifest_for_outcome_v2(aggregate, append_outcome)?,
+                ),
                 PrivateOramMutationAppendOutcomeKindV2::AdmissionRejected => {
                     let mut matching_rejections = aggregate
                         .rejected_admissions
@@ -2851,7 +2880,7 @@ pub(crate) fn apply_private_oram_mutation_authority_reserved_attempt_rejected_v2
     rejected_admissions.push(rejected);
     let mut append_outcomes = aggregate.append_outcomes.clone();
     append_outcomes.push(outcome);
-    validate_append_history_capacity_v2(&rejected_admissions, &append_outcomes)?;
+    prune_append_history_to_capacity_v2(&mut rejected_admissions, &mut append_outcomes)?;
     advance_aggregate_with_rejected_admissions_v2(
         aggregate,
         aggregate.lifecycle.clone(),
@@ -2975,9 +3004,10 @@ pub(crate) fn apply_private_oram_mutation_authority_admission_v2(
         Some(recovery_manifest.manifest_digest().to_string()),
         context.locator.clone(),
     )?;
+    let mut rejected_admissions = aggregate.rejected_admissions.clone();
     let mut append_outcomes = aggregate.append_outcomes.clone();
     append_outcomes.push(outcome);
-    validate_append_history_capacity_v2(&aggregate.rejected_admissions, &append_outcomes)?;
+    prune_append_history_to_capacity_v2(&mut rejected_admissions, &mut append_outcomes)?;
     advance_aggregate_with_rejected_admissions_v2(
         aggregate,
         applied.lifecycle,
@@ -2985,7 +3015,7 @@ pub(crate) fn apply_private_oram_mutation_authority_admission_v2(
         None,
         None,
         obligations,
-        aggregate.rejected_admissions.clone(),
+        rejected_admissions,
         None,
         append_outcomes,
         aggregate.owner_checkpoint_table.clone(),
@@ -3051,7 +3081,6 @@ pub(crate) fn apply_private_oram_mutation_authority_admission_rejected_v2(
         || aggregate.lifecycle.active.is_some()
         || aggregate.lease_slot.active.is_some()
         || !terminal_material_is_transferable_to_next_admission_v2(aggregate)
-        || aggregate.rejected_admissions.len() >= MAX_REJECTED_ADMISSIONS
     {
         return Err(PrivateOramMutationJournalError::InvalidTransition);
     }
@@ -3101,7 +3130,7 @@ pub(crate) fn apply_private_oram_mutation_authority_admission_rejected_v2(
     rejected_admissions.push(rejected);
     let mut append_outcomes = aggregate.append_outcomes.clone();
     append_outcomes.push(outcome);
-    validate_append_history_capacity_v2(&rejected_admissions, &append_outcomes)?;
+    prune_append_history_to_capacity_v2(&mut rejected_admissions, &mut append_outcomes)?;
     advance_aggregate_with_rejected_admissions_v2(
         aggregate,
         aggregate.lifecycle.clone(),
@@ -3453,7 +3482,13 @@ pub(crate) fn apply_private_oram_mutation_authority_clear_v2(
     context: PrivateOramMutationAggregateApplyContextV2,
 ) -> Result<PrivateOramMutationAuthorityStateV2, PrivateOramMutationJournalError> {
     let aggregate = require_aggregate_v2(current)?;
-    if let Some(cleared) = aggregate.lifecycle.last_cleared.as_ref() {
+    // The tombstone of the previous generation is retained forever, so its presence alone does
+    // not make this entry a retry: only a Clear carrying that tombstone's own request digest is
+    // replayed as a no-op. Any other Clear must apply against the currently pending clear of
+    // the newer generation below.
+    if let Some(cleared) = aggregate.lifecycle.last_cleared.as_ref()
+        && context.request_digest == cleared.clear_pending_digest
+    {
         validate_apply_context_v2(
             aggregate,
             &context,
@@ -3823,11 +3858,18 @@ fn retain_acknowledged_gc_obligation_v2(
     if obligations
         .last()
         .is_some_and(|previous| previous.generation >= candidate.generation)
-        || obligations.len() >= MAX_OUTSTANDING_GC_OBLIGATIONS
     {
         return Err(PrivateOramMutationJournalError::InvalidTransition);
     }
     obligations.push(candidate);
+    // Obligations are retained newest-last; once the bounded history is full the oldest ones
+    // are dropped rather than refusing every further admission of the collection.
+    while obligations.len() > MAX_OUTSTANDING_GC_OBLIGATIONS
+        || (obligations.len() > 1
+            && gc_obligations_serialized_len_v2(obligations)? > MAX_OUTSTANDING_GC_OBLIGATION_BYTES)
+    {
+        obligations.remove(0);
+    }
     if gc_obligations_serialized_len_v2(obligations)? > MAX_OUTSTANDING_GC_OBLIGATION_BYTES {
         obligations.pop();
         return Err(PrivateOramMutationJournalError::InvalidTransition);
@@ -5435,6 +5477,30 @@ fn reservation_challenge_cancellation_digest_v1(
     hasher.update(cancellation.attempt_sequence.to_be_bytes());
     hash_digest(&mut hasher, &cancellation.cancellation_operation_id)?;
     Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+/// Drops the oldest retained rejections/outcomes until both histories fit their caps.
+///
+/// The histories only serve idempotent replay detection and audit; a collection must never
+/// become unable to admit mutations because its bounded history filled up. Pruning happens
+/// deterministically inside the apply path, so every peer keeps the same aggregate.
+fn prune_append_history_to_capacity_v2(
+    rejected: &mut Vec<PrivateOramMutationRejectedAdmissionV2>,
+    outcomes: &mut Vec<PrivateOramMutationAppendOutcomeV2>,
+) -> Result<(), PrivateOramMutationJournalError> {
+    while rejected.len() > MAX_REJECTED_ADMISSIONS
+        || (!rejected.is_empty()
+            && rejected_admissions_serialized_len_v2(rejected)? > MAX_REJECTED_ADMISSION_BYTES)
+    {
+        rejected.remove(0);
+    }
+    while outcomes.len() > MAX_APPEND_OUTCOMES
+        || (!outcomes.is_empty()
+            && append_outcomes_serialized_len_v2(outcomes)? > MAX_APPEND_OUTCOME_BYTES)
+    {
+        outcomes.remove(0);
+    }
+    validate_append_history_capacity_v2(rejected, outcomes)
 }
 
 fn validate_append_history_capacity_v2(

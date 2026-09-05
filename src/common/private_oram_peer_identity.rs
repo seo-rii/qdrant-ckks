@@ -585,7 +585,7 @@ mod platform {
         }
         let mode = metadata.permissions().mode();
         if is_final {
-            if mode & 0o022 != 0 || metadata.nlink() < 2 {
+            if mode & 0o022 != 0 {
                 return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
             }
         } else if mode & 0o022 != 0 {
@@ -667,7 +667,6 @@ mod platform {
         if !metadata.is_dir()
             || metadata.uid() != effective_uid
             || metadata.permissions().mode() & 0o7777 != 0o700
-            || metadata.nlink() < 2
         {
             return Err(PrivateOramPeerIdentityError::InvalidIdentityDirectory);
         }
