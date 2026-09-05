@@ -481,11 +481,10 @@ impl PrivateOramPinnedDirectoryV2 {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn checked_private_oram_entry_name_v2(
     name: &std::ffi::OsStr,
 ) -> Result<std::ffi::CString, PrivateOramMutationJournalError> {
-    let bytes = name.as_bytes();
+    let bytes = name.as_encoded_bytes();
     if bytes.is_empty()
         || bytes == b"."
         || bytes == b".."

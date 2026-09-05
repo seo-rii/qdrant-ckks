@@ -9037,18 +9037,22 @@ fn directory_entry_names_open_bounded(
         .metadata()
         .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
     validate_directory_metadata(&before)?;
-    #[cfg(target_os = "linux")]
-    let path = PathBuf::from("/proc/self/fd").join(directory.as_raw_fd().to_string());
     #[cfg(not(target_os = "linux"))]
-    return Err(PrivateOramOwnerJournalError::Unsupported);
-    #[allow(unreachable_code)]
-    let names = directory_entry_names_bounded(&path, max_entries, overflow_error);
-    let after = directory
-        .metadata()
-        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
-    validate_directory_metadata(&after)?;
-    ensure_same_inode(&before, &after)?;
-    names
+    {
+        let _ = (max_entries, overflow_error);
+        Err(PrivateOramOwnerJournalError::Unsupported)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let path = PathBuf::from("/proc/self/fd").join(directory.as_raw_fd().to_string());
+        let names = directory_entry_names_bounded(&path, max_entries, overflow_error);
+        let after = directory
+            .metadata()
+            .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+        validate_directory_metadata(&after)?;
+        ensure_same_inode(&before, &after)?;
+        names
+    }
 }
 
 fn validate_active_entry_set(path: &Path) -> Result<(), PrivateOramOwnerJournalError> {
