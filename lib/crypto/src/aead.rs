@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use data_encoding::BASE64URL_NOPAD;
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -74,6 +75,10 @@ pub enum EncryptionError {
     OpenFailed,
     #[error("wrapped resource key master key id does not match")]
     MasterKeyMismatch,
+    #[error(
+        "encryption key reached its AES-GCM random-nonce invocation budget; rotate the resource key"
+    )]
+    KeyUsageExhausted,
 }
 
 impl Debug for EncryptionError {
@@ -100,6 +105,7 @@ impl Debug for EncryptionError {
             Self::SealFailed => f.write_str("SealFailed"),
             Self::OpenFailed => f.write_str("OpenFailed"),
             Self::MasterKeyMismatch => f.write_str("MasterKeyMismatch"),
+            Self::KeyUsageExhausted => f.write_str("KeyUsageExhausted"),
         }
     }
 }
@@ -119,12 +125,10 @@ impl hkdf::KeyType for SecretKeyLen {
 impl SecretKey {
     pub fn generate() -> Result<Self, EncryptionError> {
         let rng = SystemRandom::new();
-        let mut bytes = [0u8; KEY_LEN];
-        rng.fill(&mut bytes)
+        let mut bytes = Zeroizing::new([0u8; KEY_LEN]);
+        rng.fill(bytes.as_mut())
             .map_err(|_| EncryptionError::RandomFailure)?;
-        Ok(Self {
-            bytes: Zeroizing::new(bytes),
-        })
+        Ok(Self { bytes })
     }
 
     pub fn from_bytes(bytes: [u8; KEY_LEN]) -> Self {
@@ -134,12 +138,12 @@ impl SecretKey {
     }
 
     pub fn try_from_slice(bytes: &[u8]) -> Result<Self, EncryptionError> {
-        let bytes: [u8; KEY_LEN] = bytes
-            .try_into()
-            .map_err(|_| EncryptionError::InvalidKeyLength)?;
-        Ok(Self {
-            bytes: Zeroizing::new(bytes),
-        })
+        if bytes.len() != KEY_LEN {
+            return Err(EncryptionError::InvalidKeyLength);
+        }
+        let mut owned = Zeroizing::new([0u8; KEY_LEN]);
+        owned.copy_from_slice(bytes);
+        Ok(Self { bytes: owned })
     }
 
     pub fn derive_subkey(&self, domain: &[u8]) -> Result<Self, EncryptionError> {
@@ -149,12 +153,12 @@ impl SecretKey {
         let okm = prk
             .expand(&info, SecretKeyLen)
             .map_err(|_| EncryptionError::KeyDerivationFailed)?;
-        let mut bytes = [0u8; KEY_LEN];
-        okm.fill(&mut bytes)
+        // Fill the zeroizing buffer directly: an intermediate stack array would leave an
+        // unscrubbed copy of the derived key behind when it is moved into the wrapper.
+        let mut bytes = Zeroizing::new([0u8; KEY_LEN]);
+        okm.fill(bytes.as_mut())
             .map_err(|_| EncryptionError::KeyDerivationFailed)?;
-        Ok(Self {
-            bytes: Zeroizing::new(bytes),
-        })
+        Ok(Self { bytes })
     }
 
     pub fn derive_subkey_with_context(
@@ -176,12 +180,12 @@ impl SecretKey {
         let okm = prk
             .expand(&info, SecretKeyLen)
             .map_err(|_| EncryptionError::KeyDerivationFailed)?;
-        let mut bytes = [0u8; KEY_LEN];
-        okm.fill(&mut bytes)
+        // Fill the zeroizing buffer directly: an intermediate stack array would leave an
+        // unscrubbed copy of the derived key behind when it is moved into the wrapper.
+        let mut bytes = Zeroizing::new([0u8; KEY_LEN]);
+        okm.fill(bytes.as_mut())
             .map_err(|_| EncryptionError::KeyDerivationFailed)?;
-        Ok(Self {
-            bytes: Zeroizing::new(bytes),
-        })
+        Ok(Self { bytes })
     }
 
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
@@ -412,12 +416,21 @@ pub(crate) fn validate_encrypted_envelope_metadata(
     Ok(())
 }
 
+/// Random 96-bit nonces stay collision-safe for at most 2^32 AES-GCM invocations per key
+/// (NIST SP 800-38D, section 8.3). The budget is tracked per cipher instance, so it bounds a
+/// single process lifetime; rotating the resource key resets it.
+pub const AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT: u64 = 1 << 32;
+/// First invocation at which the cipher logs that the key is approaching its budget.
+const AES_GCM_RANDOM_NONCE_INVOCATION_WARNING: u64 = AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT / 2;
+
 pub struct AeadCipher {
     key_id: String,
     material_fingerprint: String,
     rk_id: String,
     rk_epoch: Option<u64>,
     key: SecretKey,
+    /// Number of encryptions performed with `key` by this instance.
+    invocations: AtomicU64,
 }
 
 impl Drop for AeadCipher {
@@ -665,6 +678,7 @@ impl AeadCipher {
             rk_id: String::new(),
             rk_epoch: None,
             key,
+            invocations: AtomicU64::new(0),
         })
     }
 
@@ -731,12 +745,41 @@ impl AeadCipher {
         self.encrypt_with_aad_suffix(plaintext, context, &[])
     }
 
+    /// Number of encryptions this cipher instance has performed.
+    pub fn invocations(&self) -> u64 {
+        self.invocations.load(Ordering::Relaxed)
+    }
+
+    /// Reserves one random-nonce invocation, refusing once the per-key budget is spent.
+    fn reserve_invocation(&self) -> Result<(), EncryptionError> {
+        let previous = self
+            .invocations
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                (used < AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT).then(|| used + 1)
+            })
+            .map_err(|_| EncryptionError::KeyUsageExhausted)?;
+        if previous + 1 == AES_GCM_RANDOM_NONCE_INVOCATION_WARNING {
+            log::warn!(
+                "encryption key used for {previous} AES-GCM invocations in this process; it \
+                 stops encrypting at {AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT}, rotate the \
+                 resource key"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn set_invocations_for_test(&self, invocations: u64) {
+        self.invocations.store(invocations, Ordering::Release);
+    }
+
     pub(crate) fn encrypt_with_aad_suffix(
         &self,
         plaintext: &[u8],
         context: EncryptionContext<'_>,
         aad_suffix: &[u8],
     ) -> Result<EncryptedEnvelope, EncryptionError> {
+        self.reserve_invocation()?;
         let rng = SystemRandom::new();
         let mut nonce_bytes = [0u8; NONCE_LEN];
         rng.fill(&mut nonce_bytes)
@@ -822,9 +865,13 @@ impl AeadCipher {
             .map_err(|_| EncryptionError::InvalidNonceLength)?;
         let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
-        let mut ciphertext = BASE64URL_NOPAD
-            .decode(envelope.ciphertext.as_bytes())
-            .map_err(|_| EncryptionError::InvalidEncoding)?;
+        // `open_in_place` turns this buffer into plaintext; scrub it once the caller's copy
+        // has been taken instead of leaving the decrypted bytes in freed heap memory.
+        let mut ciphertext = Zeroizing::new(
+            BASE64URL_NOPAD
+                .decode(envelope.ciphertext.as_bytes())
+                .map_err(|_| EncryptionError::InvalidEncoding)?,
+        );
         if ciphertext.len() < TAG_LEN {
             return Err(EncryptionError::InvalidCiphertextLength);
         }
@@ -845,7 +892,7 @@ impl AeadCipher {
             aad_suffix,
         );
         let plaintext = key
-            .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
+            .open_in_place(nonce, Aad::from(aad.as_slice()), ciphertext.as_mut())
             .map_err(|_| EncryptionError::OpenFailed)?;
         Ok(plaintext.to_vec())
     }
@@ -1015,6 +1062,54 @@ mod tests {
         .unwrap()
         .with_resource_key_metadata(rk_id, rk_epoch)
         .unwrap()
+    }
+
+    #[test]
+    fn cipher_refuses_encryption_once_the_random_nonce_budget_is_spent() {
+        let cipher = cipher(0x41, "tenant-a:key", "tenant-a/material", "tenant-a/rk", 7);
+        let context = EncryptionContext {
+            purpose: EncryptionPurpose::PayloadText,
+            collection: "docs",
+            point_id: Some("1"),
+            field_path: Some("body"),
+            vector_name: None,
+        };
+        assert_eq!(cipher.invocations(), 0);
+        cipher.encrypt(b"first", context).unwrap();
+        assert_eq!(cipher.invocations(), 1);
+
+        cipher.set_invocations_for_test(AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT - 1);
+        let envelope = cipher.encrypt(b"last", context).unwrap();
+        assert_eq!(cipher.invocations(), AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT);
+
+        assert!(matches!(
+            cipher.encrypt(b"over budget", context),
+            Err(EncryptionError::KeyUsageExhausted)
+        ));
+        // The budget only limits new encryptions; decryption keeps working and the counter
+        // never moves past the limit.
+        assert_eq!(cipher.decrypt(&envelope, context).unwrap(), b"last");
+        assert_eq!(cipher.invocations(), AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT);
+    }
+
+    #[test]
+    fn secret_key_from_slice_rejects_wrong_lengths_and_keeps_bytes() {
+        assert!(matches!(
+            SecretKey::try_from_slice(&[7u8; KEY_LEN - 1]),
+            Err(EncryptionError::InvalidKeyLength)
+        ));
+        assert!(matches!(
+            SecretKey::try_from_slice(&[7u8; KEY_LEN + 1]),
+            Err(EncryptionError::InvalidKeyLength)
+        ));
+        let key = SecretKey::try_from_slice(&[7u8; KEY_LEN]).unwrap();
+        assert_eq!(key.as_bytes(), &[7u8; KEY_LEN]);
+        let derived = key.derive_subkey(b"domain").unwrap();
+        assert_ne!(derived.as_bytes(), key.as_bytes());
+        assert_eq!(
+            derived.as_bytes(),
+            key.derive_subkey(b"domain").unwrap().as_bytes()
+        );
     }
 
     #[test]

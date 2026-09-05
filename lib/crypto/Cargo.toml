@@ -19,6 +19,7 @@ constant_time_eq = "0.4.2"
 data-encoding = { workspace = true }
 nix = { workspace = true }
 ring = { workspace = true }
+log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::aead::{
     AeadCipher, AeadKeyring, EncryptedEnvelope, EncryptionContext, EncryptionError,
@@ -525,10 +526,15 @@ impl ClientPayloadVerifiedEnvelopeKey {
     ) -> bool {
         self.envelope_key.collection_id == collection_id
             && self.envelope_key.point_id == point_id
-            && self
-                .blind_indexes
-                .iter()
-                .any(|binding| binding.field_path == field_path && binding.token == token)
+            && self.blind_indexes.iter().any(|binding| {
+                // Tokens are keyed MACs over plaintext: compare them in constant time so a
+                // filter probe cannot learn a stored token byte by byte.
+                binding.field_path == field_path
+                    && constant_time_eq::constant_time_eq(
+                        binding.token.as_bytes(),
+                        token.as_bytes(),
+                    )
+            })
     }
 }
 
@@ -808,11 +814,11 @@ impl PayloadTextEncryptor {
                             existing_envelope.schema_version,
                             existing_envelope.encryption_epoch,
                         );
-                        let plaintext = self.keyring.decrypt_with_aad_suffix(
+                        let plaintext = Zeroizing::new(self.keyring.decrypt_with_aad_suffix(
                             &existing_envelope.envelope,
                             context,
                             &old_aad_suffix,
-                        )?;
+                        )?);
                         let new_aad_suffix = payload_metadata_aad(
                             self.envelope_kind,
                             self.crypto_schema_version,
@@ -836,8 +842,11 @@ impl PayloadTextEncryptor {
                 }
             }
 
+            // Take the plaintext out of the JSON value instead of copying it, so the only
+            // heap copy is scrubbed when this iteration ends; the slot is overwritten with the
+            // envelope below.
             let plaintext = match value {
-                Value::String(plaintext) => plaintext.as_bytes().to_vec(),
+                Value::String(plaintext) => Zeroizing::new(std::mem::take(plaintext).into_bytes()),
                 other => {
                     return Err(PayloadEncryptionError::ExpectedString {
                         field: field.clone(),
@@ -1762,18 +1771,22 @@ fn validate_client_payload_signature(
         ));
     }
 
-    if let Some(verification) = signature_verification {
-        if signature.key_id != verification.expected_key_id {
-            return Err(PayloadEncryptionError::ClientSignatureKeyIdMismatch);
-        }
-        if verification.public_key.len() != 32 {
-            return Err(PayloadEncryptionError::InvalidClientSignature);
-        }
-        let message = client_payload_signature_message_for_envelope(envelope);
-        UnparsedPublicKey::new(&ED25519, verification.public_key)
-            .verify(&message, &signature_bytes)
-            .map_err(|_| PayloadEncryptionError::InvalidClientSignature)?;
+    // A well-formed signature that nothing here can verify is tolerated when signatures are
+    // optional, but its digest is never reported: `Some` means "verified against the expected
+    // key", and downstream envelope keys derive their signed-provenance from it.
+    let Some(verification) = signature_verification else {
+        return Ok(None);
+    };
+    if signature.key_id != verification.expected_key_id {
+        return Err(PayloadEncryptionError::ClientSignatureKeyIdMismatch);
     }
+    if verification.public_key.len() != 32 {
+        return Err(PayloadEncryptionError::InvalidClientSignature);
+    }
+    let message = client_payload_signature_message_for_envelope(envelope);
+    UnparsedPublicKey::new(&ED25519, verification.public_key)
+        .verify(&message, &signature_bytes)
+        .map_err(|_| PayloadEncryptionError::InvalidClientSignature)?;
 
     Ok(Some(signature_sha256_b64))
 }
@@ -2023,6 +2036,143 @@ mod tests {
                 }
             }
         })
+    }
+
+    fn sign_client_payload_value(value: &mut Value) -> ring::signature::Ed25519KeyPair {
+        use ring::signature::KeyPair as _;
+
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let envelope = extract_client_envelope(value, "document.body")
+            .unwrap()
+            .unwrap();
+        let message = client_payload_signature_message_for_envelope(&envelope);
+        let signature = key_pair.sign(&message);
+        value[CLIENT_ENCRYPTED_PAYLOAD_MARKER]["signature"]["sig"] =
+            Value::String(BASE64URL_NOPAD.encode(signature.as_ref()));
+        assert_eq!(key_pair.public_key().as_ref().len(), 32);
+        key_pair
+    }
+
+    #[test]
+    fn unverifiable_client_signature_is_never_reported_as_verified() {
+        use ring::signature::KeyPair as _;
+
+        // Optional signatures without verification material: accepted, but no digest.
+        let value = valid_client_payload_value();
+        let validated =
+            validate_client_payload_value_inner(&value, client_payload_context()).unwrap();
+        assert!(validated.signature_sha256_b64.is_none());
+        validate_client_payload_value(&value, client_payload_context()).unwrap();
+
+        // Required signatures without verification material fail closed.
+        let required = ClientPayloadValidationContext {
+            signature_required: true,
+            ..client_payload_context()
+        };
+        assert!(matches!(
+            validate_client_payload_value(&value, required),
+            Err(PayloadEncryptionError::InvalidClientSignature)
+        ));
+
+        // With verification material, only a signature under the expected key yields a digest.
+        let mut signed = valid_client_payload_value();
+        let key_pair = sign_client_payload_value(&mut signed);
+        let verified = ClientPayloadValidationContext {
+            signature_required: true,
+            signature_verification: Some(ClientPayloadSignatureVerification {
+                expected_key_id: "tenant-a:signing",
+                public_key: key_pair.public_key().as_ref(),
+            }),
+            ..client_payload_context()
+        };
+        let validated = validate_client_payload_value_inner(&signed, verified).unwrap();
+        let digest = validated
+            .signature_sha256_b64
+            .expect("verified signature digest");
+        let signature_b64 = signed[CLIENT_ENCRYPTED_PAYLOAD_MARKER]["signature"]["sig"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            digest,
+            client_payload_signature_digest_b64("document.body", &signature_b64).unwrap()
+        );
+        let runtime_key = validate_client_payload_value_for_runtime(&signed, verified).unwrap();
+        assert_eq!(
+            runtime_key.envelope_key().signature_sha256_b64,
+            digest,
+            "runtime envelope keys carry the verified digest"
+        );
+
+        // The unsigned fixture signature does not verify under the real key.
+        let unsigned = valid_client_payload_value();
+        assert!(matches!(
+            validate_client_payload_value_inner(&unsigned, verified),
+            Err(PayloadEncryptionError::InvalidClientSignature)
+        ));
+        // Neither does a signature under a different key id.
+        let other_key = ClientPayloadValidationContext {
+            signature_verification: Some(ClientPayloadSignatureVerification {
+                expected_key_id: "tenant-a:other-signing",
+                public_key: key_pair.public_key().as_ref(),
+            }),
+            ..verified
+        };
+        assert!(matches!(
+            validate_client_payload_value_inner(&signed, other_key),
+            Err(PayloadEncryptionError::ClientSignatureKeyIdMismatch)
+        ));
+    }
+
+    #[test]
+    fn blind_index_binding_compares_tokens_exactly() {
+        let mut value = valid_client_payload_value();
+        value[CLIENT_ENCRYPTED_PAYLOAD_MARKER]["blind_indexes"] = serde_json::json!([
+            {
+                "field_path": "document.body",
+                "token": BASE64URL_NOPAD.encode(&[8_u8; 32]),
+            }
+        ]);
+        let envelope_key = client_payload_envelope_key(&value, "document.body")
+            .unwrap()
+            .unwrap();
+        let blind_indexes = client_payload_blind_index_token_keys(&value, "document.body").unwrap();
+        assert!(!blind_indexes.is_empty(), "fixture carries a blind index");
+        let field_path = blind_indexes[0].field_path.clone();
+        let token = blind_indexes[0].token.clone();
+        let verified_key = ClientPayloadVerifiedEnvelopeKey {
+            envelope_key,
+            blind_indexes,
+        };
+
+        assert!(verified_key.binds_blind_index("collection-crypto-id", "1", &field_path, &token));
+        let mut truncated = token.clone();
+        truncated.pop();
+        assert!(!verified_key.binds_blind_index(
+            "collection-crypto-id",
+            "1",
+            &field_path,
+            &truncated
+        ));
+        let mut flipped = token.clone().into_bytes();
+        flipped[0] ^= 0x01;
+        let flipped = String::from_utf8(flipped).unwrap();
+        assert!(!verified_key.binds_blind_index(
+            "collection-crypto-id",
+            "1",
+            &field_path,
+            &flipped
+        ));
+        assert!(!verified_key.binds_blind_index("collection-crypto-id", "2", &field_path, &token));
+        assert!(!verified_key.binds_blind_index("other-collection", "1", &field_path, &token));
+        assert!(!verified_key.binds_blind_index(
+            "collection-crypto-id",
+            "1",
+            "other.field",
+            &token
+        ));
     }
 
     fn server_envelope_kind(value: &Value) -> &str {

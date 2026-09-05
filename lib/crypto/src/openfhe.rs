@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -28,7 +28,10 @@ const WORKER_RESERVATION_WAIT: Duration = Duration::from_secs(5);
 const WORKER_RESERVATION_POLL: Duration = Duration::from_millis(5);
 
 const DEFAULT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+/// Per-line stdout (and total stderr) budget for a bridge worker. Sized so a batch of
+/// `MAX_BRIDGE_CIPHERTEXT_BYTES` ciphertexts fits; the previous 1 MiB default truncated any
+/// response carrying a full-size CKKS ciphertext and killed the worker.
+const DEFAULT_MAX_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const MIN_OPENFHE_SECURITY_LEVEL_BITS: u16 = 128;
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const MAX_BRIDGE_PROGRAM_SHA256_BYTES: u64 = 64 * 1024 * 1024;
@@ -54,6 +57,8 @@ pub struct CommandOpenFheBackend {
     sandbox: BridgeSandbox,
     sensitive_env_names: Vec<String>,
     workers: Arc<Mutex<Vec<Arc<WorkerProcess>>>>,
+    /// Workers being spawned outside the `workers` lock; counted against `pool_size`.
+    spawning: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for CommandOpenFheBackend {
@@ -182,6 +187,15 @@ impl WorkerProcess {
     }
 }
 
+/// Releases a reserved-but-not-yet-pushed pool slot when the spawn finishes or fails.
+struct SpawnSlot(Arc<AtomicUsize>);
+
+impl Drop for SpawnSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 impl WorkerReservation {
     fn reserved(worker_process: Arc<WorkerProcess>) -> Self {
         Self { worker_process }
@@ -211,6 +225,7 @@ impl CommandOpenFheBackend {
             sandbox: BridgeSandbox::ProcessHardening,
             sensitive_env_names: Vec::new(),
             workers: Arc::new(Mutex::new(Vec::new())),
+            spawning: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -1061,30 +1076,34 @@ impl CommandOpenFheBackend {
             let mut request_bytes = Zeroizing::new(selected_request.to_vec());
             request_bytes.push(b'\n');
 
-            let write_result = {
-                let mut stdin = worker_process.stdin.lock().map_err(|_| {
-                    CkksError::Backend("OpenFHE bridge stdin mutex was poisoned".to_string())
-                })?;
-                stdin
-                    .write_all(request_bytes.as_slice())
-                    .and_then(|_| stdin.flush())
-            };
-            if let Err(err) = write_result {
-                let retry = attempt == 0
-                    && matches!(
-                        err.kind(),
-                        io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof
-                    );
-                self.discard_worker(&worker_process, false)?;
-                if retry {
-                    continue;
+            let timeout = self.timeout;
+            match write_bridge_request_with_deadline(&worker_process, request_bytes, timeout) {
+                Ok(()) => {}
+                Err(BridgeWriteError::Timeout) => {
+                    // A bridge that stopped draining stdin would otherwise park this thread and
+                    // its worker reservation forever once the request exceeded the pipe buffer.
+                    self.discard_worker(&worker_process, false)?;
+                    return Err(CkksError::Backend(format!(
+                        "OpenFHE bridge did not accept the request within {} ms",
+                        timeout.as_millis(),
+                    )));
                 }
-                return Err(CkksError::Backend(format!(
-                    "failed to write OpenFHE bridge request: {err}",
-                )));
+                Err(BridgeWriteError::Io(err)) => {
+                    let retry = attempt == 0
+                        && matches!(
+                            err.kind(),
+                            io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof
+                        );
+                    self.discard_worker(&worker_process, false)?;
+                    if retry {
+                        continue;
+                    }
+                    return Err(CkksError::Backend(format!(
+                        "failed to write OpenFHE bridge request: {err}",
+                    )));
+                }
             }
 
-            let timeout = self.timeout;
             let response = worker_process
                 .stdout_rx
                 .lock()
@@ -1242,7 +1261,7 @@ impl CommandOpenFheBackend {
         // run a single worker, so back-to-back searches would otherwise error instead of
         // queueing briefly. Wait a bounded time for a worker to free up before giving up.
         let deadline = std::time::Instant::now() + WORKER_RESERVATION_WAIT;
-        let mut workers = loop {
+        loop {
             let mut workers = self.workers.lock().map_err(|_| {
                 CkksError::Backend("OpenFHE bridge workers mutex was poisoned".to_string())
             })?;
@@ -1269,8 +1288,14 @@ impl CommandOpenFheBackend {
                 }
             }
 
-            if workers.len() < self.pool_size.get() {
-                break workers;
+            let spawning = self.spawning.load(Ordering::Acquire);
+            if workers.len().saturating_add(spawning) < self.pool_size.get() {
+                // Reserve a pool slot and spawn without holding the lock: hashing the bridge
+                // binary and starting the process took long enough to stall every request
+                // that only needed an idle worker.
+                self.spawning.fetch_add(1, Ordering::AcqRel);
+                drop(workers);
+                break;
             }
             if std::time::Instant::now() >= deadline {
                 return Err(CkksError::Backend(format!(
@@ -1281,7 +1306,8 @@ impl CommandOpenFheBackend {
             }
             drop(workers);
             std::thread::sleep(WORKER_RESERVATION_POLL);
-        };
+        }
+        let _spawn_slot = SpawnSlot(Arc::clone(&self.spawning));
 
         let spawn_program = bridge_spawn_program(
             &self.program,
@@ -1407,6 +1433,9 @@ impl CommandOpenFheBackend {
                 stderr: Some(stderr_thread),
             }),
         });
+        let mut workers = self.workers.lock().map_err(|_| {
+            CkksError::Backend("OpenFHE bridge workers mutex was poisoned".to_string())
+        })?;
         workers.push(Arc::clone(&worker_process));
         Ok(WorkerReservation::reserved(worker_process))
     }
@@ -1427,6 +1456,44 @@ impl CommandOpenFheBackend {
             workers.swap_remove(index);
         }
         Ok(())
+    }
+}
+
+enum BridgeWriteError {
+    Timeout,
+    Io(io::Error),
+}
+
+/// Writes one request line to the bridge from a helper thread and waits at most `timeout` for
+/// the write to complete. On timeout the caller kills the worker, which closes the pipe and
+/// unblocks the helper; the request bytes stay zeroized on every path.
+fn write_bridge_request_with_deadline(
+    worker_process: &Arc<WorkerProcess>,
+    request_bytes: Zeroizing<Vec<u8>>,
+    timeout: Duration,
+) -> Result<(), BridgeWriteError> {
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let writer_process = Arc::clone(worker_process);
+    let spawned = thread::Builder::new()
+        .name("openfhe-bridge-write".to_string())
+        .spawn(move || {
+            let result = match writer_process.stdin.lock() {
+                Ok(mut stdin) => stdin
+                    .write_all(request_bytes.as_slice())
+                    .and_then(|_| stdin.flush()),
+                Err(_) => Err(io::Error::other("OpenFHE bridge stdin mutex was poisoned")),
+            };
+            let _ = result_tx.send(result);
+        });
+    if let Err(err) = spawned {
+        return Err(BridgeWriteError::Io(err));
+    }
+    match result_rx.recv_timeout(timeout) {
+        Ok(result) => result.map_err(BridgeWriteError::Io),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(BridgeWriteError::Timeout),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(BridgeWriteError::Io(io::Error::other(
+            "OpenFHE bridge writer thread exited without a result",
+        ))),
     }
 }
 
