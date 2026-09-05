@@ -1411,6 +1411,9 @@ async fn ckks_vector_search_points_with_scoring(
     let mut next_offset = None;
     let mut remaining_candidate_scan_limit = candidate_scan_limit;
     let mut scored_by_id = std::collections::HashMap::<_, ScoredPoint>::new();
+    // Stored ciphertexts are only needed again for MMR re-ranking; every other scoring mode
+    // must not pin the whole collection's ciphertexts in memory for the duration of a search.
+    let retain_ciphertexts_for_mmr = matches!(scoring, CkksSidecarScoring::NearestMmr { .. });
     let mut encrypted_by_id =
         std::collections::HashMap::<PointIdType, (String, EncryptedCkksVector)>::new();
     let mut hnsw_records = Vec::new();
@@ -1857,10 +1860,12 @@ async fn ckks_vector_search_points_with_scoring(
                 if !ckks_score_passes_threshold(score_order, score, score_threshold) {
                     continue;
                 }
-                encrypted_by_id.insert(
-                    record.id,
-                    (record.point_id.clone(), record.encrypted.clone()),
-                );
+                if retain_ciphertexts_for_mmr {
+                    encrypted_by_id.insert(
+                        record.id,
+                        (record.point_id.clone(), record.encrypted.clone()),
+                    );
+                }
                 let scored_point = ScoredPoint {
                     id: record.id,
                     version: 0,
@@ -1973,58 +1978,80 @@ async fn ckks_vector_search_points_with_scoring(
         ..
     } = &scoring
     {
+        let max_candidates = plan.ckks_grouped_max_candidates();
+        if *candidates_limit > max_candidates {
+            return Err(StorageError::bad_input(format!(
+                "encrypted vector MMR may re-rank at most {max_candidates} candidates",
+            )));
+        }
         let mut candidates = scored_by_id.into_values().collect::<Vec<_>>();
         sort_ckks_scored_points(score_order, &mut candidates);
         let selection_limit = ckks_scored_fill_candidate_limit(0, limit, Some(candidates.len()));
         candidates.truncate((*candidates_limit).max(selection_limit));
+        // Only the retained candidates need their ciphertexts from here on.
+        let retained_ids = candidates
+            .iter()
+            .map(|candidate| candidate.id)
+            .collect::<std::collections::HashSet<_>>();
+        encrypted_by_id.retain(|id, _| retained_ids.contains(id));
         let mut selected = Vec::new();
         if !candidates.is_empty() && limit > 0 {
-            selected.push(0usize);
+            // Each candidate's maximum similarity to the selected set is maintained
+            // incrementally: every newly selected point is scored against all remaining
+            // candidates in batched bridge calls, so a selection of k points costs O(k)
+            // batched round trips instead of O(k^2 * candidates) single-item calls.
+            let mut max_similarity = vec![f32::NEG_INFINITY; candidates.len()];
             let mut remaining = (1..candidates.len()).collect::<Vec<_>>();
+            let mut newly_selected = 0usize;
+            selected.push(newly_selected);
             while selected.len() < selection_limit && !remaining.is_empty() {
-                let mut best_position = 0usize;
-                let mut best_score = f32::NEG_INFINITY;
-                for (position, candidate_idx) in remaining.iter().copied().enumerate() {
-                    let Some((candidate_point_id, candidate_encrypted)) =
-                        encrypted_by_id.get(&candidates[candidate_idx].id)
-                    else {
-                        continue;
-                    };
-                    let candidate_item =
-                        vec![(candidate_point_id.clone(), candidate_encrypted.clone())];
-                    let mut max_similarity = f32::NEG_INFINITY;
-                    for selected_idx in &selected {
-                        let Some((selected_point_id, selected_encrypted)) =
-                            encrypted_by_id.get(&candidates[*selected_idx].id)
-                        else {
-                            continue;
-                        };
-                        let similarity = plan
+                if let Some((selected_point_id, selected_encrypted)) =
+                    encrypted_by_id.get(&candidates[newly_selected].id)
+                {
+                    let scoreable = remaining
+                        .iter()
+                        .copied()
+                        .filter(|idx| encrypted_by_id.contains_key(&candidates[*idx].id))
+                        .collect::<Vec<_>>();
+                    for chunk in scoreable.chunks(source_batch_max.max(1)) {
+                        let batch = chunk
+                            .iter()
+                            .filter_map(|idx| encrypted_by_id.get(&candidates[*idx].id).cloned())
+                            .collect::<Vec<_>>();
+                        let scores = plan
                             .score_stored_query_batch(
                                 collection_name,
                                 vector_name,
                                 selected_point_id,
                                 selected_encrypted,
-                                &candidate_item,
+                                &batch,
                             )?
-                            .ok_or_else(ckks_search_plan_lost_rule_error)?
-                            .into_iter()
-                            .next()
-                            .ok_or_else(|| {
-                                StorageError::service_error(
-                                    "CKKS MMR sidecar scoring returned no candidate score",
-                                )
-                            })?;
-                        max_similarity = max_similarity.max(similarity);
+                            .ok_or_else(ckks_search_plan_lost_rule_error)?;
+                        if scores.len() != chunk.len() {
+                            return Err(StorageError::service_error(
+                                "CKKS MMR sidecar scoring returned a mismatched score count",
+                            ));
+                        }
+                        for (idx, similarity) in chunk.iter().zip(scores) {
+                            max_similarity[*idx] = max_similarity[*idx].max(similarity);
+                        }
+                    }
+                }
+                let mut best_position = 0usize;
+                let mut best_score = f32::NEG_INFINITY;
+                for (position, candidate_idx) in remaining.iter().copied().enumerate() {
+                    if !encrypted_by_id.contains_key(&candidates[candidate_idx].id) {
+                        continue;
                     }
                     let mmr_score = *lambda * candidates[candidate_idx].score
-                        - (1.0 - *lambda) * max_similarity;
+                        - (1.0 - *lambda) * max_similarity[candidate_idx];
                     if mmr_score > best_score {
                         best_score = mmr_score;
                         best_position = position;
                     }
                 }
-                selected.push(remaining.swap_remove(best_position));
+                newly_selected = remaining.swap_remove(best_position);
+                selected.push(newly_selected);
             }
         }
 
@@ -2604,6 +2631,7 @@ fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) ->
         .expect("test CKKS sidecar records must serialize into fingerprint bytes")
 }
 
+#[cfg(test)]
 fn ckks_sidecar_hnsw_graph_cache_file_name(key: &CkksSidecarHnswGraphCacheKey) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"qdrant-sec/ckks-sidecar-hnsw-graph-cache-file/v1");
@@ -2682,6 +2710,7 @@ fn ckks_sidecar_hnsw_existing_cache_directory_is_safe(
 }
 
 #[cfg(unix)]
+#[cfg(test)]
 fn ckks_sidecar_hnsw_validate_cache_file_unix_metadata(
     _path: &Path,
     metadata: &fs::Metadata,
@@ -2709,6 +2738,7 @@ fn ckks_sidecar_hnsw_validate_cache_file_unix_metadata(
     Ok(())
 }
 
+#[cfg(test)]
 fn ensure_ckks_sidecar_hnsw_graph_cache_content_size(
     _path: &Path,
     len: u64,
@@ -2722,6 +2752,7 @@ fn ensure_ckks_sidecar_hnsw_graph_cache_content_size(
     Ok(())
 }
 
+#[cfg(test)]
 fn ckks_sidecar_hnsw_load_persisted_graph(
     collection_path: &Path,
     key: &CkksSidecarHnswGraphCacheKey,
@@ -3421,14 +3452,26 @@ fn ckks_sidecar_hnsw_search_points(
     let graph = match graph {
         Some(graph) => graph,
         None => {
-            let persisted_graph =
-                ckks_sidecar_hnsw_load_persisted_graph(collection_path, &cache_key, records.len());
-            let persisted_graph = match persisted_graph {
+            // Persisted graph cache files are only ever written by tests; production must not
+            // adopt a graph that appeared in the storage directory without being built by this
+            // process, so the on-disk loader is test-only and production relies on the
+            // segment-native ciphertext graph or the in-memory cache.
+            #[cfg(test)]
+            let persisted_graph = match ckks_sidecar_hnsw_load_persisted_graph(
+                collection_path,
+                &cache_key,
+                records.len(),
+            ) {
                 Ok(graph) => graph,
                 Err(_) => {
                     log::warn!("Ignoring unreadable CKKS sidecar HNSW graph cache");
                     None
                 }
+            };
+            #[cfg(not(test))]
+            let persisted_graph: Option<Arc<CkksSidecarHnswGraph>> = {
+                let _ = collection_path;
+                None
             };
             if let Some(graph) = persisted_graph {
                 let mut cache = CKKS_SIDECAR_HNSW_GRAPH_CACHE.lock().map_err(|_| {

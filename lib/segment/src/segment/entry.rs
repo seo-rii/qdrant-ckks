@@ -29,7 +29,7 @@ use crate::entry::entry_point::{
 use crate::id_tracker::{IdTracker, PointMappingsGuard};
 use crate::index::field_index::{CardinalityEstimation, FieldIndex};
 use crate::index::hnsw_index::ckks_ciphertext_graph::{
-    CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD, CkksCiphertextVectorIndex,
+    CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD, CkksCiphertextVectorIndex, ckks_ciphertext_from_payload,
     ckks_ciphertext_records_from_payload_index,
 };
 use crate::index::query_estimator::adjust_for_deferred_points;
@@ -47,21 +47,37 @@ use crate::types::{
 use crate::vector_storage::VectorStorage;
 
 impl Segment {
+    /// Total size of the stored CKKS sidecar ciphertexts for `vector_name`.
+    ///
+    /// The sum is computed without materializing the ciphertexts and cached against the
+    /// segment version: optimizer planning calls this for every segment on every tick, and an
+    /// unchanged segment answers from the cache instead of rescanning its payloads.
     pub fn ckks_ciphertext_vectors_size_in_bytes(
         &self,
         vector_name: &VectorName,
     ) -> OperationResult<usize> {
         check_vector_name(vector_name, &self.segment_config)?;
-        let records = ckks_ciphertext_records_from_payload_index(
-            &*self.id_tracker.borrow(),
-            &self.payload_index.borrow(),
-            vector_name,
-            &HardwareCounterCell::disposable(),
-        )?;
-        Ok(records
-            .into_iter()
-            .map(|record| record.ciphertext.len())
-            .sum())
+        let version = self.version;
+        if let Some((cached_version, size)) =
+            self.ckks_ciphertext_size_cache.lock().get(vector_name)
+            && *cached_version == version
+        {
+            return Ok(*size);
+        }
+        let id_tracker = self.id_tracker.borrow();
+        let payload_index = self.payload_index.borrow();
+        let hw_counter = HardwareCounterCell::disposable();
+        let mut total = 0usize;
+        for point_offset in id_tracker.point_mappings().iter_internal() {
+            let payload = payload_index.get_payload_sequential(point_offset, &hw_counter)?;
+            if let Some(ciphertext) = ckks_ciphertext_from_payload(&payload, vector_name)? {
+                total = total.saturating_add(ciphertext.len());
+            }
+        }
+        self.ckks_ciphertext_size_cache
+            .lock()
+            .insert(vector_name.to_owned(), (version, total));
+        Ok(total)
     }
 
     fn payload_contains_ckks_vector_sidecar(payload: &Payload) -> bool {

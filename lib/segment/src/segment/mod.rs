@@ -95,6 +95,10 @@ pub struct Segment {
     #[cfg(feature = "rocksdb")]
     pub database: Option<Arc<parking_lot::RwLock<DB>>>,
     pub(crate) deferred_point_status: Option<DeferredPointStatus>,
+    /// Total CKKS sidecar ciphertext bytes per vector name, cached against the segment version
+    /// so optimizer planning does not rescan every payload on every tick.
+    pub(crate) ckks_ciphertext_size_cache:
+        parking_lot::Mutex<HashMap<VectorNameBuf, (Option<SeqNumberType>, usize)>>,
 }
 
 #[derive(Debug)]

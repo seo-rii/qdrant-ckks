@@ -745,6 +745,7 @@ fn create_segment(
         #[cfg(feature = "rocksdb")]
         database: db_builder.build(),
         deferred_point_status: None,
+        ckks_ciphertext_size_cache: Default::default(),
     };
 
     if let Some(deferred_internal_id) = deferred_internal_id {

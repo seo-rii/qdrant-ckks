@@ -22,6 +22,11 @@ use crate::vector::{
     CkksVectorBackend,
 };
 
+/// How long a request waits for a busy bridge worker before failing.
+const WORKER_RESERVATION_WAIT: Duration = Duration::from_secs(5);
+/// Poll interval while waiting for a bridge worker.
+const WORKER_RESERVATION_POLL: Duration = Duration::from_millis(5);
+
 const DEFAULT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 const MIN_OPENFHE_SECURITY_LEVEL_BITS: u16 = 128;
@@ -1233,38 +1238,50 @@ impl CommandOpenFheBackend {
     }
 
     fn worker_process(&self) -> Result<WorkerReservation, CkksError> {
-        let mut workers = self.workers.lock().map_err(|_| {
-            CkksError::Backend("OpenFHE bridge workers mutex was poisoned".to_string())
-        })?;
+        // A momentarily saturated pool must not fail requests outright: sandboxed bridge kinds
+        // run a single worker, so back-to-back searches would otherwise error instead of
+        // queueing briefly. Wait a bounded time for a worker to free up before giving up.
+        let deadline = std::time::Instant::now() + WORKER_RESERVATION_WAIT;
+        let mut workers = loop {
+            let mut workers = self.workers.lock().map_err(|_| {
+                CkksError::Backend("OpenFHE bridge workers mutex was poisoned".to_string())
+            })?;
 
-        let mut worker_index = 0;
-        while worker_index < workers.len() {
-            let worker_process = &workers[worker_index];
-            if worker_process.stderr_truncated.load(Ordering::Relaxed) {
-                let worker_process = workers.swap_remove(worker_index);
-                worker_process.shutdown(false)?;
-                continue;
+            let mut worker_index = 0;
+            while worker_index < workers.len() {
+                let worker_process = &workers[worker_index];
+                if worker_process.stderr_truncated.load(Ordering::Relaxed) {
+                    let worker_process = workers.swap_remove(worker_index);
+                    worker_process.shutdown(false)?;
+                    continue;
+                }
+                if worker_process.try_wait()?.is_some() {
+                    let worker_process = workers.swap_remove(worker_index);
+                    worker_process.shutdown(false)?;
+                    continue;
+                }
+                worker_index += 1;
             }
-            if worker_process.try_wait()?.is_some() {
-                let worker_process = workers.swap_remove(worker_index);
-                worker_process.shutdown(false)?;
-                continue;
-            }
-            worker_index += 1;
-        }
 
-        for worker_process in workers.iter() {
-            if worker_process.try_reserve_request() {
-                return Ok(WorkerReservation::reserved(Arc::clone(worker_process)));
+            for worker_process in workers.iter() {
+                if worker_process.try_reserve_request() {
+                    return Ok(WorkerReservation::reserved(Arc::clone(worker_process)));
+                }
             }
-        }
 
-        if workers.len() == self.pool_size.get() {
-            return Err(CkksError::Backend(format!(
-                "OpenFHE bridge worker pool is exhausted; all {} workers are busy",
-                self.pool_size.get(),
-            )));
-        }
+            if workers.len() < self.pool_size.get() {
+                break workers;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(CkksError::Backend(format!(
+                    "OpenFHE bridge worker pool is exhausted; all {} workers stayed busy for {:?}",
+                    self.pool_size.get(),
+                    WORKER_RESERVATION_WAIT,
+                )));
+            }
+            drop(workers);
+            std::thread::sleep(WORKER_RESERVATION_POLL);
+        };
 
         let spawn_program = bridge_spawn_program(
             &self.program,

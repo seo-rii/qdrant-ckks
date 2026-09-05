@@ -1254,12 +1254,14 @@ pub(crate) fn payload_write_plan_for_collection_with_crypto_id(
     collection_crypto_id: &str,
     params: &CollectionParams,
 ) -> Result<Option<PayloadWritePlan>, PayloadWriteSetupError> {
-    if let Some(encryption) = &params.encryption {
+    // A `Disabled` migration state (before the first encrypt run or after a completed decrypt
+    // run) must not encrypt new writes: reads already treat it as "no encryption".
+    if let Some(encryption) = params.effective_encryption() {
         return generic_payload_write_plan(
             &effective_settings(settings),
             collection_name,
             collection_crypto_id,
-            encryption,
+            &encryption,
         );
     }
 
@@ -1905,9 +1907,10 @@ pub(crate) fn vector_write_plan_for_collection_with_crypto_id(
     collection_crypto_id: &str,
     params: &CollectionParams,
 ) -> Result<Option<VectorWritePlan>, StorageError> {
-    let Some(encryption) = &params.encryption else {
+    let Some(encryption) = params.effective_encryption() else {
         return Ok(None);
     };
+    let encryption = &encryption;
 
     generic_vector_write_plan(
         &effective_settings(settings),
@@ -2749,10 +2752,10 @@ pub fn validate_recovered_collection_crypto_runtime(
     params: &CollectionParams,
 ) -> Result<(), StorageError> {
     if let Some(encryption) = &params.encryption {
-        if encryption.migration_state != CryptoMigrationState::Active {
+        if encryption.migration_state.is_in_flight() {
             return Err(StorageError::bad_input(format!(
-                "recovered collection {collection_name} has in-flight or disabled crypto migration state {:?}; \
-                 restore requires migration_state=active, no encryption config, or a verified migration recovery manifest",
+                "recovered collection {collection_name} has in-flight crypto migration state {:?}; \
+                 restore requires migration_state=active or disabled, no encryption config, or a verified migration recovery manifest",
                 encryption.migration_state,
             )));
         }
@@ -2778,10 +2781,10 @@ pub fn validate_recovered_collection_crypto_config(
                  payload/vector AAD requires an explicit stable collection identity",
             ));
         }
-        if encryption.migration_state != CryptoMigrationState::Active {
+        if encryption.migration_state.is_in_flight() {
             return Err(StorageError::bad_input(format!(
-                "recovered collection {collection_name} has in-flight or disabled crypto migration state {:?}; \
-                 restore requires migration_state=active, no encryption config, or a verified migration recovery manifest",
+                "recovered collection {collection_name} has in-flight crypto migration state {:?}; \
+                 restore requires migration_state=active or disabled, no encryption config, or a verified migration recovery manifest",
                 encryption.migration_state,
             )));
         }
@@ -9384,6 +9387,16 @@ fn validate_direct_material_encoded_size(
     Ok(())
 }
 
+/// Materials read from non-seekable inherited descriptors (pipes, sockets), keyed by fd.
+#[cfg(unix)]
+fn material_fd_cache()
+-> &'static std::sync::Mutex<std::collections::HashMap<i32, Zeroizing<String>>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<i32, Zeroizing<String>>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 fn read_material_fd_to_string(
     material_name: &str,
     fd: i32,
@@ -9419,7 +9432,28 @@ fn read_material_fd_to_string(
             });
         }
         let mut file = unsafe { File::from_raw_fd(duplicated) };
-        read_bounded_material_to_string(material_name, &format!("fd:{fd}"), &mut file)
+        // The duplicate shares its file offset with the inherited descriptor, so the second plan
+        // build would otherwise read from EOF and get an empty secret. Seekable sources are
+        // rewound; pipes and sockets cannot be, so their first read is memoized for the process
+        // lifetime instead of being consumed by the first caller.
+        use std::io::{Seek, SeekFrom};
+        if file.seek(SeekFrom::Start(0)).is_ok() {
+            return read_bounded_material_to_string(material_name, &format!("fd:{fd}"), &mut file);
+        }
+        let mut cache = material_fd_cache().lock().map_err(|_| {
+            PayloadWriteSetupError::InvalidMaterialFileSource {
+                material: material_name.to_string(),
+                path: format!("fd:{fd}"),
+                reason: "fd material cache is poisoned".to_string(),
+            }
+        })?;
+        if let Some(material) = cache.get(&fd) {
+            return Ok(material.clone());
+        }
+        let material =
+            read_bounded_material_to_string(material_name, &format!("fd:{fd}"), &mut file)?;
+        cache.insert(fd, material.clone());
+        Ok(material)
     }
 
     #[cfg(not(unix))]
@@ -21897,7 +21931,52 @@ mod tests {
     }
 
     #[test]
-    fn validate_recovered_collection_crypto_config_rejects_disabled_metadata_without_proof() {
+    fn disabled_migration_state_never_encrypts_new_writes() {
+        let settings = Settings::new(None).unwrap();
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Disabled,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "missing_runtime_instance".to_string(),
+                    binding: Some("payload-field/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        // Reads treat a disabled migration state as "no encryption"; writes must agree,
+        // otherwise a completed decrypt run keeps producing envelopes nobody decrypts.
+        assert!(
+            payload_write_plan_for_collection_with_crypto_id(
+                &settings,
+                "docs",
+                "crypto-docs-uuid",
+                &params,
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            vector_write_plan_for_collection_with_crypto_id(
+                &settings,
+                "docs",
+                "crypto-docs-uuid",
+                &params,
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn validate_recovered_collection_crypto_config_accepts_disabled_metadata_as_inert() {
         let settings = Settings::new(None).unwrap();
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
@@ -21922,14 +22001,11 @@ mod tests {
             params.validate().is_err(),
             "public create/update validation must still reject direct disabled states",
         );
-        let err = validate_recovered_collection_crypto_runtime(&settings, "docs", &params)
-            .expect_err("recovered disabled crypto metadata must fail closed without proof");
-        assert!(
-            matches!(err, StorageError::BadInput { ref description }
-                if description.contains("in-flight or disabled crypto migration state")),
-            "unexpected error: {err:?}",
-        );
-        let err = validate_recovered_collection_crypto_config(
+        // A completed decrypt run leaves `Disabled` behind; it must neither block restarts nor
+        // restores, because effective_encryption() already treats it as no encryption.
+        validate_recovered_collection_crypto_runtime(&settings, "docs", &params)
+            .expect("recovered disabled crypto metadata is inert");
+        validate_recovered_collection_crypto_config(
             &settings,
             "docs",
             &recovered_config(
@@ -21937,12 +22013,7 @@ mod tests {
                 Some("12345678-90ab-cdef-1234-567890abcdef".parse().unwrap()),
             ),
         )
-        .expect_err("recovered disabled crypto config must fail closed without proof");
-        assert!(
-            matches!(err, StorageError::BadInput { ref description }
-                if description.contains("in-flight or disabled crypto migration state")),
-            "unexpected error: {err:?}",
-        );
+        .expect("recovered disabled crypto config is inert");
     }
 
     #[test]
