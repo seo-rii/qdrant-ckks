@@ -24,11 +24,9 @@ use qdrant_sec::{
     PrivateOramImmutableManifestV2, PrivateOramIndexKindV2, PrivateOramIndexStateV2,
     private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
     private_hnsw_oram_bucket_count, private_hnsw_oram_writeback_digest,
-    private_oram_immutable_manifest_v2_digest,
-    server_private_hnsw_oram_fixed_writeback_bucket_budget,
-    try_private_hnsw_oram_manifest_signature_message, validate_private_hnsw_oram_commit_signature,
-    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_shape,
-    validate_private_hnsw_oram_upload_bundle,
+    private_oram_immutable_manifest_v2_digest, try_private_hnsw_oram_manifest_signature_message,
+    validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
+    validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_upload_bundle,
     validate_private_hnsw_oram_upload_bundle_with_signature,
 };
 use serde::{Deserialize, Serialize};
@@ -1566,9 +1564,9 @@ impl PrivateHnswOramStore {
         if let Some(writeback_digest) = writeback_digest {
             validate_writeback_digest(writeback_digest)?;
         }
-        if new.index_epoch <= old.index_epoch {
+        if Some(new.index_epoch) != old.index_epoch.checked_add(1) {
             return Err(CollectionError::bad_request(
-                "private HNSW ORAM new epoch must be greater than old epoch",
+                "private HNSW ORAM new epoch must be exactly old epoch + 1",
             ));
         }
 
@@ -1632,9 +1630,9 @@ impl PrivateHnswOramStore {
                 "private HNSW ORAM commit must update at least one bucket",
             ));
         }
-        if new.index_epoch <= old.index_epoch {
+        if Some(new.index_epoch) != old.index_epoch.checked_add(1) {
             return Err(CollectionError::bad_request(
-                "private HNSW ORAM commit new epoch must be greater than old epoch",
+                "private HNSW ORAM commit new epoch must be exactly old epoch + 1",
             ));
         }
         self.ensure_current_epoch_matches(old)?;
@@ -1781,9 +1779,9 @@ impl PrivateHnswOramStore {
                 "private HNSW ORAM commit must update at least one bucket",
             ));
         }
-        if new.index_epoch <= old.index_epoch {
+        if Some(new.index_epoch) != old.index_epoch.checked_add(1) {
             return Err(CollectionError::bad_request(
-                "private HNSW ORAM commit new epoch must be greater than old epoch",
+                "private HNSW ORAM commit new epoch must be exactly old epoch + 1",
             ));
         }
         let (manifest, _) = self.read_manifest()?;
@@ -2256,7 +2254,7 @@ impl PrivateHnswOramStore {
         }
         validate_epoch_state(&pending.old)?;
         validate_epoch_state(&pending.new)?;
-        if pending.new.index_epoch <= pending.old.index_epoch {
+        if Some(pending.new.index_epoch) != pending.old.index_epoch.checked_add(1) {
             return Err(CollectionError::bad_request(
                 "private HNSW ORAM pending writeback is invalid",
             ));
@@ -2510,7 +2508,7 @@ impl PrivateHnswOramStore {
         self.validate_canonical_writer_lock_v1(lock)?;
         if new_epoch <= old_epoch {
             return Err(CollectionError::bad_request(
-                "private HNSW ORAM Merkle commit new epoch must be greater than old epoch",
+                "private HNSW ORAM Merkle commit new epoch must be exactly old epoch + 1",
             ));
         }
         if updated_buckets.is_empty() {
@@ -3977,13 +3975,15 @@ fn validate_initial_replication_bundle_budget(
     Ok(())
 }
 
+/// The exact writeback budget is session-scoped (one path per path read in the session) and
+/// enforced by the API session layer on the writer; the store can only bound a replicated or
+/// replayed writeback by the tree itself.
 fn validate_fixed_writeback_budget(
     manifest: &PrivateHnswOramManifest,
     updated_bucket_count: usize,
 ) -> CollectionResult<()> {
-    let max_updated_buckets =
-        server_private_hnsw_oram_fixed_writeback_bucket_budget(&manifest.oram)
-            .map_err(private_hnsw_oram_error)?;
+    let max_updated_buckets = usize::try_from(manifest.bucket_count)
+        .map_err(|_| CollectionError::bad_request("private HNSW ORAM bucket count overflows"))?;
     if updated_bucket_count > max_updated_buckets {
         return Err(CollectionError::bad_request(
             "private HNSW ORAM commit exceeds fixed writeback budget",
@@ -7416,7 +7416,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("new epoch must be greater than old epoch"));
+        assert!(err.contains("new epoch must be exactly old epoch + 1"));
         assert!(!err.contains("private-hnsw-non-advancing-sentinel"));
         assert!(!err.contains(&updated_bucket.ciphertext), "{err}");
         assert_eq!(store.read_current_epoch().unwrap(), old);
@@ -8092,10 +8092,9 @@ mod tests {
         }
 
         let mut oversized_batch = batch.clone();
-        let fixed_budget =
-            server_private_hnsw_oram_fixed_writeback_bucket_budget(&bundle.manifest.oram).unwrap();
+        let tree_bound = usize::try_from(bundle.manifest.bucket_count).unwrap();
         oversized_batch.updated_buckets =
-            vec![updated_bucket.clone(); fixed_budget.saturating_add(1)];
+            vec![updated_bucket.clone(); tree_bound.saturating_add(1)];
         let oversized = replica
             .prepare_replica_writeback_with_signature(
                 &oversized_batch,

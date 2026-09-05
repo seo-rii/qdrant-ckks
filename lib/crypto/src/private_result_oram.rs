@@ -1538,6 +1538,21 @@ fn private_result_oram_path_len(tree_height: u32) -> Result<usize, PrivateResult
         .ok_or(PrivateResultOramError::InvalidFetchPlanField("tree_height"))
 }
 
+/// Writeback budget for a session that has read `read_path_count` result ORAM paths: one path
+/// worth of buckets per read path, never below one fixed read batch, capped by the tree.
+pub fn private_result_oram_session_writeback_bucket_budget(
+    oram: &OramParams,
+    read_path_count: usize,
+) -> Result<usize, PrivateResultOramError> {
+    let path_len = private_result_oram_path_len(oram.tree_height)?;
+    let round_budget = private_result_oram_fixed_writeback_bucket_budget(oram)?;
+    let bucket_count = usize::try_from(private_result_oram_bucket_count(oram.tree_height)?)
+        .map_err(|_| PrivateResultOramError::InvalidManifestField("oram"))?;
+    Ok(round_budget
+        .max(path_len.saturating_mul(read_path_count))
+        .min(bucket_count))
+}
+
 /// Samples a uniformly random result ORAM leaf for a remap or padding access.
 ///
 /// Every remap leaf passed to the result ORAM access/fetch helpers MUST be an independent uniform
@@ -3607,6 +3622,10 @@ pub fn plan_private_result_oram_commit_for_manifest(
     )
 }
 
+/// Plans a commit for a session that read a single fixed batch (`path_batch_size` paths). A
+/// token fetch that spanned several read batches must use
+/// [`plan_private_result_oram_commit_for_manifest_context_with_read_paths`] with the number of
+/// paths it read (`batches * path_batch_size`).
 pub fn plan_private_result_oram_commit_for_manifest_context(
     manifest: &PrivateResultOramManifest,
     old_epoch: u64,
@@ -3614,6 +3633,30 @@ pub fn plan_private_result_oram_commit_for_manifest_context(
     old_root_hash: &str,
     current_leaf_commitments: &[String],
     updated_buckets: &[PrivateResultOramBucket],
+) -> Result<PrivateResultOramCommitPlan, PrivateResultOramError> {
+    let read_path_count = usize::try_from(manifest.oram.path_batch_size)
+        .map_err(|_| PrivateResultOramError::InvalidFetchPlanField("path_batch_size"))?;
+    plan_private_result_oram_commit_for_manifest_context_with_read_paths(
+        manifest,
+        old_epoch,
+        new_epoch,
+        old_root_hash,
+        current_leaf_commitments,
+        updated_buckets,
+        read_path_count,
+    )
+}
+
+/// Plans a commit for a session that read `read_path_count` paths; the writeback must fit
+/// [`private_result_oram_session_writeback_bucket_budget`], which is what the server enforces.
+pub fn plan_private_result_oram_commit_for_manifest_context_with_read_paths(
+    manifest: &PrivateResultOramManifest,
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: &str,
+    current_leaf_commitments: &[String],
+    updated_buckets: &[PrivateResultOramBucket],
+    read_path_count: usize,
 ) -> Result<PrivateResultOramCommitPlan, PrivateResultOramError> {
     validate_private_result_oram_manifest_shape(manifest)?;
     let manifest_bucket_count = usize::try_from(manifest.bucket_count)
@@ -3627,7 +3670,8 @@ pub fn plan_private_result_oram_commit_for_manifest_context(
     if updated_buckets.is_empty() {
         return Err(PrivateResultOramError::EmptyCommit);
     }
-    let max_updated_buckets = private_result_oram_fixed_writeback_bucket_budget(&manifest.oram)?;
+    let max_updated_buckets =
+        private_result_oram_session_writeback_bucket_budget(&manifest.oram, read_path_count)?;
     if updated_buckets.len() > max_updated_buckets {
         return Err(PrivateResultOramError::InvalidFetchPlanField(
             "updated_buckets",

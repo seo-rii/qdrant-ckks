@@ -678,6 +678,7 @@ fn result_append_transaction_plan(
         writer_lease_digest: digest(21),
         writer_fence: 3,
         paths_per_window,
+        insert_eviction_leaf: 0,
         padding_leaves: vec![1, 2, 1],
     }
 }
@@ -1167,8 +1168,8 @@ fn result_append_recovery_digest_known_answers_are_stable() {
     )
     .unwrap();
 
-    assert_eq!(attempt, "JX-5ynW42HWB_1EyHULuiO4WzsxHZj57ILjG6HQUZIQ");
-    assert_eq!(prepared, "HhzWkWrLQQg8TRLQhN0C4D2PiHoTrj59F5sGpJTArYo");
+    assert_eq!(attempt, "LeNkoXW2iV10zksXqwhadqFueao5_6twh91Wuu4lmPg");
+    assert_eq!(prepared, "pNrVNtaqYbpC6yC4OAIJn5y3GwSKULc8jM_RkfK0pPM");
     let prepared_v4 = private_oram_append_result_prepared_commit_v4_digest(
         PrivateOramAppendResultPreparedCommitDigestInputV4 {
             attempt_digest: &attempt,
@@ -1184,7 +1185,7 @@ fn result_append_recovery_digest_known_answers_are_stable() {
         },
     )
     .unwrap();
-    assert_eq!(prepared_v4, "MOkAohmIksxudPs6cJNg-L8eo2mk_YpvFMzPtbOE5Ls");
+    assert_eq!(prepared_v4, "04hHfpLL0CwzoWSpoSNLK-VOklkdHsrkkaX04xcdVYM");
     assert_ne!(prepared_v4, prepared);
     assert_ne!(
         private_oram_append_result_prepared_commit_v4_digest(
@@ -2529,6 +2530,7 @@ fn result_append_transaction_rolls_back_after_a_later_path_operation_fails() {
         writer_lease_digest: digest(21),
         writer_fence: 3,
         paths_per_window: 2,
+        insert_eviction_leaf: 1,
         padding_leaves: vec![0, 1, 0],
     };
     let mut transaction =
@@ -2767,7 +2769,7 @@ fn result_append_transaction_accepts_authenticated_buckets_from_an_older_epoch()
 fn result_append_transaction_rejects_duplicate_paths_only_within_a_window() {
     let fixture = result_append_transaction_fixture_with_path_batch_size(2);
     let mut plan = result_append_transaction_plan(2);
-    plan.padding_leaves[0] = 3;
+    plan.insert_eviction_leaf = plan.padding_leaves[0];
     assert_eq!(
         PrivateOramAppendResultTransactionV2::begin(
             &fixture.manifest,
@@ -2819,10 +2821,11 @@ fn verified_hnsw_append_transaction_preserves_fixed_ordered_frames() {
     assert_eq!(output.new_epoch, 12);
     assert_eq!(output.read_transcript.read_path_count, 4);
     assert_eq!(output.read_transcript.ordered_leaf_labels.len(), 4);
-    assert_eq!(
-        output.read_transcript.ordered_leaf_labels[1],
-        output.read_transcript.ordered_leaf_labels[3]
-    );
+    // candidate (leaf 1), padding 3, rewrite of the remapped candidate (leaf 2), then the insert
+    // evicting the next padding leaf (1) instead of the new node's own position (3).
+    let expected_leaves =
+        [1u64, 3, 2, 1].map(|leaf| encode_private_hnsw_oram_leaf_label(leaf, 2).unwrap());
+    assert_eq!(output.read_transcript.ordered_leaf_labels, expected_leaves);
     assert_eq!(output.writeback.updated_buckets.len(), 12);
     assert_eq!(output.ordered_encrypted_buckets.len(), 12);
     assert_eq!(
@@ -3261,6 +3264,9 @@ fn hnsw_append_transaction_poisoned_when_later_window_plan_fails() {
     let mut plan = hnsw_append_transaction_plan();
     plan.paths_per_window = 2;
     plan.padding_leaves[0] = 0;
+    // The insert evicts the next padding leaf; make it collide with the rewrite path (2) that
+    // shares its window.
+    plan.padding_leaves[1] = 2;
     let mut point = hnsw_append_transaction_point();
     point.initial_leaf = 2;
     let mut transaction = PrivateOramAppendHnswTransactionV2::begin(
@@ -4561,4 +4567,64 @@ fn paired_mutation_finalizer_debug_output_redacts_signed_and_encrypted_artifacts
         assert!(!debug.contains(&finalized.encrypted_checkpoint.sealed.ciphertext));
         assert!(!debug.contains(&finalized.mutation_bundle.signature.sig));
     }
+}
+
+#[test]
+fn result_append_insert_evicts_padding_path_and_keeps_secret_position() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(1);
+    let plan = result_append_transaction_plan(1);
+    let point = result_append_transaction_point();
+    assert_ne!(plan.insert_eviction_leaf, point.initial_leaf);
+    let (output, _) = complete_result_append_transaction(&fixture, plan.clone());
+
+    let position_label = encode_private_result_oram_leaf_label(point.initial_leaf, 2).unwrap();
+    let eviction_label =
+        encode_private_result_oram_leaf_label(plan.insert_eviction_leaf, 2).unwrap();
+    // The insert reads/evicts the independent eviction path, never the new block's position.
+    assert_eq!(
+        output.read_transcript.ordered_leaf_labels[0],
+        eviction_label
+    );
+    assert!(
+        !output
+            .read_transcript
+            .ordered_leaf_labels
+            .contains(&position_label)
+    );
+    // The new block is still positioned at the point's secret initial leaf.
+    let token = BASE64URL_NOPAD.encode(&point.payload_fetch_token);
+    let position = output
+        .next_client_state
+        .positions
+        .iter()
+        .find(|entry| entry.payload_fetch_token == token)
+        .expect("inserted token has a position");
+    assert_eq!(position.leaf_label, position_label);
+}
+
+#[test]
+fn hnsw_append_insert_evicts_padding_path_and_keeps_secret_position() {
+    let fixture = hnsw_append_transaction_fixture();
+    let plan = hnsw_append_transaction_plan();
+    let mut point = hnsw_append_transaction_point();
+    // A position that no planned path touches: candidate 1 -> 2, rewrite path 2, padding 3/1.
+    point.initial_leaf = 0;
+    let (output, _) = complete_hnsw_append_transaction_with_point(&fixture, plan, point.clone());
+
+    let position_label = encode_private_hnsw_oram_leaf_label(point.initial_leaf, 2).unwrap();
+    assert!(
+        !output
+            .read_transcript
+            .ordered_leaf_labels
+            .contains(&position_label),
+        "the insert must not read or evict the new node's own path"
+    );
+    let node_id = BASE64URL_NOPAD.encode(&point.node_id);
+    let position = output
+        .next_client_state
+        .positions
+        .iter()
+        .find(|entry| entry.node_id == node_id)
+        .expect("inserted node has a position");
+    assert_eq!(position.leaf_label, position_label);
 }

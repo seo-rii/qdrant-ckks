@@ -461,6 +461,8 @@ enum PrivateOramAppendHnswPathActionV2 {
         previous: Box<PrivateHnswNodeBlockPlaintext>,
         replacement: Box<PrivateHnswNodeBlockPlaintext>,
     },
+    /// Reads and evicts the independent padding path `leaf` while the new block enters the
+    /// stash under the point's own `initial_leaf` position.
     Insert {
         leaf: u64,
     },
@@ -1393,9 +1395,14 @@ impl PrivateOramAppendHnswTransactionV2 {
                     replacement: Box::new(rewrite.replacement.clone()),
                 });
         }
+        // The inserted block keeps `point.initial_leaf` as its secret position. The path that is
+        // read and evicted together with the insert is an independent padding leaf, so the
+        // server never sees the position of the new block until an unrelated later access
+        // remaps it again.
+        let insert_eviction_leaf = self.next_padding_leaf()?;
         self.actions
             .push_back(PrivateOramAppendHnswPathActionV2::Insert {
-                leaf: self.point.initial_leaf,
+                leaf: insert_eviction_leaf,
             });
         for _ in 0..delta.padding_read_path_count {
             let leaf = self.next_padding_leaf()?;
@@ -1570,8 +1577,11 @@ impl PrivateOramAppendHnswTransactionV2 {
                         .ok_or(PrivateOramAppendTransactionError::Incomplete)?
                         .new_block
                         .clone();
-                    self.working_state
-                        .insert_new_stash_block(new_block, *leaf, self.config)?;
+                    self.working_state.insert_new_stash_block(
+                        new_block,
+                        self.point.initial_leaf,
+                        self.config,
+                    )?;
                     let eviction = evict_private_hnsw_oram_path(
                         &mut self.working_state,
                         self.config,

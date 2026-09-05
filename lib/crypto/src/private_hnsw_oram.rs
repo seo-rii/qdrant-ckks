@@ -890,6 +890,10 @@ pub fn plan_private_hnsw_oram_commit_for_manifest(
     )
 }
 
+/// Plans a commit whose writeback budget is derived from the manifest's fixed search budget
+/// (one full fixed-budget search per commit). Use
+/// [`plan_private_hnsw_oram_commit_for_manifest_context_with_read_paths`] when the session read
+/// a different number of paths.
 pub fn plan_private_hnsw_oram_commit_for_manifest_context(
     manifest: &PrivateHnswOramManifest,
     old_epoch: u64,
@@ -897,6 +901,30 @@ pub fn plan_private_hnsw_oram_commit_for_manifest_context(
     old_root_hash: &str,
     current_leaf_commitments: &[String],
     updated_buckets: &[PrivateHnswOramBucket],
+) -> Result<PrivateHnswOramCommitPlan, PrivateHnswOramError> {
+    validate_private_hnsw_oram_manifest_shape(manifest)?;
+    let read_path_count = private_hnsw_oram_fixed_search_read_path_count(manifest)?;
+    plan_private_hnsw_oram_commit_for_manifest_context_with_read_paths(
+        manifest,
+        old_epoch,
+        new_epoch,
+        old_root_hash,
+        current_leaf_commitments,
+        updated_buckets,
+        read_path_count,
+    )
+}
+
+/// Plans a commit for a session that read `read_path_count` paths; the writeback must fit
+/// [`private_hnsw_oram_session_writeback_bucket_budget`].
+pub fn plan_private_hnsw_oram_commit_for_manifest_context_with_read_paths(
+    manifest: &PrivateHnswOramManifest,
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: &str,
+    current_leaf_commitments: &[String],
+    updated_buckets: &[PrivateHnswOramBucket],
+    read_path_count: usize,
 ) -> Result<PrivateHnswOramCommitPlan, PrivateHnswOramError> {
     validate_private_hnsw_oram_manifest_shape(manifest)?;
     let manifest_bucket_count = usize::try_from(manifest.bucket_count)
@@ -910,7 +938,8 @@ pub fn plan_private_hnsw_oram_commit_for_manifest_context(
     if updated_buckets.is_empty() {
         return Err(PrivateHnswOramError::EmptyCommit);
     }
-    let max_updated_buckets = private_hnsw_oram_fixed_writeback_bucket_budget(&manifest.oram)?;
+    let max_updated_buckets =
+        private_hnsw_oram_session_writeback_bucket_budget(&manifest.oram, read_path_count)?;
     if updated_buckets.len() > max_updated_buckets {
         return Err(PrivateHnswOramError::InvalidFetchPlanField(
             "updated_buckets",
@@ -1337,6 +1366,37 @@ pub fn private_hnsw_oram_fixed_writeback_bucket_budget(
         .ok_or(PrivateHnswOramError::InvalidFetchPlanField(
             "updated_buckets",
         ))
+}
+
+/// Writeback budget for a session that has read `read_path_count` ORAM paths.
+///
+/// A client can only legitimately rewrite buckets that lie on paths it read during the session,
+/// so the bound is one path worth of buckets per read path. It never drops below a single fixed
+/// read round (`path_batch_size` paths) and never exceeds the tree itself.
+pub fn private_hnsw_oram_session_writeback_bucket_budget(
+    oram: &OramParams,
+    read_path_count: usize,
+) -> Result<usize, PrivateHnswOramError> {
+    let path_len = private_hnsw_oram_path_len(oram.tree_height)?;
+    let round_budget = private_hnsw_oram_fixed_writeback_bucket_budget(oram)?;
+    let bucket_count = path_oram_bucket_count(oram.tree_height)
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or(PrivateHnswOramError::InvalidManifestField("oram"))?;
+    let session_budget = path_len.saturating_mul(read_path_count);
+    Ok(round_budget.max(session_budget).min(bucket_count))
+}
+
+/// Number of ORAM paths a fixed-budget search reads: every upper- and base-layer step accesses
+/// exactly one path, and the whole search is written back in a single commit.
+pub fn private_hnsw_oram_fixed_search_read_path_count(
+    manifest: &PrivateHnswOramManifest,
+) -> Result<usize, PrivateHnswOramError> {
+    manifest
+        .fixed_budget
+        .upper_layer_steps
+        .checked_add(manifest.fixed_budget.base_layer_steps)
+        .and_then(|steps| usize::try_from(steps).ok())
+        .ok_or(PrivateHnswOramError::InvalidManifestField("fixed_budget"))
 }
 
 pub fn private_hnsw_oram_merkle_root_for_commitments(
@@ -2461,6 +2521,20 @@ mod tests {
         let fixed_writeback_budget =
             private_hnsw_oram_fixed_writeback_bucket_budget(&manifest.oram).unwrap();
         assert_eq!(fixed_writeback_budget, 3);
+        // One read round never buys more than a round, two rounds buy two paths, and the
+        // budget is capped by the tree.
+        assert_eq!(
+            private_hnsw_oram_session_writeback_bucket_budget(&manifest.oram, 0).unwrap(),
+            3
+        );
+        assert_eq!(
+            private_hnsw_oram_session_writeback_bucket_budget(&manifest.oram, 2).unwrap(),
+            6
+        );
+        assert_eq!(
+            private_hnsw_oram_session_writeback_bucket_budget(&manifest.oram, 100).unwrap(),
+            7
+        );
 
         let updated_buckets = (0..=fixed_writeback_budget)
             .map(|bucket_id| {
@@ -2470,25 +2544,48 @@ mod tests {
         assert!(updated_buckets.len() <= leaf_commitments.len());
 
         assert_eq!(
-            plan_private_hnsw_oram_commit_for_manifest(
+            plan_private_hnsw_oram_commit_for_manifest_context_with_read_paths(
                 &manifest,
+                manifest.index_epoch,
                 43,
+                &manifest.root_hash,
                 &leaf_commitments,
                 &updated_buckets,
+                1,
             ),
             Err(PrivateHnswOramError::InvalidFetchPlanField(
                 "updated_buckets"
             ))
         );
 
-        let plan = plan_private_hnsw_oram_commit_for_manifest(
+        let plan = plan_private_hnsw_oram_commit_for_manifest_context_with_read_paths(
             &manifest,
+            manifest.index_epoch,
             43,
+            &manifest.root_hash,
             &leaf_commitments,
             &updated_buckets[..fixed_writeback_budget],
+            1,
         )
         .unwrap();
         assert_eq!(plan.updated_buckets.len(), fixed_writeback_budget);
+
+        // The manifest-derived planner budgets a whole fixed-budget search (all steps).
+        let search_paths = private_hnsw_oram_fixed_search_read_path_count(&manifest).unwrap();
+        assert_eq!(
+            search_paths,
+            (manifest.fixed_budget.upper_layer_steps + manifest.fixed_budget.base_layer_steps)
+                as usize
+        );
+        assert!(search_paths > 1);
+        let whole_search = plan_private_hnsw_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &leaf_commitments,
+            &updated_buckets,
+        )
+        .unwrap();
+        assert_eq!(whole_search.updated_buckets.len(), updated_buckets.len());
     }
 
     fn fixture_context<'a>(

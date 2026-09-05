@@ -78,6 +78,10 @@ pub struct PrivateOramAppendResultTransactionPlanV2 {
     pub writer_lease_digest: String,
     pub writer_fence: u64,
     pub paths_per_window: u32,
+    /// Path read and evicted together with the insert. It MUST be an independent uniform
+    /// sample, never the point's `initial_leaf`, so the server cannot link the mutation to the
+    /// first later fetch of the new payload.
+    pub insert_eviction_leaf: u64,
     pub padding_leaves: Vec<u64>,
 }
 
@@ -89,6 +93,7 @@ impl Debug for PrivateOramAppendResultTransactionPlanV2 {
             .field("writer_lease_digest", &"[redacted]")
             .field("writer_fence", &self.writer_fence)
             .field("paths_per_window", &self.paths_per_window)
+            .field("insert_eviction_leaf", &"[redacted]")
             .field("padding_leaf_count", &self.padding_leaves.len())
             .finish()
     }
@@ -247,8 +252,14 @@ pub struct PrivateOramAppendResultTransactionProgressV2 {
 
 #[derive(Clone, Copy)]
 enum PrivateOramAppendResultPathActionV2 {
-    Insert { leaf: u64 },
-    Padding { leaf: u64 },
+    /// Reads and evicts the independent padding path `leaf` while the new block enters the
+    /// stash under the point's own `initial_leaf` position.
+    Insert {
+        leaf: u64,
+    },
+    Padding {
+        leaf: u64,
+    },
 }
 
 impl PrivateOramAppendResultPathActionV2 {
@@ -276,6 +287,7 @@ enum PrivateOramAppendResultTransactionStatusV2 {
 pub struct PrivateOramAppendResultTransactionV2 {
     manifest: PrivateOramImmutableManifestV2,
     plan: PrivateOramAppendResultTransactionPlanV2,
+    initial_leaf: u64,
     manifest_digest: String,
     old_state_digest: String,
     source_checkpoint_digest: String,
@@ -471,13 +483,13 @@ impl PrivateOramAppendResultTransactionV2 {
         for leaf in plan
             .padding_leaves
             .iter()
-            .chain(std::iter::once(&point.initial_leaf))
+            .chain([&point.initial_leaf, &plan.insert_eviction_leaf])
         {
             encode_private_result_oram_leaf_label(*leaf, config.tree_height)?;
         }
         let paths_per_window = usize::try_from(plan.paths_per_window)
             .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("paths_per_window"))?;
-        let fixed_leaves = std::iter::once(point.initial_leaf)
+        let fixed_leaves = std::iter::once(plan.insert_eviction_leaf)
             .chain(plan.padding_leaves.iter().copied())
             .collect::<Vec<_>>();
         if fixed_leaves.chunks(paths_per_window).any(|window| {
@@ -546,7 +558,7 @@ impl PrivateOramAppendResultTransactionV2 {
                 .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("actions"))?,
         );
         actions.push_back(PrivateOramAppendResultPathActionV2::Insert {
-            leaf: point.initial_leaf,
+            leaf: plan.insert_eviction_leaf,
         });
         actions.extend(
             plan.padding_leaves
@@ -556,6 +568,7 @@ impl PrivateOramAppendResultTransactionV2 {
         );
         Ok(Self {
             manifest: manifest.clone(),
+            initial_leaf: point.initial_leaf,
             plan,
             manifest_digest,
             old_state_digest,
@@ -1137,7 +1150,7 @@ impl PrivateOramAppendResultTransactionV2 {
                     }
                     self.working_state.insert_new_stash_block(
                         self.new_block.clone(),
-                        *leaf,
+                        self.initial_leaf,
                         self.config,
                     )?;
                     let eviction = evict_private_result_oram_path(
@@ -1556,6 +1569,7 @@ pub fn private_oram_append_result_attempt_v3_digest(
     update_digest_bytes(&mut hasher, &point.point_token)?;
     update_digest_bytes(&mut hasher, &point.payload)?;
     hasher.update(point.initial_leaf.to_be_bytes());
+    hasher.update(plan.insert_eviction_leaf.to_be_bytes());
     update_digest_len(&mut hasher, plan.padding_leaves.len())?;
     for leaf in &plan.padding_leaves {
         hasher.update(leaf.to_be_bytes());

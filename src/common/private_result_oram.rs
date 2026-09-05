@@ -22,7 +22,8 @@ use qdrant_sec::{
     PrivateResultOramMerkleProof, PrivateResultOramReadBucketsSignatureInput,
     PrivateResultOramSignature, PrivateResultOramSignatureVerification,
     PrivateResultOramUploadBundle, private_result_oram_bucket_ciphertext_bytes,
-    private_result_oram_fixed_writeback_bucket_budget, private_result_oram_writeback_digest,
+    private_result_oram_fixed_writeback_bucket_budget,
+    private_result_oram_session_writeback_bucket_budget, private_result_oram_writeback_digest,
     validate_private_result_oram_bucket_shape, validate_private_result_oram_commit_signature,
     validate_private_result_oram_manifest, validate_private_result_oram_manifest_signature_shape,
     validate_private_result_oram_read_buckets_signature,
@@ -264,6 +265,8 @@ struct PrivateResultOramSession {
     manifest: PrivateResultOramManifest,
     commit_in_progress: bool,
     owner: PrivateResultOramSessionOwner,
+    /// Paths read through this session so far; bounds the writeback a commit may carry.
+    read_path_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -287,6 +290,7 @@ impl Debug for PrivateResultOramSession {
             .field("manifest", &"[redacted]")
             .field("commit_in_progress", &"[redacted]")
             .field("owner", &self.owner)
+            .field("read_path_count", &"[redacted]")
             .finish()
     }
 }
@@ -1350,6 +1354,7 @@ async fn do_open_private_result_oram_session_inner(
         manifest,
         commit_in_progress: false,
         owner,
+        read_path_count: 0,
     };
     let mut registry = session_registry().lock().map_err(|_| {
         StorageError::service_error("private result ORAM session registry poisoned")
@@ -1682,6 +1687,10 @@ async fn do_read_private_result_oram_buckets_inner(
                 &session.manifest,
                 &buckets,
             )?;
+            // Every path served through this session extends the writeback the client may commit.
+            let path_len = u64::from(session.manifest.oram.tree_height).saturating_add(1);
+            let read_paths = u64::try_from(bucket_ids.len()).unwrap_or(u64::MAX) / path_len;
+            session.read_path_count = session.read_path_count.saturating_add(read_paths);
             let proof_value = serde_json::to_string(&proof).map_err(|_| {
                 StorageError::service_error("failed to serialize private result ORAM Merkle proof")
             })?;
@@ -2827,8 +2836,12 @@ fn ensure_private_result_oram_read_proof_matches_buckets(
     Ok(())
 }
 
+/// A commit may rewrite one path worth of buckets per path the session read (a token fetch that
+/// spans several read batches commits once), never less than one fixed read batch and never
+/// more than the tree.
 fn max_updated_bucket_count(session: &PrivateResultOramSession) -> StorageResult<usize> {
-    private_result_oram_fixed_writeback_bucket_budget(&session.manifest.oram)
+    let read_path_count = usize::try_from(session.read_path_count).unwrap_or(usize::MAX);
+    private_result_oram_session_writeback_bucket_budget(&session.manifest.oram, read_path_count)
         .map_err(|_| StorageError::bad_request("private result ORAM writeback size overflows"))
 }
 
@@ -5935,6 +5948,7 @@ mod private_result_oram_tests {
             manifest,
             commit_in_progress: false,
             owner: PrivateResultOramSessionOwner::Standalone,
+            read_path_count: 0,
         }
     }
 

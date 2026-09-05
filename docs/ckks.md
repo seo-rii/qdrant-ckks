@@ -1303,8 +1303,9 @@ lease, and session-bound reads require that exact owner/hash/expiry lease.
 Each collection-local HNSW/result store can export a validated replication
 batch from its owner-signed durable journal. The batch contains only old/new
 epoch state, encrypted buckets, bucket count, and the commit signature; Merkle
-state is not transported. A receiving store enforces the manifest-derived
-fixed writeback budget, derives the canonical writeback digest, requires an
+state is not transported. A receiving store bounds the writeback by the tree
+(the exact per-session budget is enforced on the writer, see below), derives
+the canonical writeback digest, requires an
 exact match with the proposed consensus transition before creating a journal,
 then recomputes the new Merkle tree from its own old tree. The Dispatcher CAS
 builder also reads the current Raft record so the previous epoch's optional
@@ -2072,6 +2073,14 @@ Runtime and signed-manifest validation keep fixed path budgets executable:
 `fixed_budget.paths_per_round` must equal `oram.path_batch_size`. This prevents
 SDK/server disagreement and avoids configurations that could only be satisfied
 by duplicate `read_paths` labels.
+Commit writebacks are budgeted per session rather than per read round: a
+session may rewrite one path worth of buckets for every path it read (never
+fewer than one fixed round, never more than the tree), and `new_epoch` must be
+exactly `old_epoch + 1`. A verified fixed-budget search therefore reads
+`upper_layer_steps + base_layer_steps` paths under one pinned root and commits
+them in a single writeback; the SDK planners default to that budget and expose
+`*_with_read_paths` variants for sessions that read a different number of
+paths (for example a result ORAM token fetch spanning several batches).
 They also reject `dim`, `hnsw.fixed_neighbor_slots`, and
 `oram.block_size_bytes` combinations that cannot hold the fixed-size f32 node
 block layout. For example, a 1536-dimensional index with 64 fixed neighbor

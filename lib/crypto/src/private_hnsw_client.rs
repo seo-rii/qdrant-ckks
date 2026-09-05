@@ -1822,6 +1822,21 @@ pub fn private_hnsw_oram_fixed_writeback_bucket_budget(
     )
 }
 
+/// Client-side mirror of the server's session writeback budget: one path worth of buckets per
+/// path read in the session, never below one fixed read round, capped by the tree.
+pub fn private_hnsw_oram_session_writeback_bucket_budget(
+    oram: &OramParams,
+    read_path_count: usize,
+) -> Result<usize, PrivateHnswClientError> {
+    let path_len = private_hnsw_oram_path_len(oram.tree_height)?;
+    let round_budget = private_hnsw_oram_fixed_writeback_bucket_budget(oram)?;
+    let bucket_count = usize::try_from(private_hnsw_oram_bucket_count(oram.tree_height)?)
+        .map_err(|_| PrivateHnswClientError::InvalidTreeHeight)?;
+    Ok(round_budget
+        .max(path_len.saturating_mul(read_path_count))
+        .min(bucket_count))
+}
+
 /// Draws a uniformly random value in `0..leaf_count` from `rng` using rejection sampling.
 pub(crate) fn sample_uniform_leaf(rng: &dyn SecureRandom, leaf_count: u64) -> Option<u64> {
     if leaf_count == 0 {
@@ -4002,6 +4017,10 @@ pub fn plan_private_hnsw_oram_commit_for_manifest(
     )
 }
 
+/// Plans a commit whose writeback budget covers one full fixed-budget search (all upper- and
+/// base-layer steps of the manifest). Use
+/// [`plan_private_hnsw_oram_commit_for_manifest_context_with_read_paths`] with the actual
+/// number of paths read (for example `PrivateHnswSearchResult::completed_steps`) otherwise.
 pub fn plan_private_hnsw_oram_commit_for_manifest_context(
     manifest: &PrivateHnswOramManifest,
     old_epoch: u64,
@@ -4009,6 +4028,31 @@ pub fn plan_private_hnsw_oram_commit_for_manifest_context(
     old_root_hash: &str,
     current_leaf_commitments: &[String],
     updated_buckets: &[PrivateHnswOramBucket],
+) -> Result<PrivateHnswClientCommitPlan, PrivateHnswClientError> {
+    let read_path_count =
+        crate::private_hnsw_oram::private_hnsw_oram_fixed_search_read_path_count(manifest)
+            .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
+    plan_private_hnsw_oram_commit_for_manifest_context_with_read_paths(
+        manifest,
+        old_epoch,
+        new_epoch,
+        old_root_hash,
+        current_leaf_commitments,
+        updated_buckets,
+        read_path_count,
+    )
+}
+
+/// Plans a commit for a session that read `read_path_count` paths; the writeback must fit
+/// [`private_hnsw_oram_session_writeback_bucket_budget`], which is what the server enforces.
+pub fn plan_private_hnsw_oram_commit_for_manifest_context_with_read_paths(
+    manifest: &PrivateHnswOramManifest,
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: &str,
+    current_leaf_commitments: &[String],
+    updated_buckets: &[PrivateHnswOramBucket],
+    read_path_count: usize,
 ) -> Result<PrivateHnswClientCommitPlan, PrivateHnswClientError> {
     validate_private_hnsw_oram_manifest_shape(manifest)
         .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
@@ -4023,7 +4067,8 @@ pub fn plan_private_hnsw_oram_commit_for_manifest_context(
     if updated_buckets.is_empty() {
         return Err(PrivateHnswClientError::EmptyCommit);
     }
-    let max_updated_buckets = private_hnsw_oram_fixed_writeback_bucket_budget(&manifest.oram)?;
+    let max_updated_buckets =
+        private_hnsw_oram_session_writeback_bucket_budget(&manifest.oram, read_path_count)?;
     if updated_buckets.len() > max_updated_buckets {
         return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
             "updated_buckets",
@@ -7656,6 +7701,18 @@ mod tests {
         let fixed_writeback_budget =
             private_hnsw_oram_fixed_writeback_bucket_budget(&manifest.oram).unwrap();
         assert_eq!(fixed_writeback_budget, 3);
+        assert_eq!(
+            private_hnsw_oram_session_writeback_bucket_budget(&manifest.oram, 1).unwrap(),
+            3
+        );
+        assert_eq!(
+            private_hnsw_oram_session_writeback_bucket_budget(&manifest.oram, 2).unwrap(),
+            6
+        );
+        assert_eq!(
+            private_hnsw_oram_session_writeback_bucket_budget(&manifest.oram, 9).unwrap(),
+            7
+        );
 
         let updated_buckets = (0..=fixed_writeback_budget)
             .map(|bucket_id| {
@@ -7665,25 +7722,41 @@ mod tests {
         assert!(updated_buckets.len() <= leaf_commitments.len());
 
         assert_eq!(
-            plan_private_hnsw_oram_commit_for_manifest(
+            plan_private_hnsw_oram_commit_for_manifest_context_with_read_paths(
                 &manifest,
+                manifest.index_epoch,
                 43,
+                &manifest.root_hash,
                 &leaf_commitments,
                 &updated_buckets,
+                1,
             ),
             Err(PrivateHnswClientError::InvalidCommitSignatureContext(
                 "updated_buckets",
             ))
         );
 
-        let plan = plan_private_hnsw_oram_commit_for_manifest(
+        let plan = plan_private_hnsw_oram_commit_for_manifest_context_with_read_paths(
             &manifest,
+            manifest.index_epoch,
             43,
+            &manifest.root_hash,
             &leaf_commitments,
             &updated_buckets[..fixed_writeback_budget],
+            1,
         )
         .unwrap();
         assert_eq!(plan.updated_buckets.len(), fixed_writeback_budget);
+
+        // A whole fixed-budget search (upper + base steps, here 3 paths) fits the default budget.
+        let whole_search = plan_private_hnsw_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &leaf_commitments,
+            &updated_buckets,
+        )
+        .unwrap();
+        assert_eq!(whole_search.updated_buckets.len(), updated_buckets.len());
     }
 
     #[test]

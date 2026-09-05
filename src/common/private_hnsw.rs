@@ -26,7 +26,8 @@ use qdrant_sec::{
     VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, decode_private_hnsw_oram_leaf_label,
     private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
     private_hnsw_oram_bucket_count, private_hnsw_oram_bucket_ids_for_leaf,
-    private_hnsw_oram_fixed_writeback_bucket_budget, private_hnsw_oram_writeback_digest,
+    private_hnsw_oram_fixed_writeback_bucket_budget,
+    private_hnsw_oram_session_writeback_bucket_budget, private_hnsw_oram_writeback_digest,
     validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
     validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_hnsw_oram_read_paths_signature,
@@ -312,6 +313,8 @@ struct PrivateHnswSession {
     manifest: PrivateHnswOramManifest,
     commit_in_progress: bool,
     owner: PrivateHnswSessionOwner,
+    /// Paths read through this session so far; bounds the writeback a commit may carry.
+    read_path_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -338,6 +341,7 @@ impl Debug for PrivateHnswSession {
             .field("manifest", &"[redacted]")
             .field("commit_in_progress", &"[redacted]")
             .field("owner", &self.owner)
+            .field("read_path_count", &"[redacted]")
             .finish()
     }
 }
@@ -1751,6 +1755,7 @@ async fn do_open_private_hnsw_session_inner(
         manifest,
         commit_in_progress: false,
         owner,
+        read_path_count: 0,
     };
     let mut registry = session_registry()
         .lock()
@@ -1997,6 +2002,10 @@ async fn do_read_private_hnsw_paths_inner(
                 .map_err(private_hnsw_read_batch_store_error)?;
             ensure_private_hnsw_read_proof_matches_buckets(&proof, &buckets)?;
             validate_private_hnsw_read_bucket_ciphertexts_fixed_size(&session.manifest, &buckets)?;
+            // Every path served through this session extends the writeback the client may commit.
+            session.read_path_count = session
+                .read_path_count
+                .saturating_add(u64::try_from(paths.len()).unwrap_or(u64::MAX));
             let proof_value = serde_json::to_string(&proof).map_err(|_| {
                 StorageError::service_error("failed to serialize private HNSW ORAM Merkle proof")
             })?;
@@ -3671,8 +3680,12 @@ fn validate_private_hnsw_commit_bucket_ciphertexts_fixed_size(
     })
 }
 
+/// A commit may rewrite one path worth of buckets per path the session read (a fixed-budget
+/// search reads `upper_layer_steps + base_layer_steps` paths and commits once), never less than
+/// one fixed read round and never more than the tree.
 fn max_updated_bucket_count(session: &PrivateHnswSession) -> StorageResult<usize> {
-    private_hnsw_oram_fixed_writeback_bucket_budget(&session.manifest.oram)
+    let read_path_count = usize::try_from(session.read_path_count).unwrap_or(usize::MAX);
+    private_hnsw_oram_session_writeback_bucket_budget(&session.manifest.oram, read_path_count)
         .map_err(|_| StorageError::bad_request("private HNSW ORAM writeback size overflows"))
 }
 
@@ -6259,6 +6272,7 @@ mod private_hnsw_tests {
             manifest,
             commit_in_progress: false,
             owner: PrivateHnswSessionOwner::Standalone,
+            read_path_count: 0,
         }
     }
 
