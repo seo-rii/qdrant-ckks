@@ -583,6 +583,68 @@ impl CollectionContainer for TableOfContent {
         })
     }
 
+    fn sync_local_state(&self) -> Result<(), StorageError> {
+        self.general_runtime.block_on(async {
+            let collections = self.collections.read().await;
+            let transfer_failure_callback =
+                Self::on_transfer_failure_callback(self.consensus_proposal_sender.clone());
+            let transfer_success_callback =
+                Self::on_transfer_success_callback(self.consensus_proposal_sender.clone());
+
+            for collection in collections.values() {
+                match self
+                    .reconcile_private_oram_snapshot_recovery_marker(collection)
+                    .await
+                {
+                    Ok(false) => {}
+                    Ok(true) => continue,
+                    Err(error) => {
+                        // A marker the local state cannot be reconciled with fences this
+                        // collection until an operator intervenes; it must not stop the Raft
+                        // loop or the sync of every other collection.
+                        log::warn!(
+                            "Skipping local state sync for collection {} until its private ORAM \
+                             snapshot recovery marker can be reconciled: {error}",
+                            collection.name(),
+                        );
+                        continue;
+                    }
+                }
+                let finish_shard_initialize = Self::change_peer_state_callback(
+                    self.consensus_proposal_sender.clone(),
+                    collection.name().to_string(),
+                    ReplicaState::Active,
+                    Some(ReplicaState::Initializing),
+                );
+                let convert_to_listener_callback = Self::change_peer_state_callback(
+                    self.consensus_proposal_sender.clone(),
+                    collection.name().to_string(),
+                    ReplicaState::Listener,
+                    Some(ReplicaState::Active),
+                );
+                let convert_from_listener_to_active_callback = Self::change_peer_state_callback(
+                    self.consensus_proposal_sender.clone(),
+                    collection.name().to_string(),
+                    ReplicaState::Active,
+                    Some(ReplicaState::Listener),
+                );
+
+                collection
+                    .sync_local_state(
+                        transfer_failure_callback.clone(),
+                        transfer_success_callback.clone(),
+                        finish_shard_initialize,
+                        convert_to_listener_callback,
+                        convert_from_listener_to_active_callback,
+                    )
+                    .await?;
+            }
+            Ok(())
+        })
+    }
+}
+
+impl TableOfContent {
     /// Reconciles a private ORAM snapshot recovery marker with the collection's consensus
     /// state. Returns `Ok(true)` when the collection must skip its regular local state sync
     /// this round (recovery is still in flight), `Ok(false)` when the sync may proceed.
@@ -844,68 +906,6 @@ impl CollectionContainer for TableOfContent {
         Ok(false)
     }
 
-    fn sync_local_state(&self) -> Result<(), StorageError> {
-        self.general_runtime.block_on(async {
-            let collections = self.collections.read().await;
-            let transfer_failure_callback =
-                Self::on_transfer_failure_callback(self.consensus_proposal_sender.clone());
-            let transfer_success_callback =
-                Self::on_transfer_success_callback(self.consensus_proposal_sender.clone());
-
-            for collection in collections.values() {
-                match self
-                    .reconcile_private_oram_snapshot_recovery_marker(collection)
-                    .await
-                {
-                    Ok(false) => {}
-                    Ok(true) => continue,
-                    Err(error) => {
-                        // A marker the local state cannot be reconciled with fences this
-                        // collection until an operator intervenes; it must not stop the Raft
-                        // loop or the sync of every other collection.
-                        log::warn!(
-                            "Skipping local state sync for collection {} until its private ORAM \
-                             snapshot recovery marker can be reconciled: {error}",
-                            collection.name(),
-                        );
-                        continue;
-                    }
-                }
-                let finish_shard_initialize = Self::change_peer_state_callback(
-                    self.consensus_proposal_sender.clone(),
-                    collection.name().to_string(),
-                    ReplicaState::Active,
-                    Some(ReplicaState::Initializing),
-                );
-                let convert_to_listener_callback = Self::change_peer_state_callback(
-                    self.consensus_proposal_sender.clone(),
-                    collection.name().to_string(),
-                    ReplicaState::Listener,
-                    Some(ReplicaState::Active),
-                );
-                let convert_from_listener_to_active_callback = Self::change_peer_state_callback(
-                    self.consensus_proposal_sender.clone(),
-                    collection.name().to_string(),
-                    ReplicaState::Active,
-                    Some(ReplicaState::Listener),
-                );
-
-                collection
-                    .sync_local_state(
-                        transfer_failure_callback.clone(),
-                        transfer_success_callback.clone(),
-                        finish_shard_initialize,
-                        convert_to_listener_callback,
-                        convert_from_listener_to_active_callback,
-                    )
-                    .await?;
-            }
-            Ok(())
-        })
-    }
-}
-
-impl TableOfContent {
     async fn private_oram_resharding_state_async(
         &self,
         operation: &PrivateOramReshardingOperation,
