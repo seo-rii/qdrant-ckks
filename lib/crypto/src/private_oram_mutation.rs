@@ -2207,14 +2207,22 @@ fn validate_index_capacity(
         max_neighbor_rewrites,
         ..
     } = params
-        && (u64::from(*max_neighbor_rewrites) > capacity.logical_capacity
-            || max_neighbor_rewrites
-                .checked_add(2)
-                .is_none_or(|minimum| capacity.fixed_append_read_path_count < minimum))
     {
-        return Err(PrivateOramMutationError::InvalidManifestField(
-            "indexes.max_neighbor_rewrites",
-        ));
+        // Candidate reads are consumed in whole windows of `path_batch_size` paths, and an
+        // append into a non-empty graph needs at least one candidate window on top of the
+        // rewrites and the insert. A budget below one window would admit the first point and
+        // then reject every later append of an immutable manifest for good.
+        let reserved_paths = u64::from(*max_neighbor_rewrites).saturating_add(1);
+        let candidate_budget =
+            u64::from(capacity.fixed_append_read_path_count).saturating_sub(reserved_paths);
+        if u64::from(*max_neighbor_rewrites) > capacity.logical_capacity
+            || u64::from(capacity.fixed_append_read_path_count) < reserved_paths.saturating_add(1)
+            || candidate_budget < u64::from(oram.path_batch_size)
+        {
+            return Err(PrivateOramMutationError::InvalidManifestField(
+                "indexes.max_neighbor_rewrites",
+            ));
+        }
     }
     Ok(())
 }

@@ -287,7 +287,6 @@ struct PlanningFixture {
     config: PrivateHnswOramClientConfig,
     state: PrivateHnswOramClientState,
     candidate_node_ids: Vec<[u8; 32]>,
-    padding_leaf: u64,
     blocks: Vec<PrivateHnswNodeBlockPlaintext>,
     entry_node_id: [u8; 32],
     query: Vec<f32>,
@@ -326,7 +325,6 @@ impl PlanningFixture {
             config,
             state: build.state,
             candidate_node_ids,
-            padding_leaf: 0,
             blocks,
             entry_node_id: build.entry_node_id,
             query: deterministic_vector(7, DIM),
@@ -468,7 +466,7 @@ fn private_hnsw_oram_bench(c: &mut Criterion) {
                     black_box(planning_fixture.config),
                     black_box(planning_fixture.candidate_node_ids.as_slice()),
                     black_box(16),
-                    black_box(planning_fixture.padding_leaf),
+                    || sample_private_hnsw_oram_leaf(planning_fixture.config.tree_height),
                 )
                 .unwrap(),
             )
@@ -521,7 +519,7 @@ fn private_hnsw_oram_bench(c: &mut Criterion) {
                     black_box(planning_fixture.query.as_slice()),
                     black_box(DistanceKind::Euclid),
                     black_box(NEIGHBORS),
-                    black_box(planning_fixture.padding_leaf),
+                    || sample_private_hnsw_oram_leaf(planning_fixture.config.tree_height),
                 )
                 .unwrap(),
             )

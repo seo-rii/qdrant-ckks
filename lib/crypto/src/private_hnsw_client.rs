@@ -2282,7 +2282,7 @@ pub fn plan_private_hnsw_oram_graph_traversal_path_batch(
     query: &[f32],
     distance: DistanceKind,
     fixed_path_count: usize,
-    padding_leaf: u64,
+    next_padding_leaf: impl FnMut() -> Result<u64, PrivateHnswClientError>,
 ) -> Result<PrivateHnswSpeculativePrefetchPlan, PrivateHnswClientError> {
     let plan = plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
         state,
@@ -2292,7 +2292,7 @@ pub fn plan_private_hnsw_oram_graph_traversal_path_batch(
         query,
         distance,
         fixed_path_count,
-        padding_leaf,
+        next_padding_leaf,
     )?;
     Ok(PrivateHnswSpeculativePrefetchPlan {
         leaf_labels: plan.leaf_labels,
@@ -2308,7 +2308,7 @@ pub fn plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
     query: &[f32],
     distance: DistanceKind,
     fixed_path_count: usize,
-    padding_leaf: u64,
+    next_padding_leaf: impl FnMut() -> Result<u64, PrivateHnswClientError>,
 ) -> Result<PrivateHnswGraphTraversalPathBatchPlan, PrivateHnswClientError> {
     validate_oram_client_config(config)?;
     if fixed_path_count == 0 {
@@ -2316,7 +2316,6 @@ pub fn plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
             "fixed_path_count",
         ));
     }
-    validate_private_hnsw_oram_leaf(padding_leaf, config.tree_height)?;
     let leaf_count = private_hnsw_oram_leaf_count(config.tree_height)?;
     if u64::try_from(fixed_path_count)
         .map_err(|_| PrivateHnswClientError::InvalidSearchConfig("fixed_path_count"))?
@@ -2339,7 +2338,7 @@ pub fn plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
         config,
         &directional_plan.node_ids,
         fixed_path_count,
-        padding_leaf,
+        next_padding_leaf,
     )?;
     Ok(PrivateHnswGraphTraversalPathBatchPlan {
         leaf_labels: prefetch_plan.leaf_labels,
@@ -3210,12 +3209,18 @@ fn validate_private_hnsw_append_rewrite(
     Ok(())
 }
 
+/// Plans a fixed-size prefetch batch: the current positions of `candidate_node_ids` padded
+/// with dummy paths up to `fixed_path_count`.
+///
+/// `next_padding_leaf` MUST return independent uniform samples (see
+/// [`sample_private_hnsw_oram_leaf`]); the batch is emitted in canonical leaf order so neither
+/// the padding values nor their position in the batch reveal how many paths are real.
 pub fn plan_private_hnsw_oram_speculative_prefetch(
     state: &PrivateHnswOramClientState,
     config: PrivateHnswOramClientConfig,
     candidate_node_ids: &[[u8; 32]],
     fixed_path_count: usize,
-    padding_leaf: u64,
+    mut next_padding_leaf: impl FnMut() -> Result<u64, PrivateHnswClientError>,
 ) -> Result<PrivateHnswSpeculativePrefetchPlan, PrivateHnswClientError> {
     validate_oram_client_config(config)?;
     if fixed_path_count == 0 {
@@ -3223,7 +3228,6 @@ pub fn plan_private_hnsw_oram_speculative_prefetch(
             "fixed_path_count",
         ));
     }
-    validate_private_hnsw_oram_leaf(padding_leaf, config.tree_height)?;
     let leaf_count = private_hnsw_oram_leaf_count(config.tree_height)?;
     if u64::try_from(fixed_path_count)
         .map_err(|_| PrivateHnswClientError::InvalidSearchConfig("fixed_path_count"))?
@@ -3248,18 +3252,21 @@ pub fn plan_private_hnsw_oram_speculative_prefetch(
         }
     }
     let real_path_count = leaves.len();
-    let mut next_padding_leaf = padding_leaf;
+    let max_padding_attempts = leaf_count.saturating_mul(8).saturating_add(64);
+    let mut padding_attempts = 0u64;
     while leaves.len() < fixed_path_count {
-        let leaf = next_padding_leaf;
-        next_padding_leaf = if next_padding_leaf + 1 == leaf_count {
-            0
-        } else {
-            next_padding_leaf + 1
-        };
+        let leaf = next_padding_leaf()?;
+        validate_private_hnsw_oram_leaf(leaf, config.tree_height)?;
+        padding_attempts += 1;
         if seen_leaves.insert(leaf) {
             leaves.push(leaf);
+        } else if padding_attempts > max_padding_attempts {
+            // A padding source that keeps repeating leaves is broken, not unlucky.
+            return Err(PrivateHnswClientError::InvalidSearchConfig("padding_leaf"));
         }
     }
+    // Canonical order: the server must not learn from the batch layout which entries are real.
+    leaves.sort_unstable();
 
     let leaf_labels = leaves
         .into_iter()
@@ -5235,6 +5242,20 @@ mod tests {
         private_result_oram_bucket_count,
     };
 
+    /// Deterministic padding source for plan tests: consecutive leaves from `start`.
+    fn padding_from(
+        start: u64,
+        tree_height: u32,
+    ) -> impl FnMut() -> Result<u64, PrivateHnswClientError> {
+        let leaf_count = private_hnsw_oram_leaf_count(tree_height).unwrap();
+        let mut next = start;
+        move || {
+            let leaf = next;
+            next = (next + 1) % leaf_count;
+            Ok(leaf)
+        }
+    }
+
     #[test]
     fn private_hnsw_client_error_display_does_not_reflect_structured_values() {
         let cases = [
@@ -5911,7 +5932,7 @@ mod tests {
             config,
             &[[1; 32], [2; 32], [3; 32], [4; 32]],
             4,
-            3,
+            padding_from(3, config.tree_height),
         )
         .unwrap();
         let leaves = plan
@@ -5921,11 +5942,16 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(plan.real_path_count, 2);
-        assert_eq!(leaves, vec![0, 1, 3, 2]);
+        assert_eq!(leaves, vec![0, 1, 2, 3]);
         assert_eq!(leaves.iter().collect::<BTreeSet<_>>().len(), leaves.len());
-        let colliding_padding =
-            plan_private_hnsw_oram_speculative_prefetch(&state, config, &[[1; 32], [2; 32]], 3, 1)
-                .unwrap();
+        let colliding_padding = plan_private_hnsw_oram_speculative_prefetch(
+            &state,
+            config,
+            &[[1; 32], [2; 32]],
+            3,
+            padding_from(1, config.tree_height),
+        )
+        .unwrap();
         let colliding_padding_leaves = colliding_padding
             .leaf_labels
             .iter()
@@ -5933,27 +5959,45 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(colliding_padding.real_path_count, 2);
         assert_eq!(colliding_padding_leaves, vec![0, 1, 2]);
-        let all_dummy_padding =
-            plan_private_hnsw_oram_speculative_prefetch(&state, config, &[], 3, 2).unwrap();
+        let all_dummy_padding = plan_private_hnsw_oram_speculative_prefetch(
+            &state,
+            config,
+            &[],
+            3,
+            padding_from(2, config.tree_height),
+        )
+        .unwrap();
         let all_dummy_leaves = all_dummy_padding
             .leaf_labels
             .iter()
             .map(|label| decode_private_hnsw_oram_leaf_label(label, config.tree_height).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(all_dummy_padding.real_path_count, 0);
-        assert_eq!(all_dummy_leaves, vec![2, 3, 0]);
+        assert_eq!(all_dummy_leaves, vec![0, 2, 3]);
         assert_eq!(
             all_dummy_leaves.iter().collect::<BTreeSet<_>>().len(),
             all_dummy_leaves.len()
         );
         assert_eq!(
-            plan_private_hnsw_oram_speculative_prefetch(&state, config, &[[1; 32]], 0, 3),
+            plan_private_hnsw_oram_speculative_prefetch(
+                &state,
+                config,
+                &[[1; 32]],
+                0,
+                padding_from(3, config.tree_height)
+            ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "fixed_path_count"
             ))
         );
         assert_eq!(
-            plan_private_hnsw_oram_speculative_prefetch(&state, config, &[], 5, 3),
+            plan_private_hnsw_oram_speculative_prefetch(
+                &state,
+                config,
+                &[],
+                5,
+                padding_from(3, config.tree_height)
+            ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "fixed_path_count"
             ))
@@ -6043,7 +6087,7 @@ mod tests {
             &[10.0, 0.0],
             DistanceKind::Euclid,
             3,
-            7,
+            padding_from(7, config.tree_height),
         )
         .unwrap();
         let leaves = plan
@@ -6054,7 +6098,7 @@ mod tests {
 
         assert_eq!(plan.retained_neighbor_count, 2);
         assert_eq!(plan.real_path_count, 2);
-        assert_eq!(leaves, vec![2, 1, 7]);
+        assert_eq!(leaves, vec![1, 2, 7]);
 
         let compatibility_plan = plan_private_hnsw_oram_graph_traversal_path_batch(
             &state,
@@ -6069,7 +6113,7 @@ mod tests {
             &[10.0, 0.0],
             DistanceKind::Euclid,
             3,
-            7,
+            padding_from(7, config.tree_height),
         )
         .unwrap();
         assert_eq!(compatibility_plan.leaf_labels, plan.leaf_labels);
@@ -6093,7 +6137,7 @@ mod tests {
             &[10.0, 0.0],
             DistanceKind::Euclid,
             3,
-            7,
+            padding_from(7, config.tree_height),
         )
         .unwrap();
         let sparse_leaves = sparse_plan
@@ -6103,7 +6147,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(sparse_plan.retained_neighbor_count, 2);
         assert_eq!(sparse_plan.real_path_count, 1);
-        assert_eq!(sparse_leaves, vec![2, 7, 0]);
+        assert_eq!(sparse_leaves, vec![0, 2, 7]);
         assert_eq!(
             sparse_leaves.iter().collect::<BTreeSet<_>>().len(),
             sparse_leaves.len()
@@ -6116,7 +6160,7 @@ mod tests {
             &[10.0, 0.0],
             DistanceKind::Euclid,
             3,
-            6,
+            padding_from(6, config.tree_height),
         )
         .unwrap();
         let all_filtered_leaves = all_filtered_plan
@@ -6126,7 +6170,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(all_filtered_plan.retained_neighbor_count, 0);
         assert_eq!(all_filtered_plan.real_path_count, 0);
-        assert_eq!(all_filtered_leaves, vec![6, 7, 0]);
+        assert_eq!(all_filtered_leaves, vec![0, 6, 7]);
         assert_eq!(
             all_filtered_leaves.iter().collect::<BTreeSet<_>>().len(),
             all_filtered_leaves.len()
@@ -6145,7 +6189,7 @@ mod tests {
                 &[10.0, 0.0],
                 DistanceKind::Euclid,
                 0,
-                7,
+                padding_from(7, config.tree_height)
             ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "fixed_path_count"
@@ -6165,7 +6209,7 @@ mod tests {
                 &[10.0, 0.0],
                 DistanceKind::Euclid,
                 9,
-                7,
+                padding_from(7, config.tree_height)
             ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "fixed_path_count"
@@ -6185,7 +6229,7 @@ mod tests {
                 &[10.0, 0.0],
                 DistanceKind::Euclid,
                 3,
-                8,
+                padding_from(8, config.tree_height)
             ),
             Err(PrivateHnswClientError::LeafOutOfRange)
         );
@@ -6203,7 +6247,7 @@ mod tests {
             &[10.0, 0.0],
             DistanceKind::Euclid,
             3,
-            7,
+            padding_from(7, config.tree_height),
         )
         .unwrap();
         let duplicate_position_leaves = duplicate_position_plan
@@ -6213,7 +6257,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(duplicate_position_plan.retained_neighbor_count, 2);
         assert_eq!(duplicate_position_plan.real_path_count, 1);
-        assert_eq!(duplicate_position_leaves, vec![2, 7, 0]);
+        assert_eq!(duplicate_position_leaves, vec![0, 2, 7]);
         assert_eq!(
             duplicate_position_leaves
                 .iter()
@@ -9084,6 +9128,7 @@ mod tests {
             &result_oram_fetch_manifest(),
             &fetch_plan.payload_fetch_tokens,
             &token_positions,
+            || Ok(0),
         )
         .unwrap();
 

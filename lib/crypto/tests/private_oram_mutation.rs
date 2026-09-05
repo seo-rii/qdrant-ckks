@@ -72,7 +72,7 @@ fn hnsw_index() -> PrivateOramImmutableIndexV2 {
                 paths_per_round: 2,
                 fixed_result_k: 3,
             },
-            max_neighbor_rewrites: 2,
+            max_neighbor_rewrites: 1,
         },
         capacity: capacity(),
     }
@@ -442,12 +442,12 @@ fn v2_contract_known_answers_are_stable() {
             public_key.as_str(),
         ),
         (
-            "pd1w1eNMwaNF2eYlUNspjA2vcflpoOcslL5WlQVHHX0",
-            "bcgzrYn4Qw-OhVo3zs1lc0Ho7CoT4x6yAmMrcqBms_w",
-            "LDIeMGo1s1viEY6le8lkTzD_BwsFYWPIyKNCranve28",
-            "EfSf5NlPAKCQdqkXCAHrzWY7tKmkxlojLGhxwrARfv8wQvFU4z3P172_w5_CuiFLW-olWMBd5Cp2kTVaQnK8Aw",
-            "0Lzmcto45LClqJmRqzGv_97Ner9D7JdgjA4ty4ciUZD1JaSCLr6TDU7cc9YrUhF83aGt9WAu-nDyZlv1LEw5Aw",
-            "wqonG_YMtz4VCQ9Wh6_X2rnJerRGUVnlFXFdsqYN0wt8HhThj1lKfVBElJmGOMa8Y8NDILAtkxfvHqdHWzRKBw",
+            "eSae60fPObBj31V1HB5gXourNDEv7VXKyQmVuKfJ1hI",
+            "bYbtgb90kq9YAyBgPrHBaGpYw31ZHHquymfe2VK2K9U",
+            "pcpSKXjXg9AEHf9DCZEaubr6_IBIj9chx7eDYNFReR8",
+            "eA6PMgv_qfsBbN2JDAyRRpHLZxBH7MIqJQN2v_uxlsopkriWPu0Fn8HjUsAAM4ZTBxCuP892SH5kKRy_553_BQ",
+            "L8feWwlvr5x9NHvvV2j494oxnMhcM8m4v5qCT1MPQ_6bkjfz8s3AxaLJ-c0mijMJchnlw5tlwy8xcQgMUPOMDw",
+            "TKn06fK4-rUMx7kyMxUlbS6qznTp5Vf3TR2PcMtdyfZsYe-ufaXdB3oMkSAKQJE5Ed8aGHVxzvhu-iQwVdARCw",
             "vtfSq2aNo--tYTmY8G96v3h186a3Z3qfPOlH1313YKY",
         )
     );
@@ -1143,6 +1143,25 @@ fn manifest_rejects_capacity_without_reserved_slack_and_mixed_capacities() {
         unreachable!()
     };
     *max_neighbor_rewrites = 3;
+    assert!(matches!(
+        validate_private_oram_immutable_manifest_v2_shape(&manifest),
+        Err(PrivateOramMutationError::InvalidManifestField(
+            "indexes.max_neighbor_rewrites"
+        ))
+    ));
+
+    // fixed_append_read_path_count=4, path_batch_size=2: two rewrites plus the insert leave a
+    // single candidate path, less than one candidate window, so no append into a non-empty
+    // graph could ever be planned against this immutable manifest.
+    let mut manifest = fixture_manifest(false);
+    let PrivateOramImmutableIndexParamsV2::Hnsw {
+        max_neighbor_rewrites,
+        ..
+    } = &mut manifest.indexes[0].params
+    else {
+        unreachable!()
+    };
+    *max_neighbor_rewrites = 2;
     assert!(matches!(
         validate_private_oram_immutable_manifest_v2_shape(&manifest),
         Err(PrivateOramMutationError::InvalidManifestField(
