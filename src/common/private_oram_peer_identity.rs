@@ -15,8 +15,11 @@ use std::ffi::{CStr, CString};
 use std::fmt::{self, Debug, Formatter};
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStrExt as _;
+#[cfg(target_os = "linux")]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Component, Path};
 
@@ -493,637 +496,741 @@ struct LoadedIdentity {
     public_key: PrivateOramPeerRecoveryPublicKeyV1,
 }
 
-fn open_storage_root(storage_path: &Path) -> Result<File, PrivateOramPeerIdentityError> {
-    if storage_path.as_os_str().is_empty() {
-        return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
+/// Linux-only filesystem primitives (O_PATH directory handles, /proc/self/fd re-opens,
+/// inode witnesses, and advisory locks) that back the on-disk identity.
+#[cfg(target_os = "linux")]
+mod platform {
+    use super::*;
+
+    pub(super) fn open_storage_root(
+        storage_path: &Path,
+    ) -> Result<File, PrivateOramPeerIdentityError> {
+        if storage_path.as_os_str().is_empty() {
+            return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
+        }
+
+        let mut components = Vec::new();
+        for component in storage_path.components() {
+            match component {
+                Component::RootDir | Component::CurDir => {}
+                Component::Normal(component) => components.push(
+                    CString::new(component.as_bytes())
+                        .map_err(|_| PrivateOramPeerIdentityError::InvalidStorageRoot)?,
+                ),
+                Component::ParentDir | Component::Prefix(_) => {
+                    return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
+                }
+            }
+        }
+
+        let anchor = if storage_path.is_absolute() {
+            Path::new("/")
+        } else {
+            Path::new(".")
+        };
+        let mut current = OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_DIRECTORY)
+            .open(anchor)
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidStorageRoot)?;
+        let anchor_metadata = current
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidStorageRoot)?;
+        validate_storage_directory_metadata(&anchor_metadata, components.is_empty())?;
+
+        let component_count = components.len();
+        for (index, component) in components.iter().enumerate() {
+            current = open_storage_directory_at(&current, component)?;
+            let metadata = current
+                .metadata()
+                .map_err(|_| PrivateOramPeerIdentityError::InvalidStorageRoot)?;
+            validate_storage_directory_metadata(&metadata, index + 1 == component_count)?;
+        }
+        Ok(current)
     }
 
-    let mut components = Vec::new();
-    for component in storage_path.components() {
-        match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::Normal(component) => components.push(
-                CString::new(component.as_bytes())
-                    .map_err(|_| PrivateOramPeerIdentityError::InvalidStorageRoot)?,
-            ),
-            Component::ParentDir | Component::Prefix(_) => {
+    pub(super) fn open_storage_directory_at(
+        parent: &File,
+        component: &CStr,
+    ) -> Result<File, PrivateOramPeerIdentityError> {
+        // SAFETY: component was derived from one Path component and parent is a pinned directory fd.
+        let descriptor = unsafe {
+            nix::libc::openat(
+                parent.as_raw_fd(),
+                component.as_ptr(),
+                nix::libc::O_RDONLY
+                    | nix::libc::O_DIRECTORY
+                    | nix::libc::O_NOFOLLOW
+                    | nix::libc::O_CLOEXEC,
+            )
+        };
+        if descriptor < 0 {
+            return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
+        }
+        // SAFETY: openat returned a new owned descriptor.
+        Ok(unsafe { File::from_raw_fd(descriptor) })
+    }
+
+    pub(super) fn validate_storage_directory_metadata(
+        metadata: &Metadata,
+        is_final: bool,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        if !metadata.is_dir() {
+            return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
+        }
+        let owner = metadata.uid();
+        let effective_uid = unsafe { nix::libc::geteuid() };
+        if owner != 0 && owner != effective_uid {
+            return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
+        }
+        let mode = metadata.permissions().mode();
+        if is_final {
+            if mode & 0o022 != 0 || metadata.nlink() < 2 {
+                return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
+            }
+        } else if mode & 0o022 != 0 {
+            let root_owned_sticky = owner == 0 && mode & nix::libc::S_ISVTX != 0;
+            if !root_owned_sticky {
                 return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
             }
         }
+        Ok(())
     }
 
-    let anchor = if storage_path.is_absolute() {
-        Path::new("/")
-    } else {
-        Path::new(".")
-    };
-    let mut current = OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_DIRECTORY)
-        .open(anchor)
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidStorageRoot)?;
-    let anchor_metadata = current
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidStorageRoot)?;
-    validate_storage_directory_metadata(&anchor_metadata, components.is_empty())?;
-
-    let component_count = components.len();
-    for (index, component) in components.iter().enumerate() {
-        current = open_storage_directory_at(&current, component)?;
-        let metadata = current
-            .metadata()
-            .map_err(|_| PrivateOramPeerIdentityError::InvalidStorageRoot)?;
-        validate_storage_directory_metadata(&metadata, index + 1 == component_count)?;
-    }
-    Ok(current)
-}
-
-fn open_storage_directory_at(
-    parent: &File,
-    component: &CStr,
-) -> Result<File, PrivateOramPeerIdentityError> {
-    // SAFETY: component was derived from one Path component and parent is a pinned directory fd.
-    let descriptor = unsafe {
-        nix::libc::openat(
-            parent.as_raw_fd(),
-            component.as_ptr(),
-            nix::libc::O_RDONLY
-                | nix::libc::O_DIRECTORY
-                | nix::libc::O_NOFOLLOW
-                | nix::libc::O_CLOEXEC,
-        )
-    };
-    if descriptor < 0 {
-        return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
-    }
-    // SAFETY: openat returned a new owned descriptor.
-    Ok(unsafe { File::from_raw_fd(descriptor) })
-}
-
-fn validate_storage_directory_metadata(
-    metadata: &Metadata,
-    is_final: bool,
-) -> Result<(), PrivateOramPeerIdentityError> {
-    if !metadata.is_dir() {
-        return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
-    }
-    let owner = metadata.uid();
-    let effective_uid = unsafe { nix::libc::geteuid() };
-    if owner != 0 && owner != effective_uid {
-        return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
-    }
-    let mode = metadata.permissions().mode();
-    if is_final {
-        if mode & 0o022 != 0 || metadata.nlink() < 2 {
-            return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
+    pub(super) fn open_or_create_identity_directory(
+        storage_root: &File,
+        create: bool,
+    ) -> Result<File, PrivateOramPeerIdentityError> {
+        match open_identity_directory(storage_root) {
+            Ok(directory) => {
+                storage_root
+                    .sync_all()
+                    .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+                return Ok(directory);
+            }
+            Err(PrivateOramPeerIdentityError::MissingPinnedIdentity) if create => {}
+            Err(error) => return Err(error),
         }
-    } else if mode & 0o022 != 0 {
-        let root_owned_sticky = owner == 0 && mode & nix::libc::S_ISVTX != 0;
-        if !root_owned_sticky {
-            return Err(PrivateOramPeerIdentityError::InvalidStorageRoot);
-        }
-    }
-    Ok(())
-}
 
-fn open_or_create_identity_directory(
-    storage_root: &File,
-    create: bool,
-) -> Result<File, PrivateOramPeerIdentityError> {
-    match open_identity_directory(storage_root) {
-        Ok(directory) => {
-            storage_root
-                .sync_all()
-                .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-            return Ok(directory);
-        }
-        Err(PrivateOramPeerIdentityError::MissingPinnedIdentity) if create => {}
-        Err(error) => return Err(error),
-    }
-
-    // SAFETY: the name is a fixed single component and storage_root is a validated directory fd.
-    let result =
-        unsafe { nix::libc::mkdirat(storage_root.as_raw_fd(), IDENTITY_DIRECTORY.as_ptr(), 0o700) };
-    if result != 0 {
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(nix::libc::EEXIST) {
-            return Err(PrivateOramPeerIdentityError::PersistenceFailed);
-        }
-    }
-    let directory = open_identity_directory(storage_root)?;
-    storage_root
-        .sync_all()
-        .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-    Ok(directory)
-}
-
-fn open_identity_directory(storage_root: &File) -> Result<File, PrivateOramPeerIdentityError> {
-    // SAFETY: the name is a fixed single component and storage_root is a validated directory fd.
-    let descriptor = unsafe {
-        nix::libc::openat(
-            storage_root.as_raw_fd(),
-            IDENTITY_DIRECTORY.as_ptr(),
-            nix::libc::O_RDONLY
-                | nix::libc::O_DIRECTORY
-                | nix::libc::O_NOFOLLOW
-                | nix::libc::O_CLOEXEC,
-        )
-    };
-    if descriptor < 0 {
-        let error = std::io::Error::last_os_error();
-        return if error.raw_os_error() == Some(nix::libc::ENOENT) {
-            Err(PrivateOramPeerIdentityError::MissingPinnedIdentity)
-        } else {
-            Err(PrivateOramPeerIdentityError::InvalidIdentityDirectory)
+        // SAFETY: the name is a fixed single component and storage_root is a validated directory fd.
+        let result = unsafe {
+            nix::libc::mkdirat(storage_root.as_raw_fd(), IDENTITY_DIRECTORY.as_ptr(), 0o700)
         };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(nix::libc::EEXIST) {
+                return Err(PrivateOramPeerIdentityError::PersistenceFailed);
+            }
+        }
+        let directory = open_identity_directory(storage_root)?;
+        storage_root
+            .sync_all()
+            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+        Ok(directory)
     }
-    // SAFETY: openat returned a new owned descriptor.
-    let directory = unsafe { File::from_raw_fd(descriptor) };
-    let metadata = directory
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityDirectory)?;
-    validate_identity_directory_metadata(&metadata)?;
-    Ok(directory)
-}
 
-fn validate_identity_directory_metadata(
-    metadata: &Metadata,
-) -> Result<(), PrivateOramPeerIdentityError> {
-    let effective_uid = unsafe { nix::libc::geteuid() };
-    if !metadata.is_dir()
-        || metadata.uid() != effective_uid
-        || metadata.permissions().mode() & 0o7777 != 0o700
-        || metadata.nlink() < 2
-    {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityDirectory);
+    pub(super) fn open_identity_directory(
+        storage_root: &File,
+    ) -> Result<File, PrivateOramPeerIdentityError> {
+        // SAFETY: the name is a fixed single component and storage_root is a validated directory fd.
+        let descriptor = unsafe {
+            nix::libc::openat(
+                storage_root.as_raw_fd(),
+                IDENTITY_DIRECTORY.as_ptr(),
+                nix::libc::O_RDONLY
+                    | nix::libc::O_DIRECTORY
+                    | nix::libc::O_NOFOLLOW
+                    | nix::libc::O_CLOEXEC,
+            )
+        };
+        if descriptor < 0 {
+            let error = std::io::Error::last_os_error();
+            return if error.raw_os_error() == Some(nix::libc::ENOENT) {
+                Err(PrivateOramPeerIdentityError::MissingPinnedIdentity)
+            } else {
+                Err(PrivateOramPeerIdentityError::InvalidIdentityDirectory)
+            };
+        }
+        // SAFETY: openat returned a new owned descriptor.
+        let directory = unsafe { File::from_raw_fd(descriptor) };
+        let metadata = directory
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityDirectory)?;
+        validate_identity_directory_metadata(&metadata)?;
+        Ok(directory)
     }
-    Ok(())
-}
 
-fn validate_identity_directory_binding(
-    storage_root: &File,
-    directory: &File,
-) -> Result<(), PrivateOramPeerIdentityError> {
-    let opened = directory
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityDirectory)?;
-    validate_identity_directory_metadata(&opened)?;
-    let rebound = open_identity_directory(storage_root)
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityDirectory)?;
-    let rebound_metadata = rebound
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityDirectory)?;
-    ensure_same_inode(
-        &opened,
-        &rebound_metadata,
-        PrivateOramPeerIdentityError::InvalidIdentityDirectory,
-    )
-}
+    pub(super) fn validate_identity_directory_metadata(
+        metadata: &Metadata,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        let effective_uid = unsafe { nix::libc::geteuid() };
+        if !metadata.is_dir()
+            || metadata.uid() != effective_uid
+            || metadata.permissions().mode() & 0o7777 != 0o700
+            || metadata.nlink() < 2
+        {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityDirectory);
+        }
+        Ok(())
+    }
 
-fn lock_identity_directory(directory: &File) -> Result<(), PrivateOramPeerIdentityError> {
-    // SAFETY: directory is a validated live descriptor retained by the identity object.
-    let result = unsafe {
-        nix::libc::flock(
-            directory.as_raw_fd(),
-            nix::libc::LOCK_EX | nix::libc::LOCK_NB,
+    pub(super) fn validate_identity_directory_binding(
+        storage_root: &File,
+        directory: &File,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        let opened = directory
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityDirectory)?;
+        validate_identity_directory_metadata(&opened)?;
+        let rebound = open_identity_directory(storage_root)
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityDirectory)?;
+        let rebound_metadata = rebound
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityDirectory)?;
+        ensure_same_inode(
+            &opened,
+            &rebound_metadata,
+            PrivateOramPeerIdentityError::InvalidIdentityDirectory,
         )
-    };
-    if result == 0 {
-        return Ok(());
     }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(nix::libc::EWOULDBLOCK) {
-        Err(PrivateOramPeerIdentityError::IdentityLocked)
-    } else {
+
+    pub(super) fn lock_identity_directory(
+        directory: &File,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        // SAFETY: directory is a validated live descriptor retained by the identity object.
+        let result = unsafe {
+            nix::libc::flock(
+                directory.as_raw_fd(),
+                nix::libc::LOCK_EX | nix::libc::LOCK_NB,
+            )
+        };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(nix::libc::EWOULDBLOCK) {
+            Err(PrivateOramPeerIdentityError::IdentityLocked)
+        } else {
+            Err(PrivateOramPeerIdentityError::Unsupported)
+        }
+    }
+
+    pub(super) fn open_optional_private_file(
+        directory: &File,
+        name: &CStr,
+    ) -> Result<Option<File>, PrivateOramPeerIdentityError> {
+        // Inspect the directory entry without opening a device, FIFO, or socket for I/O.
+        // SAFETY: name is one of the fixed identity file names and directory is a validated fd.
+        let path_descriptor = unsafe {
+            nix::libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                nix::libc::O_PATH | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC,
+            )
+        };
+        if path_descriptor < 0 {
+            let error = std::io::Error::last_os_error();
+            return if error.raw_os_error() == Some(nix::libc::ENOENT) {
+                Ok(None)
+            } else {
+                Err(PrivateOramPeerIdentityError::InvalidIdentityFile)
+            };
+        }
+        // SAFETY: openat returned a new owned descriptor.
+        let path_file = unsafe { File::from_raw_fd(path_descriptor) };
+        let path_metadata = path_file
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        validate_identity_file_metadata(&path_metadata)?;
+
+        // SAFETY: the entry was validated through O_PATH and is reopened relative to the same fd.
+        let read_descriptor = unsafe {
+            nix::libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                nix::libc::O_RDONLY
+                    | nix::libc::O_NONBLOCK
+                    | nix::libc::O_NOFOLLOW
+                    | nix::libc::O_CLOEXEC,
+            )
+        };
+        if read_descriptor < 0 {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+        // SAFETY: openat returned a new owned descriptor.
+        let file = unsafe { File::from_raw_fd(read_descriptor) };
+        let metadata = file
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        validate_identity_file_metadata(&metadata)?;
+        ensure_same_inode(
+            &path_metadata,
+            &metadata,
+            PrivateOramPeerIdentityError::InvalidIdentityFile,
+        )?;
+        Ok(Some(file))
+    }
+
+    pub(super) fn sync_private_file_binding(
+        directory: &File,
+        name: &CStr,
+        witness: &File,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        let witness_metadata = witness
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        validate_identity_file_metadata(&witness_metadata)?;
+
+        // SAFETY: name is fixed, directory is pinned, and O_NONBLOCK bounds special-file races.
+        let descriptor = unsafe {
+            nix::libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                nix::libc::O_RDWR
+                    | nix::libc::O_NONBLOCK
+                    | nix::libc::O_NOFOLLOW
+                    | nix::libc::O_CLOEXEC,
+            )
+        };
+        if descriptor < 0 {
+            return Err(PrivateOramPeerIdentityError::Indeterminate);
+        }
+        // SAFETY: openat returned a new owned descriptor.
+        let file = unsafe { File::from_raw_fd(descriptor) };
+        let before_sync = file
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+        validate_identity_file_metadata(&before_sync)?;
+        ensure_same_inode(
+            &witness_metadata,
+            &before_sync,
+            PrivateOramPeerIdentityError::Indeterminate,
+        )?;
+        file.sync_all()
+            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+        let after_sync = file
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+        validate_identity_file_metadata(&after_sync)?;
+        ensure_same_inode(
+            &before_sync,
+            &after_sync,
+            PrivateOramPeerIdentityError::Indeterminate,
+        )?;
+
+        let rebound = open_optional_private_file(directory, name)?
+            .ok_or(PrivateOramPeerIdentityError::Indeterminate)?;
+        ensure_same_inode(
+            &after_sync,
+            &rebound
+                .metadata()
+                .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?,
+            PrivateOramPeerIdentityError::Indeterminate,
+        )
+    }
+
+    pub(super) fn validate_identity_file_metadata(
+        metadata: &Metadata,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        let effective_uid = unsafe { nix::libc::geteuid() };
+        if !metadata.is_file()
+            || metadata.uid() != effective_uid
+            || metadata.permissions().mode() & 0o7777 != 0o600
+            || metadata.nlink() != 1
+            || metadata.len() == 0
+            || metadata.len() > IDENTITY_MAX_FILE_BYTES
+        {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+        Ok(())
+    }
+
+    pub(super) fn load_identity(
+        directory: &File,
+        mut file: File,
+        name: &CStr,
+        expected_peer_id: u64,
+        expected_pin: Option<&PrivateOramPeerRecoveryPublicKeyV1>,
+    ) -> Result<LoadedIdentity, PrivateOramPeerIdentityError> {
+        let before = file
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        validate_identity_file_metadata(&before)?;
+        let expected_length = usize::try_from(before.len())
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        let mut bytes = Zeroizing::new(Vec::new());
+        bytes
+            .try_reserve_exact(expected_length)
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        (&mut file)
+            .take(IDENTITY_MAX_FILE_BYTES.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        if bytes.len() != expected_length {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+        let after = file
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        validate_identity_file_metadata(&after)?;
+        ensure_same_inode(
+            &before,
+            &after,
+            PrivateOramPeerIdentityError::InvalidIdentityFile,
+        )?;
+
+        let rebound = open_optional_private_file(directory, name)?
+            .ok_or(PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        let rebound_metadata = rebound
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        ensure_same_inode(
+            &after,
+            &rebound_metadata,
+            PrivateOramPeerIdentityError::InvalidIdentityFile,
+        )?;
+
+        decode_identity(&bytes, expected_peer_id, expected_pin)
+    }
+
+    pub(super) fn decode_identity(
+        bytes: &[u8],
+        expected_peer_id: u64,
+        expected_pin: Option<&PrivateOramPeerRecoveryPublicKeyV1>,
+    ) -> Result<LoadedIdentity, PrivateOramPeerIdentityError> {
+        if bytes.len() < IDENTITY_HEADER_BYTES + IDENTITY_CHECKSUM_BYTES
+            || bytes.len() as u64 > IDENTITY_MAX_FILE_BYTES
+        {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+        let checksum_offset = bytes
+            .len()
+            .checked_sub(IDENTITY_CHECKSUM_BYTES)
+            .ok_or(PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        let (body, expected_checksum) = bytes.split_at(checksum_offset);
+        let actual_checksum = Sha256::digest(body);
+        if &actual_checksum[..] != expected_checksum {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+
+        let mut offset = 0usize;
+        let magic = take_array::<8>(body, &mut offset)?;
+        if &magic != IDENTITY_MAGIC {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+        let version = u16::from_be_bytes(take_array(body, &mut offset)?);
+        if version != IDENTITY_FORMAT_VERSION {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+        let peer_id = u64::from_be_bytes(take_array(body, &mut offset)?);
+        if peer_id != expected_peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        let key_epoch = u64::from_be_bytes(take_array(body, &mut offset)?);
+        if key_epoch != IDENTITY_KEY_EPOCH {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+        let pkcs8_length = u32::from_be_bytes(take_array(body, &mut offset)?) as usize;
+        if pkcs8_length == 0 || pkcs8_length > IDENTITY_MAX_PKCS8_BYTES {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+        let pkcs8_end = offset
+            .checked_add(pkcs8_length)
+            .ok_or(PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        if pkcs8_end != body.len() {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+        let key_pair = Ed25519KeyPair::from_pkcs8(&body[offset..pkcs8_end])
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        let public_key = private_oram_peer_recovery_public_key_v1(&key_pair, key_epoch)
+            .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)?;
+        if expected_pin.is_some_and(|expected| expected != &public_key) {
+            return Err(PrivateOramPeerIdentityError::PinnedKeyMismatch);
+        }
+        Ok(LoadedIdentity {
+            key_pair,
+            public_key,
+        })
+    }
+
+    pub(super) fn take_array<const N: usize>(
+        bytes: &[u8],
+        offset: &mut usize,
+    ) -> Result<[u8; N], PrivateOramPeerIdentityError> {
+        let end = offset
+            .checked_add(N)
+            .ok_or(PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        let value = bytes
+            .get(*offset..end)
+            .ok_or(PrivateOramPeerIdentityError::InvalidIdentityFile)?
+            .try_into()
+            .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
+        *offset = end;
+        Ok(value)
+    }
+
+    pub(super) fn create_identity(
+        directory: &File,
+        peer_id: u64,
+    ) -> Result<LoadedIdentity, PrivateOramPeerIdentityError> {
+        let random = SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&random)
+            .map_err(|_| PrivateOramPeerIdentityError::KeyGenerationFailed)?;
+        let generated_key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
+            .map_err(|_| PrivateOramPeerIdentityError::KeyGenerationFailed)?;
+        let generated_public_key =
+            private_oram_peer_recovery_public_key_v1(&generated_key_pair, IDENTITY_KEY_EPOCH)
+                .map_err(|_| PrivateOramPeerIdentityError::KeyGenerationFailed)?;
+        let frame = encode_identity(peer_id, IDENTITY_KEY_EPOCH, pkcs8.as_ref())?;
+        let candidate = write_identity_candidate(directory, &frame)?;
+        let candidate_metadata = candidate
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+        rename_identity_candidate(directory)?;
+        directory
+            .sync_all()
+            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+
+        let candidate_after_publish = candidate
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+        ensure_same_inode(
+            &candidate_metadata,
+            &candidate_after_publish,
+            PrivateOramPeerIdentityError::Indeterminate,
+        )?;
+        let identity_file = open_optional_private_file(directory, IDENTITY_FILE)?
+            .ok_or(PrivateOramPeerIdentityError::Indeterminate)?;
+        let identity_metadata = identity_file
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+        ensure_same_inode(
+            &candidate_after_publish,
+            &identity_metadata,
+            PrivateOramPeerIdentityError::Indeterminate,
+        )?;
+        let installed = load_identity(
+            directory,
+            identity_file,
+            IDENTITY_FILE,
+            peer_id,
+            Some(&generated_public_key),
+        )?;
+        if installed.public_key != generated_public_key {
+            return Err(PrivateOramPeerIdentityError::Indeterminate);
+        }
+        Ok(installed)
+    }
+
+    pub(super) fn encode_identity(
+        peer_id: u64,
+        key_epoch: u64,
+        pkcs8: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, PrivateOramPeerIdentityError> {
+        if key_epoch != IDENTITY_KEY_EPOCH
+            || pkcs8.is_empty()
+            || pkcs8.len() > IDENTITY_MAX_PKCS8_BYTES
+        {
+            return Err(PrivateOramPeerIdentityError::CryptographicValidationFailed);
+        }
+        let pkcs8_length = u32::try_from(pkcs8.len())
+            .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)?;
+        let mut frame = Zeroizing::new(Vec::with_capacity(
+            IDENTITY_HEADER_BYTES + pkcs8.len() + IDENTITY_CHECKSUM_BYTES,
+        ));
+        frame.extend_from_slice(IDENTITY_MAGIC);
+        frame.extend_from_slice(&IDENTITY_FORMAT_VERSION.to_be_bytes());
+        frame.extend_from_slice(&peer_id.to_be_bytes());
+        frame.extend_from_slice(&key_epoch.to_be_bytes());
+        frame.extend_from_slice(&pkcs8_length.to_be_bytes());
+        frame.extend_from_slice(pkcs8);
+        // This unkeyed digest detects torn/corrupt frames; authenticity comes from the pinned key.
+        let checksum = Sha256::digest(frame.as_slice());
+        frame.extend_from_slice(checksum.as_ref());
+        Ok(frame)
+    }
+
+    pub(super) fn write_identity_candidate(
+        directory: &File,
+        bytes: &[u8],
+    ) -> Result<File, PrivateOramPeerIdentityError> {
+        if bytes.is_empty() || bytes.len() as u64 > IDENTITY_MAX_FILE_BYTES {
+            return Err(PrivateOramPeerIdentityError::CryptographicValidationFailed);
+        }
+        // SAFETY: the candidate name is fixed and directory is a validated locked descriptor.
+        let descriptor = unsafe {
+            nix::libc::openat(
+                directory.as_raw_fd(),
+                IDENTITY_CANDIDATE_FILE.as_ptr(),
+                nix::libc::O_WRONLY
+                    | nix::libc::O_CREAT
+                    | nix::libc::O_EXCL
+                    | nix::libc::O_NOFOLLOW
+                    | nix::libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if descriptor < 0 {
+            return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
+        }
+        // SAFETY: openat returned a new owned descriptor.
+        let mut file = unsafe { File::from_raw_fd(descriptor) };
+        file.write_all(bytes)
+            .map_err(|_| PrivateOramPeerIdentityError::PersistenceFailed)?;
+        file.flush()
+            .map_err(|_| PrivateOramPeerIdentityError::PersistenceFailed)?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::PersistenceFailed)?;
+        validate_identity_file_metadata(&metadata)?;
+        if metadata.len() != bytes.len() as u64 {
+            return Err(PrivateOramPeerIdentityError::Indeterminate);
+        }
+        file.sync_all()
+            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+        let synced = file
+            .metadata()
+            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
+        validate_identity_file_metadata(&synced)?;
+        ensure_same_inode(
+            &metadata,
+            &synced,
+            PrivateOramPeerIdentityError::Indeterminate,
+        )?;
+        Ok(file)
+    }
+
+    pub(super) fn rename_identity_candidate(
+        directory: &File,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        // SAFETY: both names are fixed single components and directory is a validated locked fd.
+        let result = unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_renameat2,
+                directory.as_raw_fd(),
+                IDENTITY_CANDIDATE_FILE.as_ptr(),
+                directory.as_raw_fd(),
+                IDENTITY_FILE.as_ptr(),
+                nix::libc::RENAME_NOREPLACE,
+            )
+        };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(nix::libc::EEXIST) => Err(PrivateOramPeerIdentityError::InvalidIdentityFile),
+            Some(
+                nix::libc::ENOSYS | nix::libc::EINVAL | nix::libc::EOPNOTSUPP | nix::libc::EXDEV,
+            ) => Err(PrivateOramPeerIdentityError::Unsupported),
+            _ => Err(PrivateOramPeerIdentityError::Indeterminate),
+        }
+    }
+
+    pub(super) fn ensure_same_inode(
+        before: &Metadata,
+        after: &Metadata,
+        error: PrivateOramPeerIdentityError,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        if before.dev() != after.dev()
+            || before.ino() != after.ino()
+            || before.file_type().is_dir() != after.file_type().is_dir()
+            || before.file_type().is_file() != after.file_type().is_file()
+            || before.len() != after.len()
+        {
+            return Err(error);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+use platform::*;
+
+/// Non-Linux builds keep the identity API type-checked but fail closed: every filesystem entry
+/// point reports `Unsupported`, so the server refuses to bootstrap or open a peer identity.
+#[cfg(not(target_os = "linux"))]
+#[allow(dead_code, unused_variables)]
+mod platform {
+    use super::*;
+
+    pub(super) fn open_storage_root(
+        storage_path: &Path,
+    ) -> Result<File, PrivateOramPeerIdentityError> {
+        Err(PrivateOramPeerIdentityError::Unsupported)
+    }
+
+    pub(super) fn open_or_create_identity_directory(
+        storage_root: &File,
+        create: bool,
+    ) -> Result<File, PrivateOramPeerIdentityError> {
+        Err(PrivateOramPeerIdentityError::Unsupported)
+    }
+
+    pub(super) fn validate_identity_directory_binding(
+        storage_root: &File,
+        directory: &File,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        Err(PrivateOramPeerIdentityError::Unsupported)
+    }
+
+    pub(super) fn lock_identity_directory(
+        directory: &File,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        Err(PrivateOramPeerIdentityError::Unsupported)
+    }
+
+    pub(super) fn open_optional_private_file(
+        directory: &File,
+        name: &CStr,
+    ) -> Result<Option<File>, PrivateOramPeerIdentityError> {
+        Err(PrivateOramPeerIdentityError::Unsupported)
+    }
+
+    pub(super) fn sync_private_file_binding(
+        directory: &File,
+        name: &CStr,
+        witness: &File,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        Err(PrivateOramPeerIdentityError::Unsupported)
+    }
+
+    pub(super) fn load_identity(
+        directory: &File,
+        file: File,
+        name: &CStr,
+        expected_peer_id: u64,
+        expected_pin: Option<&PrivateOramPeerRecoveryPublicKeyV1>,
+    ) -> Result<LoadedIdentity, PrivateOramPeerIdentityError> {
+        Err(PrivateOramPeerIdentityError::Unsupported)
+    }
+
+    pub(super) fn create_identity(
+        directory: &File,
+        peer_id: u64,
+    ) -> Result<LoadedIdentity, PrivateOramPeerIdentityError> {
+        Err(PrivateOramPeerIdentityError::Unsupported)
+    }
+
+    pub(super) fn rename_identity_candidate(
+        directory: &File,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
+        Err(PrivateOramPeerIdentityError::Unsupported)
+    }
+
+    pub(super) fn ensure_same_inode(
+        before: &Metadata,
+        after: &Metadata,
+        error: PrivateOramPeerIdentityError,
+    ) -> Result<(), PrivateOramPeerIdentityError> {
         Err(PrivateOramPeerIdentityError::Unsupported)
     }
 }
 
-fn open_optional_private_file(
-    directory: &File,
-    name: &CStr,
-) -> Result<Option<File>, PrivateOramPeerIdentityError> {
-    // Inspect the directory entry without opening a device, FIFO, or socket for I/O.
-    // SAFETY: name is one of the fixed identity file names and directory is a validated fd.
-    let path_descriptor = unsafe {
-        nix::libc::openat(
-            directory.as_raw_fd(),
-            name.as_ptr(),
-            nix::libc::O_PATH | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC,
-        )
-    };
-    if path_descriptor < 0 {
-        let error = std::io::Error::last_os_error();
-        return if error.raw_os_error() == Some(nix::libc::ENOENT) {
-            Ok(None)
-        } else {
-            Err(PrivateOramPeerIdentityError::InvalidIdentityFile)
-        };
-    }
-    // SAFETY: openat returned a new owned descriptor.
-    let path_file = unsafe { File::from_raw_fd(path_descriptor) };
-    let path_metadata = path_file
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    validate_identity_file_metadata(&path_metadata)?;
+#[cfg(not(target_os = "linux"))]
+use platform::*;
 
-    // SAFETY: the entry was validated through O_PATH and is reopened relative to the same fd.
-    let read_descriptor = unsafe {
-        nix::libc::openat(
-            directory.as_raw_fd(),
-            name.as_ptr(),
-            nix::libc::O_RDONLY
-                | nix::libc::O_NONBLOCK
-                | nix::libc::O_NOFOLLOW
-                | nix::libc::O_CLOEXEC,
-        )
-    };
-    if read_descriptor < 0 {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-    // SAFETY: openat returned a new owned descriptor.
-    let file = unsafe { File::from_raw_fd(read_descriptor) };
-    let metadata = file
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    validate_identity_file_metadata(&metadata)?;
-    ensure_same_inode(
-        &path_metadata,
-        &metadata,
-        PrivateOramPeerIdentityError::InvalidIdentityFile,
-    )?;
-    Ok(Some(file))
-}
-
-fn sync_private_file_binding(
-    directory: &File,
-    name: &CStr,
-    witness: &File,
-) -> Result<(), PrivateOramPeerIdentityError> {
-    let witness_metadata = witness
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    validate_identity_file_metadata(&witness_metadata)?;
-
-    // SAFETY: name is fixed, directory is pinned, and O_NONBLOCK bounds special-file races.
-    let descriptor = unsafe {
-        nix::libc::openat(
-            directory.as_raw_fd(),
-            name.as_ptr(),
-            nix::libc::O_RDWR
-                | nix::libc::O_NONBLOCK
-                | nix::libc::O_NOFOLLOW
-                | nix::libc::O_CLOEXEC,
-        )
-    };
-    if descriptor < 0 {
-        return Err(PrivateOramPeerIdentityError::Indeterminate);
-    }
-    // SAFETY: openat returned a new owned descriptor.
-    let file = unsafe { File::from_raw_fd(descriptor) };
-    let before_sync = file
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-    validate_identity_file_metadata(&before_sync)?;
-    ensure_same_inode(
-        &witness_metadata,
-        &before_sync,
-        PrivateOramPeerIdentityError::Indeterminate,
-    )?;
-    file.sync_all()
-        .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-    let after_sync = file
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-    validate_identity_file_metadata(&after_sync)?;
-    ensure_same_inode(
-        &before_sync,
-        &after_sync,
-        PrivateOramPeerIdentityError::Indeterminate,
-    )?;
-
-    let rebound = open_optional_private_file(directory, name)?
-        .ok_or(PrivateOramPeerIdentityError::Indeterminate)?;
-    ensure_same_inode(
-        &after_sync,
-        &rebound
-            .metadata()
-            .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?,
-        PrivateOramPeerIdentityError::Indeterminate,
-    )
-}
-
-fn validate_identity_file_metadata(
-    metadata: &Metadata,
-) -> Result<(), PrivateOramPeerIdentityError> {
-    let effective_uid = unsafe { nix::libc::geteuid() };
-    if !metadata.is_file()
-        || metadata.uid() != effective_uid
-        || metadata.permissions().mode() & 0o7777 != 0o600
-        || metadata.nlink() != 1
-        || metadata.len() == 0
-        || metadata.len() > IDENTITY_MAX_FILE_BYTES
-    {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-    Ok(())
-}
-
-fn load_identity(
-    directory: &File,
-    mut file: File,
-    name: &CStr,
-    expected_peer_id: u64,
-    expected_pin: Option<&PrivateOramPeerRecoveryPublicKeyV1>,
-) -> Result<LoadedIdentity, PrivateOramPeerIdentityError> {
-    let before = file
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    validate_identity_file_metadata(&before)?;
-    let expected_length = usize::try_from(before.len())
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    let mut bytes = Zeroizing::new(Vec::new());
-    bytes
-        .try_reserve_exact(expected_length)
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    (&mut file)
-        .take(IDENTITY_MAX_FILE_BYTES.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    if bytes.len() != expected_length {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-    let after = file
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    validate_identity_file_metadata(&after)?;
-    ensure_same_inode(
-        &before,
-        &after,
-        PrivateOramPeerIdentityError::InvalidIdentityFile,
-    )?;
-
-    let rebound = open_optional_private_file(directory, name)?
-        .ok_or(PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    let rebound_metadata = rebound
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    ensure_same_inode(
-        &after,
-        &rebound_metadata,
-        PrivateOramPeerIdentityError::InvalidIdentityFile,
-    )?;
-
-    decode_identity(&bytes, expected_peer_id, expected_pin)
-}
-
-fn decode_identity(
-    bytes: &[u8],
-    expected_peer_id: u64,
-    expected_pin: Option<&PrivateOramPeerRecoveryPublicKeyV1>,
-) -> Result<LoadedIdentity, PrivateOramPeerIdentityError> {
-    if bytes.len() < IDENTITY_HEADER_BYTES + IDENTITY_CHECKSUM_BYTES
-        || bytes.len() as u64 > IDENTITY_MAX_FILE_BYTES
-    {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-    let checksum_offset = bytes
-        .len()
-        .checked_sub(IDENTITY_CHECKSUM_BYTES)
-        .ok_or(PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    let (body, expected_checksum) = bytes.split_at(checksum_offset);
-    let actual_checksum = Sha256::digest(body);
-    if &actual_checksum[..] != expected_checksum {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-
-    let mut offset = 0usize;
-    let magic = take_array::<8>(body, &mut offset)?;
-    if &magic != IDENTITY_MAGIC {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-    let version = u16::from_be_bytes(take_array(body, &mut offset)?);
-    if version != IDENTITY_FORMAT_VERSION {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-    let peer_id = u64::from_be_bytes(take_array(body, &mut offset)?);
-    if peer_id != expected_peer_id {
-        return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
-    }
-    let key_epoch = u64::from_be_bytes(take_array(body, &mut offset)?);
-    if key_epoch != IDENTITY_KEY_EPOCH {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-    let pkcs8_length = u32::from_be_bytes(take_array(body, &mut offset)?) as usize;
-    if pkcs8_length == 0 || pkcs8_length > IDENTITY_MAX_PKCS8_BYTES {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-    let pkcs8_end = offset
-        .checked_add(pkcs8_length)
-        .ok_or(PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    if pkcs8_end != body.len() {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-    let key_pair = Ed25519KeyPair::from_pkcs8(&body[offset..pkcs8_end])
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    let public_key = private_oram_peer_recovery_public_key_v1(&key_pair, key_epoch)
-        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)?;
-    if expected_pin.is_some_and(|expected| expected != &public_key) {
-        return Err(PrivateOramPeerIdentityError::PinnedKeyMismatch);
-    }
-    Ok(LoadedIdentity {
-        key_pair,
-        public_key,
-    })
-}
-
-fn take_array<const N: usize>(
-    bytes: &[u8],
-    offset: &mut usize,
-) -> Result<[u8; N], PrivateOramPeerIdentityError> {
-    let end = offset
-        .checked_add(N)
-        .ok_or(PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    let value = bytes
-        .get(*offset..end)
-        .ok_or(PrivateOramPeerIdentityError::InvalidIdentityFile)?
-        .try_into()
-        .map_err(|_| PrivateOramPeerIdentityError::InvalidIdentityFile)?;
-    *offset = end;
-    Ok(value)
-}
-
-fn create_identity(
-    directory: &File,
-    peer_id: u64,
-) -> Result<LoadedIdentity, PrivateOramPeerIdentityError> {
-    let random = SystemRandom::new();
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&random)
-        .map_err(|_| PrivateOramPeerIdentityError::KeyGenerationFailed)?;
-    let generated_key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
-        .map_err(|_| PrivateOramPeerIdentityError::KeyGenerationFailed)?;
-    let generated_public_key =
-        private_oram_peer_recovery_public_key_v1(&generated_key_pair, IDENTITY_KEY_EPOCH)
-            .map_err(|_| PrivateOramPeerIdentityError::KeyGenerationFailed)?;
-    let frame = encode_identity(peer_id, IDENTITY_KEY_EPOCH, pkcs8.as_ref())?;
-    let candidate = write_identity_candidate(directory, &frame)?;
-    let candidate_metadata = candidate
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-    rename_identity_candidate(directory)?;
-    directory
-        .sync_all()
-        .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-
-    let candidate_after_publish = candidate
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-    ensure_same_inode(
-        &candidate_metadata,
-        &candidate_after_publish,
-        PrivateOramPeerIdentityError::Indeterminate,
-    )?;
-    let identity_file = open_optional_private_file(directory, IDENTITY_FILE)?
-        .ok_or(PrivateOramPeerIdentityError::Indeterminate)?;
-    let identity_metadata = identity_file
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-    ensure_same_inode(
-        &candidate_after_publish,
-        &identity_metadata,
-        PrivateOramPeerIdentityError::Indeterminate,
-    )?;
-    let installed = load_identity(
-        directory,
-        identity_file,
-        IDENTITY_FILE,
-        peer_id,
-        Some(&generated_public_key),
-    )?;
-    if installed.public_key != generated_public_key {
-        return Err(PrivateOramPeerIdentityError::Indeterminate);
-    }
-    Ok(installed)
-}
-
-fn encode_identity(
-    peer_id: u64,
-    key_epoch: u64,
-    pkcs8: &[u8],
-) -> Result<Zeroizing<Vec<u8>>, PrivateOramPeerIdentityError> {
-    if key_epoch != IDENTITY_KEY_EPOCH || pkcs8.is_empty() || pkcs8.len() > IDENTITY_MAX_PKCS8_BYTES
-    {
-        return Err(PrivateOramPeerIdentityError::CryptographicValidationFailed);
-    }
-    let pkcs8_length = u32::try_from(pkcs8.len())
-        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)?;
-    let mut frame = Zeroizing::new(Vec::with_capacity(
-        IDENTITY_HEADER_BYTES + pkcs8.len() + IDENTITY_CHECKSUM_BYTES,
-    ));
-    frame.extend_from_slice(IDENTITY_MAGIC);
-    frame.extend_from_slice(&IDENTITY_FORMAT_VERSION.to_be_bytes());
-    frame.extend_from_slice(&peer_id.to_be_bytes());
-    frame.extend_from_slice(&key_epoch.to_be_bytes());
-    frame.extend_from_slice(&pkcs8_length.to_be_bytes());
-    frame.extend_from_slice(pkcs8);
-    // This unkeyed digest detects torn/corrupt frames; authenticity comes from the pinned key.
-    let checksum = Sha256::digest(frame.as_slice());
-    frame.extend_from_slice(checksum.as_ref());
-    Ok(frame)
-}
-
-fn write_identity_candidate(
-    directory: &File,
-    bytes: &[u8],
-) -> Result<File, PrivateOramPeerIdentityError> {
-    if bytes.is_empty() || bytes.len() as u64 > IDENTITY_MAX_FILE_BYTES {
-        return Err(PrivateOramPeerIdentityError::CryptographicValidationFailed);
-    }
-    // SAFETY: the candidate name is fixed and directory is a validated locked descriptor.
-    let descriptor = unsafe {
-        nix::libc::openat(
-            directory.as_raw_fd(),
-            IDENTITY_CANDIDATE_FILE.as_ptr(),
-            nix::libc::O_WRONLY
-                | nix::libc::O_CREAT
-                | nix::libc::O_EXCL
-                | nix::libc::O_NOFOLLOW
-                | nix::libc::O_CLOEXEC,
-            0o600,
-        )
-    };
-    if descriptor < 0 {
-        return Err(PrivateOramPeerIdentityError::InvalidIdentityFile);
-    }
-    // SAFETY: openat returned a new owned descriptor.
-    let mut file = unsafe { File::from_raw_fd(descriptor) };
-    file.write_all(bytes)
-        .map_err(|_| PrivateOramPeerIdentityError::PersistenceFailed)?;
-    file.flush()
-        .map_err(|_| PrivateOramPeerIdentityError::PersistenceFailed)?;
-    let metadata = file
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::PersistenceFailed)?;
-    validate_identity_file_metadata(&metadata)?;
-    if metadata.len() != bytes.len() as u64 {
-        return Err(PrivateOramPeerIdentityError::Indeterminate);
-    }
-    file.sync_all()
-        .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-    let synced = file
-        .metadata()
-        .map_err(|_| PrivateOramPeerIdentityError::Indeterminate)?;
-    validate_identity_file_metadata(&synced)?;
-    ensure_same_inode(
-        &metadata,
-        &synced,
-        PrivateOramPeerIdentityError::Indeterminate,
-    )?;
-    Ok(file)
-}
-
-fn rename_identity_candidate(directory: &File) -> Result<(), PrivateOramPeerIdentityError> {
-    // SAFETY: both names are fixed single components and directory is a validated locked fd.
-    let result = unsafe {
-        nix::libc::syscall(
-            nix::libc::SYS_renameat2,
-            directory.as_raw_fd(),
-            IDENTITY_CANDIDATE_FILE.as_ptr(),
-            directory.as_raw_fd(),
-            IDENTITY_FILE.as_ptr(),
-            nix::libc::RENAME_NOREPLACE,
-        )
-    };
-    if result == 0 {
-        return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
-    match error.raw_os_error() {
-        Some(nix::libc::EEXIST) => Err(PrivateOramPeerIdentityError::InvalidIdentityFile),
-        Some(nix::libc::ENOSYS | nix::libc::EINVAL | nix::libc::EOPNOTSUPP | nix::libc::EXDEV) => {
-            Err(PrivateOramPeerIdentityError::Unsupported)
-        }
-        _ => Err(PrivateOramPeerIdentityError::Indeterminate),
-    }
-}
-
-fn ensure_same_inode(
-    before: &Metadata,
-    after: &Metadata,
-    error: PrivateOramPeerIdentityError,
-) -> Result<(), PrivateOramPeerIdentityError> {
-    if before.dev() != after.dev()
-        || before.ino() != after.ino()
-        || before.file_type().is_dir() != after.file_type().is_dir()
-        || before.file_type().is_file() != after.file_type().is_file()
-        || before.len() != after.len()
-    {
-        return Err(error);
-    }
-    Ok(())
-}
-
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     use std::path::PathBuf;
