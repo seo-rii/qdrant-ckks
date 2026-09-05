@@ -3582,3 +3582,41 @@ fn ckks_sidecar_markers_reject_sibling_keys() {
         "unexpected error: {err:?}"
     );
 }
+
+#[test]
+fn stored_sidecar_values_reverify_into_the_same_verified_key() {
+    let encryptor = encryptor()
+        .with_collection_identity("collection-uuid-1")
+        .unwrap();
+    let material = public_material();
+    let (value, proof) = encryptor
+        .encrypt_sidecar_payload_value("docs", "point-1", &material, &[1.0, 2.0])
+        .unwrap();
+
+    let reverified = encryptor
+        .verify_stored_sidecar_payload_value("docs", "point-1", &material, &value)
+        .unwrap()
+        .expect("a stored server sidecar entry re-verifies");
+    assert_eq!(reverified.envelope_key(), proof.envelope_key());
+
+    // Another point's binding, a tampered ciphertext, and foreign values are refused.
+    assert!(
+        encryptor
+            .verify_stored_sidecar_payload_value("docs", "point-2", &material, &value)
+            .is_err()
+    );
+    let mut tampered = value.clone();
+    tampered[ENCRYPTED_CKKS_VECTOR_MARKER]["envelope"]["ciphertext"] =
+        json!(BASE64URL_NOPAD.encode(b"tampered-ckks-ciphertext"));
+    assert!(
+        encryptor
+            .verify_stored_sidecar_payload_value("docs", "point-1", &material, &tampered)
+            .is_err()
+    );
+    assert!(
+        encryptor
+            .verify_stored_sidecar_payload_value("docs", "point-1", &material, &json!("plain"))
+            .unwrap()
+            .is_none()
+    );
+}

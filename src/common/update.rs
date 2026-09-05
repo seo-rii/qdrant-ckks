@@ -909,6 +909,15 @@ async fn do_overwrite_payload_with_replay_cache(
             &auth,
         )
         .await?;
+    // Overwriting replaces the whole payload, which would silently discard the reserved
+    // encrypted vector sidecar (the only copy of the point's encrypted vectors), exactly like
+    // clear_payload would.
+    ensure_payload_replacement_does_not_drop_encrypted_vector_sidecars(
+        toc,
+        &collection_name,
+        "overwrite payloads",
+    )
+    .await?;
 
     let (operations, update_provenance) = maybe_encrypt_point_payload_update(
         toc,
@@ -1036,7 +1045,12 @@ pub async fn do_clear_payload(
     let toc = toc_provider
         .check_strict_mode(&points, &collection_name, params.timeout_as_secs(), &auth)
         .await?;
-    ensure_clear_payload_does_not_drop_encrypted_vector_sidecars(toc, &collection_name).await?;
+    ensure_payload_replacement_does_not_drop_encrypted_vector_sidecars(
+        toc,
+        &collection_name,
+        "clear payloads",
+    )
+    .await?;
 
     let (point_operation, shard_key) = match points {
         PointsSelector::PointIdsSelector(PointIdsList { points, shard_key }) => {
@@ -1063,9 +1077,10 @@ pub async fn do_clear_payload(
     .await
 }
 
-async fn ensure_clear_payload_does_not_drop_encrypted_vector_sidecars(
+async fn ensure_payload_replacement_does_not_drop_encrypted_vector_sidecars(
     toc: &TableOfContent,
     collection_name: &str,
+    operation_name: &str,
 ) -> Result<(), StorageError> {
     let multipass = CollectionMultipass;
     let collection_pass = multipass.issue_pass(collection_name);
@@ -1086,9 +1101,9 @@ async fn ensure_clear_payload_does_not_drop_encrypted_vector_sidecars(
             });
 
     if has_encrypted_vector_rule {
-        return Err(StorageError::bad_input(
-            "cannot clear payloads because encrypted vector sidecars are stored in a reserved payload field; use delete_vectors for encrypted vector names",
-        ));
+        return Err(StorageError::bad_input(format!(
+            "cannot {operation_name} because encrypted vector sidecars are stored in a reserved payload field; use set_payload/delete_payload for fields and delete_vectors for encrypted vector names",
+        )));
     }
 
     Ok(())
@@ -2075,6 +2090,100 @@ async fn maybe_encrypt_update_vectors(
             });
         }
     }
+    // The collection only accepts full runtime-generated sidecars, and the sidecar payload
+    // write replaces the whole object, so the entries of the point's other encrypted vectors
+    // must be re-verified and carried forward instead of being dropped by the shallow merge.
+    let mut client_verified_sidecar_keys = Vec::new();
+    if !sidecar_updates.is_empty() {
+        let point_ids = sidecar_updates
+            .iter()
+            .filter_map(|update| {
+                update
+                    .points
+                    .as_ref()
+                    .and_then(|points| points.first().copied())
+            })
+            .collect::<Vec<_>>();
+        let sidecar_field = format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
+            .parse::<JsonPath>()
+            .map_err(|_| {
+                StorageError::service_error("encrypted vector sidecar field path is invalid")
+            })?;
+        let existing = crate::common::query::do_get_points(
+            toc.as_ref(),
+            collection_name,
+            collection::operations::types::PointRequestInternal {
+                ids: point_ids,
+                with_payload: Some(segment::types::WithPayloadInterface::Fields(vec![
+                    sidecar_field,
+                ])),
+                with_vector: segment::types::WithVector::Bool(false),
+            },
+            None,
+            None,
+            ShardSelectorInternal::All,
+            auth.clone(),
+            HwMeasurementAcc::disposable(),
+            None,
+        )
+        .await?;
+        let existing_sidecars = existing
+            .into_iter()
+            .filter_map(|record| {
+                let sidecar = record
+                    .payload
+                    .as_ref()?
+                    .0
+                    .get(ENCRYPTED_VECTOR_SIDECAR_FIELD)?
+                    .as_object()?
+                    .clone();
+                Some((record.id, sidecar))
+            })
+            .collect::<HashMap<_, _>>();
+        for update in &mut sidecar_updates {
+            let Some(point_id) = update
+                .points
+                .as_ref()
+                .and_then(|points| points.first().copied())
+            else {
+                continue;
+            };
+            let Some(existing_sidecar) = existing_sidecars.get(&point_id) else {
+                continue;
+            };
+            let Some(Value::Object(new_sidecar)) =
+                update.payload.0.get_mut(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            else {
+                continue;
+            };
+            let point_id_string = point_id.to_string();
+            for (vector_name, value) in existing_sidecar {
+                if new_sidecar.contains_key(vector_name) {
+                    continue;
+                }
+                if let Some(key) = plan.verify_stored_vector_sidecar_payload_value(
+                    collection_name,
+                    &point_id_string,
+                    vector_name,
+                    value,
+                )? {
+                    verified_sidecar_keys.push(key);
+                } else if let Some(key) = plan.verify_client_vector_sidecar_payload_value(
+                    collection_name,
+                    &point_id_string,
+                    vector_name,
+                    value,
+                )? {
+                    client_verified_sidecar_keys.push(key);
+                } else {
+                    return Err(StorageError::bad_input(
+                        "existing encrypted vector sidecar entry cannot be carried forward by update_vectors",
+                    ));
+                }
+                new_sidecar.insert(vector_name.clone(), value.clone());
+            }
+        }
+    }
     points.retain(|point| !point.vector.is_empty());
     ensure_not_mixed_encrypted_and_plaintext_vector_mutation(
         collection_name,
@@ -2094,7 +2203,12 @@ async fn maybe_encrypt_update_vectors(
         &mutated_vector_names,
     )?;
 
-    let provenance = CollectionUpdateProvenance::runtime_encrypted_vectors(verified_sidecar_keys);
+    let provenance = CollectionUpdateProvenance::runtime_encrypted_vectors(verified_sidecar_keys)
+        .with_runtime_encrypted_vector_provenance(
+            CollectionUpdateProvenance::runtime_verified_client_vectors(
+                client_verified_sidecar_keys,
+            ),
+        );
     Ok((sidecar_updates, provenance))
 }
 

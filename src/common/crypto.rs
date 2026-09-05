@@ -1441,6 +1441,41 @@ impl VectorWritePlan {
         Ok(Some(encrypted))
     }
 
+    /// Re-authenticates a stored server-encrypted sidecar entry of `vector_name` and returns
+    /// its verified key. `None` when the vector is not served by the trusted bridge or the value
+    /// carries no server marker (client envelopes go through
+    /// [`Self::verify_client_vector_sidecar_payload_value`]).
+    pub(crate) fn verify_stored_vector_sidecar_payload_value(
+        &self,
+        collection_name: &str,
+        point_id: &str,
+        vector_name: &str,
+        value: &Value,
+    ) -> Result<Option<CkksVectorVerifiedSidecarKey>, StorageError> {
+        let Some(rule) = self
+            .rules
+            .iter()
+            .find(|rule| rule.vector_name() == vector_name)
+        else {
+            return Ok(None);
+        };
+        let VectorWriteRule::TrustedBridge {
+            encryptor,
+            public_material,
+            ..
+        } = rule
+        else {
+            return Ok(None);
+        };
+        encryptor
+            .verify_stored_sidecar_payload_value(collection_name, point_id, public_material, value)
+            .map_err(|_| {
+                StorageError::bad_input(
+                    "existing encrypted vector sidecar entry failed runtime verification",
+                )
+            })
+    }
+
     pub(crate) fn verify_client_vector_sidecar_payload_value(
         &self,
         _collection_name: &str,

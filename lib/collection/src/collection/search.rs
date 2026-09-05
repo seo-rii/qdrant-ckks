@@ -194,11 +194,22 @@ impl Collection {
                 });
             future::try_join_all(filled_results).await
         } else {
-            let redaction_plan = if encrypted_payload_read_modes
+            // Raw reads keep encrypted envelopes but must still strip blind-index tokens, exactly
+            // like scroll/retrieve do, so a plan is built for every requested mode.
+            let redacted_plan = if encrypted_payload_read_modes
                 .iter()
                 .any(|mode| *mode == EncryptedPayloadReadMode::Redacted)
             {
                 self.encrypted_payload_redaction_plan_for_mode(EncryptedPayloadReadMode::Redacted)
+                    .await?
+            } else {
+                None
+            };
+            let raw_plan = if encrypted_payload_read_modes
+                .iter()
+                .any(|mode| *mode == EncryptedPayloadReadMode::Raw)
+            {
+                self.encrypted_payload_redaction_plan_for_mode(EncryptedPayloadReadMode::Raw)
                     .await?
             } else {
                 None
@@ -213,11 +224,12 @@ impl Collection {
                 )
                 .await?;
             for (points, mode) in result.iter_mut().zip(encrypted_payload_read_modes) {
-                apply_encrypted_payload_read_mode_to_scored_points(
-                    points,
-                    mode,
-                    redaction_plan.as_ref(),
-                );
+                let redaction_plan = match mode {
+                    EncryptedPayloadReadMode::Redacted => redacted_plan.as_ref(),
+                    EncryptedPayloadReadMode::Raw => raw_plan.as_ref(),
+                    _ => None,
+                };
+                apply_encrypted_payload_read_mode_to_scored_points(points, mode, redaction_plan);
             }
             Ok(result)
         }

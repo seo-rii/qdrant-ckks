@@ -446,7 +446,23 @@ pub struct QdrantInternalService {
     private_oram_install_stream_slots: Semaphore,
 }
 
+/// Upper bound for waiting on the private ORAM replication lock. Handlers hold the lock across
+/// calls to other peers, so an unbounded wait lets two peers that replicate to each other
+/// deadlock; a saturated lock is reported as a retryable unavailability instead.
+const PRIVATE_ORAM_REPLICATION_LOCK_WAIT: Duration = Duration::from_secs(30);
+
 impl QdrantInternalService {
+    async fn acquire_private_oram_replication_lock(
+        &self,
+    ) -> Result<tokio::sync::MutexGuard<'_, ()>, Status> {
+        tokio::time::timeout(
+            PRIVATE_ORAM_REPLICATION_LOCK_WAIT,
+            self.private_oram_replication_lock.lock(),
+        )
+        .await
+        .map_err(|_| Status::unavailable("private ORAM replication is busy; retry later"))
+    }
+
     pub fn new(
         telemetry_collector: Arc<Mutex<TelemetryCollector>>,
         settings: Settings,
@@ -512,7 +528,7 @@ impl QdrantInternalService {
         let old = transition.old.expect("validated transition old state");
         let new = transition.new.expect("validated transition new state");
         let auth = Auth::new_internal(Access::full("private ORAM replication"));
-        let _lock = self.private_oram_replication_lock.lock().await;
+        let _lock = self.acquire_private_oram_replication_lock().await?;
 
         let completed = match kind {
             PrivateOramReplicationIndexKind::Hnsw => {
@@ -3363,7 +3379,7 @@ impl QdrantInternal for QdrantInternalService {
         let version = u16::try_from(request.version)
             .map_err(|_| Status::invalid_argument("private ORAM writeback version is invalid"))?;
         let auth = Auth::new_internal(Access::full("private ORAM replication"));
-        let _lock = self.private_oram_replication_lock.lock().await;
+        let _lock = self.acquire_private_oram_replication_lock().await?;
 
         let writeback_digest = match kind {
             PrivateOramReplicationIndexKind::Hnsw => {
@@ -3678,7 +3694,7 @@ impl QdrantInternal for QdrantInternalService {
             )
         })?;
 
-        let _replication_lock = self.private_oram_replication_lock.lock().await;
+        let _replication_lock = self.acquire_private_oram_replication_lock().await?;
         let receipt = private_oram_recovery::do_install_private_oram_owner_recovery_capsule_v2(
             &self.toc,
             &self.settings,
@@ -3883,7 +3899,7 @@ impl QdrantInternal for QdrantInternalService {
                     "private ORAM owner pre-stage reservation is not finalized",
                 )
             })?;
-        let _replication_lock = self.private_oram_replication_lock.lock().await;
+        let _replication_lock = self.acquire_private_oram_replication_lock().await?;
         private_oram_mutation::resolve_private_oram_owner_reservation_v3(
             &self.toc,
             &self.settings,
@@ -4105,7 +4121,7 @@ impl QdrantInternal for QdrantInternalService {
             Status::invalid_argument("private ORAM owner adoption authentication failed")
         })?;
 
-        let _replication_lock = self.private_oram_replication_lock.lock().await;
+        let _replication_lock = self.acquire_private_oram_replication_lock().await?;
         let evidence = private_oram_mutation::adopt_private_oram_mutation_owner_v2(
             &self.toc,
             &self.settings,
@@ -4244,7 +4260,7 @@ impl QdrantInternal for QdrantInternalService {
             ));
         }
 
-        let _replication_lock = self.private_oram_replication_lock.lock().await;
+        let _replication_lock = self.acquire_private_oram_replication_lock().await?;
         let prepare = private_oram_mutation::prepare_private_oram_owner_reservation_v3(
             &self.toc,
             &self.settings,
@@ -4343,7 +4359,7 @@ impl QdrantInternal for QdrantInternalService {
                     "private ORAM owner reservation resolution is not committed",
                 )
             })?;
-        let _replication_lock = self.private_oram_replication_lock.lock().await;
+        let _replication_lock = self.acquire_private_oram_replication_lock().await?;
         let signed_resolution_receipt = if wire.recover_completion {
             Some(
                 private_oram_mutation::recover_private_oram_owner_reservation_completion_v3(
@@ -4497,7 +4513,7 @@ impl QdrantInternal for QdrantInternalService {
             }
         };
 
-        let _lock = self.private_oram_replication_lock.lock().await;
+        let _lock = self.acquire_private_oram_replication_lock().await?;
         let (index_epoch, root_hash) = match bundle {
             InitialBundle::Hnsw(bundle) => {
                 let epoch = private_hnsw::do_install_private_hnsw_replica_bundle(
@@ -4694,7 +4710,7 @@ impl QdrantInternal for QdrantInternalService {
             }
         };
 
-        let _lock = self.private_oram_replication_lock.lock().await;
+        let _lock = self.acquire_private_oram_replication_lock().await?;
         let consensus = self
             .consensus_state
             .private_oram_epoch(&key)
@@ -4775,7 +4791,7 @@ impl QdrantInternal for QdrantInternalService {
     ) -> Result<Response<RequestPrivateOramShardRecoveryResponse>, Status> {
         let request = request.into_inner();
         validate_private_oram_shard_recovery_request_shape(&request, self.toc.this_peer_id)?;
-        let _lock = self.private_oram_replication_lock.lock().await;
+        let _lock = self.acquire_private_oram_replication_lock().await?;
         let auth = Auth::new_internal(Access::full("private ORAM automatic shard recovery"));
         let collection_pass = auth.check_collection_access(
             &request.collection_name,
@@ -4972,7 +4988,7 @@ impl QdrantInternal for QdrantInternalService {
     ) -> Result<Response<RequestPrivateOramReshardingResumeResponse>, Status> {
         let request = request.into_inner();
         validate_private_oram_resharding_resume_request_shape(&request, self.toc.this_peer_id)?;
-        let _lock = self.private_oram_replication_lock.lock().await;
+        let _lock = self.acquire_private_oram_replication_lock().await?;
         let auth = Auth::new_internal(Access::full("private ORAM automatic resharding resume"));
         let collection_pass = auth.check_collection_access(
             &request.collection_name,

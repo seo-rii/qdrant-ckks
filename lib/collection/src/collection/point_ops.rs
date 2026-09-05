@@ -1135,6 +1135,34 @@ impl Collection {
                         "peer encrypted vector sidecar entry is not configured as an encrypted vector",
                     ));
                 }
+                if encrypted
+                    .as_object()
+                    .is_some_and(|object| object.contains_key(CLIENT_CKKS_VECTOR_MARKER))
+                {
+                    // Server-blind client envelopes are accepted at ingress after signature
+                    // verification; replicas re-check the structural binding exactly like they
+                    // do for server envelopes instead of rejecting the replay (which marked
+                    // every remote replica dead after a legitimate write).
+                    let Some(client_key) =
+                        client_ckks_vector_sidecar_envelope_key(encrypted, vector_name).map_err(
+                            |_| {
+                                CollectionError::bad_input(
+                                    "peer client encrypted vector sidecar entry is invalid for this collection",
+                                )
+                            },
+                        )?
+                    else {
+                        return Err(CollectionError::bad_input(
+                            "peer client encrypted vector sidecar entry is missing marker",
+                        ));
+                    };
+                    if !client_key.matches_binding(&collection_crypto_id, point_id, vector_name) {
+                        return Err(CollectionError::bad_input(
+                            "peer client encrypted vector sidecar entry does not match collection, point, and vector binding",
+                        ));
+                    }
+                    continue;
+                }
                 let Some(marker) = encrypted
                     .as_object()
                     .and_then(|object| object.get(ENCRYPTED_CKKS_VECTOR_MARKER))

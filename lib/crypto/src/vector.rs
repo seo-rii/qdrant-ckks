@@ -1592,6 +1592,36 @@ where
         Ok((value, verified_sidecar_key))
     }
 
+    /// Authenticates a stored sidecar payload value produced by this encryptor and returns its
+    /// verified sidecar key, so a runtime that has to rewrite the full sidecar of a point (for
+    /// example because a sibling vector was updated) can carry an untouched entry forward.
+    pub fn verify_stored_sidecar_payload_value(
+        &self,
+        collection: &str,
+        point_id: &str,
+        public_material: &CkksPublicMaterial,
+        value: &Value,
+    ) -> Result<Option<CkksVectorVerifiedSidecarKey>, CkksError> {
+        let Some(object) = value.as_object() else {
+            return Ok(None);
+        };
+        let Some(marker) = object.get(ENCRYPTED_CKKS_VECTOR_MARKER) else {
+            return Ok(None);
+        };
+        if object.len() != 1 {
+            return Err(CkksError::MalformedEnvelope(
+                "encrypted CKKS vector marker must be the only key of the sidecar value"
+                    .to_string(),
+            ));
+        }
+        let encrypted: EncryptedCkksVector = serde_json::from_value(marker.clone())
+            .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?;
+        self.open(collection, point_id, public_material, &encrypted)?;
+        let collection_context = self.collection_context(collection)?;
+        ckks_vector_verified_sidecar_key(value, collection_context, point_id, &self.vector_name)
+            .map(Some)
+    }
+
     pub fn encrypt_batch(
         &self,
         collection: &str,
