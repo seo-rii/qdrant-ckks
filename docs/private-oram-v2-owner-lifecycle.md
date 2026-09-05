@@ -226,3 +226,25 @@ Operational rollback means disabling new writes while retaining upgraded readers
 two-owner partial outcome, process-kill/fsync, rollback/fork, key-rotation, snapshot-floor,
 and old-peer-rejoin tests all pass. Initial rollout retains all outcome, grant,
 certificate, and terminal history; GC is deferred.
+
+## Lifecycle Fixes (September 2026)
+
+- The consensus authority applies a second-generation `Clear` against the
+  active `ClearPending`; the retained tombstone of the previous generation is
+  only treated as a retry when the request digest matches it.
+- A reservation-outcome acknowledgement that arrives after the generation was
+  cleared finds the admission manifest in the tombstone witness, so owner
+  checkpoint leases are released instead of stalling forever.
+- Bounded append/rejection/GC histories drop their oldest entries once full
+  instead of refusing every further admission.
+- The owner recovery capsule store accepts a capsule of a later lease
+  generation (superseding the previous mutation's capsule); replays of an older
+  generation and conflicting capsules of the same generation are refused.
+- Startup reconciliation cancels an `install.json` marker whose consensus lease
+  was superseded or removed when the live tree was never replaced; markers that
+  already replaced the live tree still fail closed.
+- An expired external recovery staging lease no longer fences writes.
+- The mutation supervisor skips and logs per-collection failures instead of
+  aborting the whole reconciliation pass.
+- Still open: a generation stalled before its recovery capsules are ready can
+  only be reclaimed with an owner-eviction protocol that does not exist yet.

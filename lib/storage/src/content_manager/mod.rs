@@ -2968,6 +2968,15 @@ pub trait CollectionContainer {
         operation: CollectionMetaOperations,
     ) -> Result<bool, StorageError>;
 
+    /// Private ORAM index keys of a live collection, captured before it is deleted so the
+    /// consensus state it owned can be pruned. Empty for unknown or non-ORAM collections.
+    fn private_oram_index_keys_for_collection(
+        &self,
+        _collection_name: &str,
+    ) -> Result<Vec<consensus_ops::PrivateOramEpochKey>, StorageError> {
+        Ok(Vec::new())
+    }
+
     fn perform_private_oram_resharding_meta_op(
         &self,
         operation: &consensus_ops::PrivateOramReshardingOperation,

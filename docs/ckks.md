@@ -4378,3 +4378,85 @@ is non-finite, Qdrant discards the bridge response and fails the search.
 
 The Rust side does not include request or bridge stderr in returned errors to
 avoid accidentally propagating plaintext embeddings into logs.
+
+## Hardening notes (September 2026 review)
+
+The fixes below change observable behaviour; each is enforced in code and
+covered by tests where the affected crate can be tested in isolation.
+
+Crypto and ORAM protocol:
+
+- `ExistingPayloadMode::ReencryptIfStale` compares the resource key lineage
+  (`rk_id`/`rk_epoch`) as well as key id, material fingerprint, schema version
+  and epoch, so a pure resource-key rotation re-wraps stored envelopes.
+- CKKS sidecar markers (`$qdrant_sec_vectors.<name>`) must be the only key of
+  their value; sibling keys are rejected instead of ignored.
+- Private HNSW/result ORAM commits require `new_epoch == old_epoch + 1` on the
+  SDK, in commit planning and signature validation, on the server session, and
+  in the collection stores.
+- Remap and padding leaves are caller-supplied uniform samples
+  (`sample_private_hnsw_oram_leaf`, `sample_private_result_oram_leaf`); the
+  prefetch and traversal batch planners take a padding source and emit
+  batches in canonical leaf order; result ORAM read planners pad leaf
+  collisions with dummy paths recorded in the plan instead of failing.
+- Append transactions never read or evict the new block's own initial leaf:
+  the HNSW insert consumes the next padding leaf and the result plan carries an
+  explicit `insert_eviction_leaf` bound into the attempt digest.
+- Commit writebacks are budgeted per session (one path per path read, at least
+  one fixed round, at most the tree); see the fixed-budget paragraph above.
+- Immutable manifests must leave at least one candidate window
+  (`path_batch_size` paths) after `max_neighbor_rewrites + 1` reserved paths.
+
+Server and consensus:
+
+- Raft membership gates use raft's own pending-configuration semantics
+  (`pending_conf_index > applied`) instead of comparing the field against zero,
+  which had rejected every membership change on a leader with a non-empty log.
+  After the private ORAM activation floor is installed, committed configuration
+  changes are applied (never halting consensus) and `RemovePeer` is allowed so a
+  dead peer can be dropped; `AddPeer` and learner promotion remain blocked until
+  the private ORAM roster is re-established, and `--reinit` is still refused.
+- Replicated ORAM writebacks classify the epoch CAS outcome: unresolved
+  proposals are re-proposed, only a definitive rejection aborts the prepared
+  journals, and a still-unresolved outcome is returned as a `Timeout` with the
+  prepared state retained for session recovery.
+- A crypto migration state of `disabled` (the initial state and the state after
+  a completed decrypt run) is inert: write plans use `effective_encryption()`
+  like reads, and startup/restore only reject in-flight migrations.
+- Encrypted MMR search caps `candidates_limit` by
+  `crypto.ckks_grouped_max_candidates`, keeps ciphertexts in memory only for the
+  retained MMR candidates, and scores each newly selected point against the
+  remaining candidates in batched bridge calls.
+- `update_vectors` on one encrypted vector re-verifies and carries forward the
+  point's other encrypted sidecar entries; `overwrite_payload` is refused on
+  collections with encrypted vector rules (like `clear_payload`) because it
+  would discard the reserved sidecar; replicas accept server-blind client CKKS
+  sidecar entries on the peer replay path after checking their binding.
+- Vault Transit wrapped resource keys (blob version 2) carry a SHA-256 of the
+  wrap AAD inside the Transit plaintext, so a blob wrapped for one scope cannot
+  be unwrapped under another even for non-derived Transit keys. Version 1 blobs
+  still open and log a warning; re-wrap them under the current master key.
+- Plan builds that call Vault/KMS or read material files run under
+  `block_in_place` when invoked from a multi-thread runtime; `fd` material
+  sources are rewound (or memoized for pipes) so a second plan build does not
+  read an empty secret.
+- The OpenFHE bridge waits up to five seconds for a busy worker before
+  failing; the on-disk CKKS sidecar graph cache is only read by tests.
+- Optimizer planning sums CKKS ciphertext sizes in place and caches the total
+  against the segment version.
+- Deleting a collection prunes its private ORAM consensus records (epochs,
+  session leases, layouts, external recoveries, mutation state and lease slot).
+- Internal replication handlers wait at most 30 seconds for the replication
+  lock and 30 seconds for an install-stream slot, returning a retryable
+  unavailability instead of parking indefinitely.
+
+Known remaining limitations:
+
+- A private ORAM mutation generation whose owner disappears before the
+  recovery capsules are ready cannot be reclaimed; an owner-eviction or early
+  abort certificate is still missing.
+- Terminal mutation archives, leaked staging directories and external recovery
+  uploads are not garbage collected.
+- Crypto migration completion is verified by point counts only.
+- The Raft snapshot "indeterminate" fence is armed on some side-effect-free
+  validation failures.

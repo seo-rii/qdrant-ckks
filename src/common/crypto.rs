@@ -284,6 +284,10 @@ const AWS_KMS_KEY_ID_REDACTED: &str = "aws-kms-key-id:[redacted]";
 const AWS_KMS_ENV_PREFIX_REDACTED: &str = "aws-kms-env-prefix:[redacted]";
 const VAULT_TRANSIT_SOURCE: &str = "vault_transit";
 const VAULT_TRANSIT_WRAP_ALGORITHM: &str = "vault-transit";
+/// Wrapped-key blob version whose Transit plaintext carries the scope binding below.
+const VAULT_TRANSIT_BOUND_BLOB_VERSION: u8 = 2;
+const VAULT_TRANSIT_BINDING_TAG: u8 = 0x02;
+const VAULT_TRANSIT_BINDING_DIGEST_LEN: usize = 32;
 const VAULT_TRANSIT_NONCE_SENTINEL_B64: &str = "dmF1bHQtdHJhbnNpdA";
 const RESOURCE_KEY_STATE_ACTIVE: &str = "active";
 const RESOURCE_KEY_STATE_RETIRED: &str = "retired";
@@ -1248,7 +1252,36 @@ pub(crate) fn payload_write_plan_for_collection_for_test(
     )
 }
 
+/// Runs a plan build (which may perform blocking Vault/KMS HTTP calls and file reads) without
+/// stalling the async runtime. `reqwest::blocking` drives its own runtime and panics when used
+/// from inside a tokio worker, so the call is moved off the worker with `block_in_place`
+/// whenever a multi-thread runtime is present.
+fn run_blocking_plan_build<T>(build: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(build)
+        }
+        _ => build(),
+    }
+}
+
 pub(crate) fn payload_write_plan_for_collection_with_crypto_id(
+    settings: &Settings,
+    collection_name: &str,
+    collection_crypto_id: &str,
+    params: &CollectionParams,
+) -> Result<Option<PayloadWritePlan>, PayloadWriteSetupError> {
+    run_blocking_plan_build(|| {
+        payload_write_plan_for_collection_with_crypto_id_inner(
+            settings,
+            collection_name,
+            collection_crypto_id,
+            params,
+        )
+    })
+}
+
+fn payload_write_plan_for_collection_with_crypto_id_inner(
     settings: &Settings,
     collection_name: &str,
     collection_crypto_id: &str,
@@ -1937,6 +1970,22 @@ impl VectorWritePlan {
 }
 
 pub(crate) fn vector_write_plan_for_collection_with_crypto_id(
+    settings: &Settings,
+    collection_name: &str,
+    collection_crypto_id: &str,
+    params: &CollectionParams,
+) -> Result<Option<VectorWritePlan>, StorageError> {
+    run_blocking_plan_build(|| {
+        vector_write_plan_for_collection_with_crypto_id_inner(
+            settings,
+            collection_name,
+            collection_crypto_id,
+            params,
+        )
+    })
+}
+
+fn vector_write_plan_for_collection_with_crypto_id_inner(
     settings: &Settings,
     collection_name: &str,
     collection_crypto_id: &str,
@@ -9074,6 +9123,38 @@ fn vault_transit_decrypt_request_body(
     })
 }
 
+/// Vault Transit only honours `context` for derived keys; for an ordinary key the server
+/// ignores it and a blob wrapped for one collection/key scope could be unwrapped under any
+/// other. The scope is therefore bound inside the plaintext handed to Transit: a tag, the
+/// SHA-256 of the wrap AAD, and the resource key. Unwrapping recomputes and compares the digest.
+fn vault_transit_bound_plaintext(rk_plaintext: &SecretKey, aad: &[u8]) -> Zeroizing<Vec<u8>> {
+    let mut bound = Zeroizing::new(Vec::with_capacity(
+        1 + VAULT_TRANSIT_BINDING_DIGEST_LEN + rk_plaintext.as_bytes().len(),
+    ));
+    bound.push(VAULT_TRANSIT_BINDING_TAG);
+    bound.extend_from_slice(Sha256::digest(aad).as_slice());
+    bound.extend_from_slice(rk_plaintext.as_bytes());
+    bound
+}
+
+fn vault_transit_unbind_plaintext(
+    plaintext: &[u8],
+    aad: &[u8],
+) -> Result<SecretKey, qdrant_sec::EncryptionError> {
+    let Some((tag, rest)) = plaintext.split_first() else {
+        return Err(qdrant_sec::EncryptionError::InvalidEncoding);
+    };
+    if *tag != VAULT_TRANSIT_BINDING_TAG || rest.len() <= VAULT_TRANSIT_BINDING_DIGEST_LEN {
+        return Err(qdrant_sec::EncryptionError::InvalidEncoding);
+    }
+    let (digest, resource_key) = rest.split_at(VAULT_TRANSIT_BINDING_DIGEST_LEN);
+    let expected = Sha256::digest(aad);
+    if ring::constant_time::verify_slices_are_equal(digest, expected.as_slice()).is_err() {
+        return Err(qdrant_sec::EncryptionError::OpenFailed);
+    }
+    SecretKey::try_from_slice(resource_key)
+}
+
 impl MasterKeyProvider for VaultTransitMasterKeyProvider {
     fn mk_id(&self) -> &str {
         &self.mk_id
@@ -9084,7 +9165,8 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
         rk_plaintext: &SecretKey,
         aad: &[u8],
     ) -> Result<WrappedKeyBlob, qdrant_sec::EncryptionError> {
-        let plaintext = Zeroizing::new(BASE64.encode(rk_plaintext.as_bytes()));
+        let bound = vault_transit_bound_plaintext(rk_plaintext, aad);
+        let plaintext = Zeroizing::new(BASE64.encode(bound.as_slice()));
         let context = BASE64.encode(aad);
         let body = vault_transit_encrypt_request_body(plaintext.as_str(), &context)?;
         let response = self
@@ -9106,7 +9188,7 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
             .and_then(Value::as_str)
             .ok_or(qdrant_sec::EncryptionError::InvalidEncoding)?;
         Ok(WrappedKeyBlob {
-            version: 1,
+            version: VAULT_TRANSIT_BOUND_BLOB_VERSION,
             algorithm: VAULT_TRANSIT_WRAP_ALGORITHM.to_string(),
             mk_id: self.mk_id.clone(),
             nonce: VAULT_TRANSIT_NONCE_SENTINEL_B64.to_string(),
@@ -9119,7 +9201,7 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
         wrapped: &WrappedKeyBlob,
         aad: &[u8],
     ) -> Result<SecretKey, qdrant_sec::EncryptionError> {
-        if wrapped.version != 1 {
+        if !matches!(wrapped.version, 1 | VAULT_TRANSIT_BOUND_BLOB_VERSION) {
             return Err(qdrant_sec::EncryptionError::UnsupportedVersion(
                 wrapped.version,
             ));
@@ -9159,6 +9241,14 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
             BASE64
                 .decode(plaintext.as_bytes())
                 .map_err(|_| qdrant_sec::EncryptionError::InvalidEncoding)?,
+        );
+        if wrapped.version == VAULT_TRANSIT_BOUND_BLOB_VERSION {
+            return vault_transit_unbind_plaintext(plaintext.as_slice(), aad);
+        }
+        // Version 1 blobs predate the in-plaintext scope binding and rely on Transit `context`
+        // alone; keep opening them but ask operators to re-wrap so the binding takes effect.
+        log::warn!(
+            "Vault Transit wrapped resource key is not scope-bound (version 1); re-wrap it under the current master key to bind it to its collection scope"
         );
         SecretKey::try_from_slice(plaintext.as_slice())
     }
@@ -16603,6 +16693,25 @@ mod tests {
                 .unwrap()
                 .contains("\"plaintext\"")
         );
+    }
+
+    #[test]
+    fn vault_transit_plaintext_binding_pins_the_wrap_scope() {
+        let resource_key = SecretKey::from_bytes([91u8; 32]);
+        let aad = b"collection:docs/payload:body";
+        let bound = vault_transit_bound_plaintext(&resource_key, aad);
+        assert_eq!(bound.len(), 1 + 32 + 32);
+        assert_eq!(bound[0], VAULT_TRANSIT_BINDING_TAG);
+        assert_eq!(&bound[33..], resource_key.as_bytes());
+
+        let unbound = vault_transit_unbind_plaintext(bound.as_slice(), aad).unwrap();
+        assert_eq!(unbound.as_bytes(), resource_key.as_bytes());
+        // A different scope, a tampered tag, or a bare key never unbind.
+        assert!(vault_transit_unbind_plaintext(bound.as_slice(), b"collection:other").is_err());
+        let mut tampered = bound.clone();
+        tampered[0] = 0x01;
+        assert!(vault_transit_unbind_plaintext(tampered.as_slice(), aad).is_err());
+        assert!(vault_transit_unbind_plaintext(resource_key.as_bytes(), aad).is_err());
     }
 
     #[test]

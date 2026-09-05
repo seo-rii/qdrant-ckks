@@ -4803,6 +4803,52 @@ impl Persistent {
         }
     }
 
+    /// Removes every private ORAM consensus record owned by a deleted collection.
+    ///
+    /// The maps are keyed by digests of the collection's stable crypto id, which a re-created
+    /// collection never reuses, so without this every create/delete cycle of an encrypted
+    /// collection leaked a permanent set of entries into raft_state.json and every snapshot.
+    pub fn prune_private_oram_collection_state(
+        &mut self,
+        index_keys: &[PrivateOramEpochKey],
+    ) -> Result<bool, StorageError> {
+        let Some(collection_id) = index_keys.first().map(|key| key.collection_id.clone()) else {
+            return Ok(false);
+        };
+        let mut removed = false;
+        for key in index_keys {
+            let digest = private_oram_epoch_key_digest(key);
+            removed |= self.private_oram_epochs.remove(&digest).is_some();
+            removed |= self.private_oram_session_leases.remove(&digest).is_some();
+        }
+        let layout_digest = private_oram_layout_key_digest(&PrivateOramLayoutKey {
+            collection_id: collection_id.clone(),
+        });
+        removed |= self.private_oram_layouts.remove(&layout_digest).is_some();
+        let recovery_digest =
+            private_oram_external_recovery_key_digest(&PrivateOramExternalRecoveryKey {
+                collection_id: collection_id.clone(),
+            });
+        removed |= self
+            .private_oram_external_recoveries
+            .remove(&recovery_digest)
+            .is_some();
+        let mutation_digest =
+            private_oram_mutation_key_digest(&PrivateOramMutationKey { collection_id });
+        removed |= self
+            .private_oram_mutation_states
+            .remove(&mutation_digest)
+            .is_some();
+        removed |= self
+            .private_oram_mutation_lease_slots
+            .remove(&mutation_digest)
+            .is_some();
+        if removed {
+            self.save()?;
+        }
+        Ok(removed)
+    }
+
     pub fn save(&self) -> Result<(), StorageError> {
         self.save_classified()
             .map_err(PersistentSaveError::into_storage_error)

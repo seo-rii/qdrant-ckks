@@ -518,6 +518,20 @@ impl CollectionContainer for TableOfContent {
         self.apply_collections_snapshot_inner(data, Some(private_oram))
     }
 
+    fn private_oram_index_keys_for_collection(
+        &self,
+        collection_name: &str,
+    ) -> Result<Vec<crate::content_manager::consensus_ops::PrivateOramEpochKey>, StorageError> {
+        self.general_runtime.block_on(async {
+            let collection = self.collections.read().await.get(collection_name).cloned();
+            let Some(collection) = collection else {
+                return Ok(Vec::new());
+            };
+            let config = collection.config_snapshot().await;
+            private_oram_index_keys_for_config(&config, collection_name)
+        })
+    }
+
     fn remove_peer(&self, peer_id: PeerId) -> Result<(), StorageError> {
         self.general_runtime.block_on(async {
             // Validation:

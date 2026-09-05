@@ -2949,7 +2949,22 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         let mut cursor_disposition = NormalEntryCursorDisposition::NeedsSeparateCommit;
         let result = match operation {
             ConsensusOperations::CollectionMeta(operation) => {
-                self.toc.perform_collection_meta_op(*operation)
+                // Capture the private ORAM keys of a collection about to be deleted so its
+                // consensus records can be pruned once the deletion applied.
+                let prune_keys = match operation.as_ref() {
+                    crate::content_manager::collection_meta_ops::CollectionMetaOperations::DeleteCollection(delete) => self
+                        .toc
+                        .private_oram_index_keys_for_collection(&delete.0)
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
+                let applied = self.toc.perform_collection_meta_op(*operation);
+                if applied.is_ok() && !prune_keys.is_empty() {
+                    self.persistent
+                        .write()
+                        .prune_private_oram_collection_state(&prune_keys)?;
+                }
+                applied
             }
 
             ConsensusOperations::AddPeer { .. } | ConsensusOperations::RemovePeer(_) => {

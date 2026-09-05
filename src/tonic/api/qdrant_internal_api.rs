@@ -140,6 +140,10 @@ fn private_oram_install_chunk_status(error: PrivateOramInstallChunkError) -> Sta
 const PRIVATE_ORAM_INSTALL_STREAM_CONCURRENCY: usize = 1;
 const PRIVATE_ORAM_INSTALL_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// How long a caller waits for the single install-stream slot before being told to retry.
+/// Waiting the whole stream timeout let unauthenticated internal-port callers park every
+/// further install for minutes behind one slow stream.
+const PRIVATE_ORAM_INSTALL_STREAM_SLOT_WAIT: Duration = Duration::from_secs(30);
 const PRIVATE_ORAM_ACTIVATION_ACK_MAX_JSON_BYTES: usize = 64 * 1024;
 const PRIVATE_ORAM_ACTIVATION_ACK_CACHE_MAX_ENTRIES: usize = 4096;
 const PRIVATE_ORAM_ACTIVATION_ACK_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
@@ -3620,7 +3624,7 @@ impl QdrantInternal for QdrantInternalService {
             Status::failed_precondition("private ORAM mutation V2 is not configured")
         })?;
         let _stream_slot = timeout(
-            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+            PRIVATE_ORAM_INSTALL_STREAM_SLOT_WAIT,
             self.private_oram_install_stream_slots.acquire(),
         )
         .await
@@ -3796,7 +3800,7 @@ impl QdrantInternal for QdrantInternalService {
             Status::failed_precondition("private ORAM mutation V2 is not configured")
         })?;
         let _stream_slot = timeout(
-            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+            PRIVATE_ORAM_INSTALL_STREAM_SLOT_WAIT,
             self.private_oram_install_stream_slots.acquire(),
         )
         .await
@@ -4552,7 +4556,7 @@ impl QdrantInternal for QdrantInternalService {
         request: Request<tonic::Streaming<PrivateOramInstallChunk>>,
     ) -> Result<Response<InstallPrivateOramIndexResponse>, Status> {
         let _stream_slot = timeout(
-            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+            PRIVATE_ORAM_INSTALL_STREAM_SLOT_WAIT,
             self.private_oram_install_stream_slots.acquire(),
         )
         .await
@@ -4769,7 +4773,7 @@ impl QdrantInternal for QdrantInternalService {
         request: Request<tonic::Streaming<PrivateOramInstallChunk>>,
     ) -> Result<Response<InstallPrivateOramLiveReplicaResponse>, Status> {
         let _stream_slot = timeout(
-            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+            PRIVATE_ORAM_INSTALL_STREAM_SLOT_WAIT,
             self.private_oram_install_stream_slots.acquire(),
         )
         .await
