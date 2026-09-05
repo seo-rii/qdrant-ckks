@@ -893,6 +893,16 @@ impl AeadKeyring {
         self.active.material_fingerprint()
     }
 
+    /// Resource key id bound to the active cipher, if resource key metadata was attached.
+    pub fn resource_key_id(&self) -> Option<&str> {
+        self.active.resource_key_id()
+    }
+
+    /// Resource key epoch bound to the active cipher, if resource key metadata was attached.
+    pub fn resource_key_epoch(&self) -> Option<u64> {
+        self.active.resource_key_epoch()
+    }
+
     pub fn encrypt(
         &self,
         plaintext: &[u8],

@@ -172,7 +172,7 @@ pub enum PrivateHnswClientError {
     InvalidMerkleRoot,
     #[error("private HNSW ORAM Merkle root mismatch")]
     MerkleRootMismatch,
-    #[error("private HNSW ORAM commit new_epoch must be greater than old_epoch")]
+    #[error("private HNSW ORAM commit new_epoch must be exactly old_epoch + 1")]
     InvalidCommitEpoch,
     #[error("private HNSW ORAM commit must update at least one bucket")]
     EmptyCommit,
@@ -1822,6 +1822,37 @@ pub fn private_hnsw_oram_fixed_writeback_bucket_budget(
     )
 }
 
+/// Draws a uniformly random value in `0..leaf_count` from `rng` using rejection sampling.
+pub(crate) fn sample_uniform_leaf(rng: &dyn SecureRandom, leaf_count: u64) -> Option<u64> {
+    if leaf_count == 0 {
+        return None;
+    }
+    // Largest multiple of `leaf_count` that fits in u64; values at or above it are rejected so
+    // the modulo reduction is exact for every leaf count, not only powers of two.
+    let zone = u64::MAX - (u64::MAX % leaf_count);
+    loop {
+        let mut bytes = [0u8; 8];
+        rng.fill(&mut bytes).ok()?;
+        let value = u64::from_be_bytes(bytes);
+        if value < zone {
+            return Some(value % leaf_count);
+        }
+    }
+}
+
+/// Samples a uniformly random Path ORAM leaf for a remap, padding, or dummy access.
+///
+/// Every remap leaf handed to [`access_private_hnsw_oram_path`] and every padding/dummy leaf
+/// fed into a fixed-budget plan MUST be an independent uniform sample such as this one. The
+/// server observes the sequence of accessed paths, so a predictable schedule (for example a
+/// counter, or reusing the previous leaf) lets it link consecutive accesses and defeats the
+/// ORAM obliviousness guarantee.
+pub fn sample_private_hnsw_oram_leaf(tree_height: u32) -> Result<u64, PrivateHnswClientError> {
+    let leaf_count = private_hnsw_oram_leaf_count(tree_height)?;
+    sample_uniform_leaf(&SystemRandom::new(), leaf_count)
+        .ok_or_else(|| EncryptionError::RandomFailure.into())
+}
+
 pub fn encode_private_hnsw_oram_leaf_label(
     leaf: u64,
     tree_height: u32,
@@ -2886,7 +2917,7 @@ pub fn refresh_private_hnsw_oram_manifest_for_commit(
     if manifest.index_epoch != plan.old_epoch || manifest.root_hash != plan.old_root_hash {
         return Err(PrivateHnswClientError::ManifestCommitMismatch);
     }
-    if plan.new_epoch <= plan.old_epoch {
+    if Some(plan.new_epoch) != plan.old_epoch.checked_add(1) {
         return Err(PrivateHnswClientError::InvalidCommitEpoch);
     }
     decode_merkle_root(&plan.new_root_hash)?;
@@ -2907,6 +2938,12 @@ pub fn sign_private_hnsw_oram_manifest_refresh(
     Ok((refreshed, signature))
 }
 
+/// Reads the target node's current path into the stash, remaps the node to `remap_leaf`, and
+/// evicts the loaded path.
+///
+/// `remap_leaf` MUST be a fresh, uniformly random leaf (see [`sample_private_hnsw_oram_leaf`]).
+/// Only the range is validated here; the obliviousness of the ORAM depends entirely on the
+/// caller never using a predictable remap schedule.
 pub fn access_private_hnsw_oram_path(
     state: &mut PrivateHnswOramClientState,
     config: PrivateHnswOramClientConfig,
@@ -3594,7 +3631,7 @@ where
     WriteBack: FnMut(&[PrivateHnswOramBucket]) -> Result<(), PrivateHnswClientError>,
     NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
 {
-    if writeback_epoch <= expected_epoch {
+    if Some(writeback_epoch) != expected_epoch.checked_add(1) {
         return Err(PrivateHnswClientError::InvalidCommitEpoch);
     }
     validate_verified_hnsw_search_context(config, expected_root_hash, expected_bucket_count)?;
@@ -3666,7 +3703,7 @@ where
     WriteBack: FnMut(&[PrivateHnswOramBucket]) -> Result<(), PrivateHnswClientError>,
     NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
 {
-    if writeback_epoch <= expected_epoch {
+    if Some(writeback_epoch) != expected_epoch.checked_add(1) {
         return Err(PrivateHnswClientError::InvalidCommitEpoch);
     }
     validate_verified_hnsw_search_context(config, expected_root_hash, expected_bucket_count)?;
@@ -3877,7 +3914,7 @@ pub fn plan_private_hnsw_oram_commit(
     current_leaf_commitments: &[String],
     updated_buckets: &[PrivateHnswOramBucket],
 ) -> Result<PrivateHnswClientCommitPlan, PrivateHnswClientError> {
-    if new_epoch <= old_epoch {
+    if Some(new_epoch) != old_epoch.checked_add(1) {
         return Err(PrivateHnswClientError::InvalidCommitEpoch);
     }
     if updated_buckets.is_empty() {
@@ -3980,7 +4017,7 @@ pub fn plan_private_hnsw_oram_commit_for_manifest_context(
     if current_leaf_commitments.len() != manifest_bucket_count {
         return Err(PrivateHnswClientError::BucketCountMismatch);
     }
-    if new_epoch <= old_epoch {
+    if Some(new_epoch) != old_epoch.checked_add(1) {
         return Err(PrivateHnswClientError::InvalidCommitEpoch);
     }
     if updated_buckets.is_empty() {
@@ -4037,7 +4074,7 @@ pub fn sign_private_hnsw_oram_commit(
             "updated_buckets",
         ));
     }
-    if plan.new_epoch <= plan.old_epoch {
+    if Some(plan.new_epoch) != plan.old_epoch.checked_add(1) {
         return Err(PrivateHnswClientError::InvalidCommitEpoch);
     }
     decode_merkle_root(&plan.old_root_hash)?;
@@ -5794,6 +5831,28 @@ mod tests {
     }
 
     #[test]
+    fn remap_leaf_sampler_stays_in_range_and_is_not_a_fixed_schedule() {
+        let leaf_count = private_hnsw_oram_leaf_count(10).unwrap();
+        let samples = (0..256)
+            .map(|_| sample_private_hnsw_oram_leaf(10).unwrap())
+            .collect::<Vec<_>>();
+        assert!(samples.iter().all(|leaf| *leaf < leaf_count));
+        assert!(samples.iter().collect::<BTreeSet<_>>().len() > 16);
+        assert!(
+            samples
+                .windows(2)
+                .any(|pair| pair[1] != (pair[0] + 1) % leaf_count)
+        );
+        assert_eq!(sample_uniform_leaf(&SystemRandom::new(), 0), None);
+        assert_eq!(sample_uniform_leaf(&SystemRandom::new(), 1), Some(0));
+        assert_eq!(
+            sample_private_hnsw_oram_leaf(0),
+            Err(PrivateHnswClientError::InvalidTreeHeight)
+        );
+        assert!(sample_private_hnsw_oram_leaf(1).unwrap() < 2);
+    }
+
+    #[test]
     fn speculative_prefetch_plan_deduplicates_positions_and_pads_paths() {
         let config = oram_config();
         let state = PrivateHnswOramClientState::with_position_map(
@@ -7487,10 +7546,12 @@ mod tests {
         .unwrap();
 
         let second_bucket = fixture_context_commit_bucket(1, 44, 10, &manifest);
+        // The signed manifest still pins the pre-commit root, so planning against it fails on
+        // the root even with the correct next epoch.
         assert_eq!(
             plan_private_hnsw_oram_commit_for_manifest(
                 &manifest,
-                44,
+                43,
                 &first_plan.leaf_commitments,
                 std::slice::from_ref(&second_bucket),
             ),

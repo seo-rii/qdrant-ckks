@@ -1800,3 +1800,85 @@ proptest! {
         prop_assert_eq!(payload.get("body"), Some(&json!(body)));
     }
 }
+
+#[test]
+fn reencrypt_if_stale_rewraps_envelopes_after_resource_key_rotation() {
+    let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+    let old_key = SecretKey::from_bytes([11u8; 32]);
+    let new_key = SecretKey::from_bytes([12u8; 32]);
+    let old_encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+        "docs",
+        "tenant-a:payload",
+        &old_key,
+        "tenant-a/payload@v1",
+        "tenant-a/payload-rk",
+        1,
+    )
+    .unwrap();
+    // Same key_id, material fingerprint, schema version and encryption epoch: only the
+    // resource key lineage (rk_epoch) moved forward.
+    let new_encryptor = PayloadTextEncryptor::new_from_resource_key_with_metadata(
+        "docs",
+        "tenant-a:payload",
+        &new_key,
+        "tenant-a/payload@v1",
+        "tenant-a/payload-rk",
+        2,
+    )
+    .unwrap()
+    .with_retired_resource_key_metadata(
+        "tenant-a:payload",
+        &old_key,
+        "tenant-a/payload@v1",
+        "tenant-a/payload-rk",
+        1,
+    )
+    .unwrap();
+
+    let mut payload = object(json!({ "body": "rotate this" }));
+    old_encryptor
+        .encrypt_selected_fields("point-1", &mut payload, &policy)
+        .unwrap();
+    assert!(
+        serde_json::to_string(&payload)
+            .unwrap()
+            .contains("\"rk_epoch\":1")
+    );
+
+    assert_eq!(
+        new_encryptor
+            .encrypt_selected_fields_with_mode(
+                "point-1",
+                &mut payload,
+                &policy,
+                ExistingPayloadMode::ReencryptIfStale,
+            )
+            .unwrap(),
+        1,
+        "an envelope on a retired resource key epoch must be re-wrapped",
+    );
+    let rewrapped = serde_json::to_string(&payload).unwrap();
+    assert!(rewrapped.contains("\"rk_epoch\":2"));
+    assert!(!rewrapped.contains("\"rk_epoch\":1"));
+    assert!(!rewrapped.contains("rotate this"));
+
+    assert_eq!(
+        new_encryptor
+            .encrypt_selected_fields_with_mode(
+                "point-1",
+                &mut payload,
+                &policy,
+                ExistingPayloadMode::ReencryptIfStale,
+            )
+            .unwrap(),
+        0,
+        "an envelope already on the active resource key epoch is fresh",
+    );
+    assert_eq!(
+        new_encryptor
+            .decrypt_selected_fields("point-1", &mut payload, &policy)
+            .unwrap(),
+        1,
+    );
+    assert_eq!(payload.get("body"), Some(&json!("rotate this")));
+}

@@ -307,7 +307,9 @@ fn run_plaintext_searches(
     let mut state = build.state.clone();
     let store = RefCell::new(build.buckets.clone());
     let leaf_count = private_hnsw_oram_leaf_count(config.tree_height).unwrap();
-    let mut next_leaf = 0u64;
+    // Remap leaves must be independent uniform samples; a deterministic generator keeps the
+    // recall gate reproducible while still exercising a random remap schedule.
+    let mut leaf_rng = SplitMix64::new(0x5eed_1eaf);
 
     let results = queries
         .iter()
@@ -320,11 +322,7 @@ fn run_plaintext_searches(
                 params,
                 |leaf| read_plaintext_path(&store, config, leaf),
                 |writeback_buckets| write_plaintext_buckets(&store, writeback_buckets),
-                || {
-                    let leaf = next_leaf;
-                    next_leaf = (next_leaf + 1) % leaf_count;
-                    Ok(leaf)
-                },
+                || Ok(leaf_rng.next_u64() % leaf_count),
             )
             .unwrap();
             assert_eq!(result.completed_steps, case.fixed_steps);
@@ -350,7 +348,9 @@ fn run_encrypted_searches(
     let mut state = build.state.clone();
     let store = RefCell::new(encrypted.buckets);
     let leaf_count = private_hnsw_oram_leaf_count(config.tree_height).unwrap();
-    let mut next_leaf = 0u64;
+    // Remap leaves must be independent uniform samples; a deterministic generator keeps the
+    // recall gate reproducible while still exercising a random remap schedule.
+    let mut leaf_rng = SplitMix64::new(0x5eed_1eaf);
 
     let results = queries
         .iter()
@@ -367,11 +367,7 @@ fn run_encrypted_searches(
                 params,
                 |leaf| read_encrypted_path(&store, config, leaf),
                 |writeback_buckets| write_encrypted_buckets(&store, writeback_buckets),
-                || {
-                    let leaf = next_leaf;
-                    next_leaf = (next_leaf + 1) % leaf_count;
-                    Ok(leaf)
-                },
+                || Ok(leaf_rng.next_u64() % leaf_count),
             )
             .unwrap();
             assert_eq!(result.completed_steps, case.fixed_steps);

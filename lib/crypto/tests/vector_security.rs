@@ -3528,3 +3528,57 @@ fn vector_envelope_can_bind_to_stable_collection_identity() {
         Err(CkksError::InvalidContext(_)),
     ));
 }
+
+#[test]
+fn ckks_sidecar_markers_reject_sibling_keys() {
+    let encryptor = encryptor()
+        .with_collection_identity("collection-uuid-1")
+        .unwrap();
+    let material = public_material();
+    let (value, _) = encryptor
+        .encrypt_sidecar_payload_value("docs", "point-1", &material, &[1.0, 2.0])
+        .unwrap();
+    let mut with_sibling = value.clone();
+    with_sibling
+        .as_object_mut()
+        .unwrap()
+        .insert("plaintext".to_string(), json!([1.0, 2.0]));
+    assert!(matches!(
+        ckks_vector_sidecar_envelope_key(&with_sibling, "collection-uuid-1", "point-1", "embedding"),
+        Err(CkksError::MalformedEnvelope(message)) if message.contains("only key")
+    ));
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let public_key = key_pair.public_key().as_ref().to_vec();
+    let mut client_value = signed_client_ckks_vector_payload(&key_pair, "tenant-a/signing-v1");
+    client_value
+        .as_object_mut()
+        .unwrap()
+        .insert("plaintext".to_string(), json!("leaked"));
+    let err = validate_client_ckks_vector_payload_value_for_runtime(
+        &client_value,
+        ClientCkksVectorValidationContext {
+            collection_id: "collection-uuid",
+            point_id: "point-1",
+            vector_name: "embedding",
+            expected_key_id: "tenant-a:docs",
+            expected_rk_id: "tenant-a/vector-rk",
+            min_rk_epoch: 3,
+            max_rk_epoch: 3,
+            expected_context_digest: &public_material()
+                .digest_for(&CkksParameters::openfhe_default_128_bit()),
+            max_slots: CkksParameters::openfhe_default_128_bit().batch_size as usize,
+            signature_verification: ClientCkksVectorSignatureVerification {
+                expected_key_id: "tenant-a/signing-v1",
+                public_key: &public_key,
+            },
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, CkksError::MalformedEnvelope(ref message) if message.contains("only key")),
+        "unexpected error: {err:?}"
+    );
+}

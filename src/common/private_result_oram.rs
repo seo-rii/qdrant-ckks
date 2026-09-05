@@ -1757,9 +1757,9 @@ pub(crate) async fn do_stage_private_result_oram_owner_writeback(
                         "private result ORAM commit old epoch/root does not match active session",
                     ));
                 }
-                if new_epoch <= old_epoch {
+                if Some(new_epoch) != old_epoch.checked_add(1) {
                     return Err(StorageError::bad_request(
-                        "private result ORAM commit new_epoch must be greater than old_epoch",
+                        "private result ORAM commit new_epoch must be exactly old_epoch + 1",
                     ));
                 }
                 let max_updated_buckets = max_updated_bucket_count(session)?;
@@ -1907,9 +1907,9 @@ pub async fn do_commit_private_result_oram_buckets(
                     "private result ORAM commit old epoch/root does not match active session",
                 ));
             }
-            if new_epoch <= old_epoch {
+            if Some(new_epoch) != old_epoch.checked_add(1) {
                 return Err(StorageError::bad_request(
-                    "private result ORAM commit new_epoch must be greater than old_epoch",
+                    "private result ORAM commit new_epoch must be exactly old_epoch + 1",
                 ));
             }
             let max_updated_buckets = max_updated_bucket_count(session)?;

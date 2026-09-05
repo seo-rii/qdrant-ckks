@@ -14,8 +14,9 @@ use qdrant_sec::{
     plan_private_hnsw_oram_graph_traversal_path_batch_with_stats,
     plan_private_hnsw_oram_neighbor_clustered_leaves, plan_private_hnsw_oram_speculative_prefetch,
     private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_leaf_count,
-    seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted,
-    search_private_hnsw_oram_plaintext, search_private_hnsw_oram_plaintext_with_cache,
+    sample_private_hnsw_oram_leaf, seal_private_hnsw_oram_plaintext_index,
+    search_private_hnsw_oram_encrypted, search_private_hnsw_oram_plaintext,
+    search_private_hnsw_oram_plaintext_with_cache,
 };
 
 const POINT_COUNT: usize = 64;
@@ -112,8 +113,6 @@ impl PlaintextSearchFixture {
         let params = self.params;
         let cache = self.cache.clone();
         let store = RefCell::new(self.buckets.clone());
-        let leaf_count = private_hnsw_oram_leaf_count(config.tree_height).unwrap();
-        let mut next_leaf = 0;
         let result = if let Some(cache) = cache.as_ref() {
             search_private_hnsw_oram_plaintext_with_cache(
                 &mut self.state,
@@ -143,11 +142,7 @@ impl PlaintextSearchFixture {
                     }
                     Ok(())
                 },
-                || {
-                    let leaf = next_leaf;
-                    next_leaf = (next_leaf + 1) % leaf_count;
-                    Ok(leaf)
-                },
+                || sample_private_hnsw_oram_leaf(config.tree_height),
             )
         } else {
             search_private_hnsw_oram_plaintext(
@@ -177,11 +172,7 @@ impl PlaintextSearchFixture {
                     }
                     Ok(())
                 },
-                || {
-                    let leaf = next_leaf;
-                    next_leaf = (next_leaf + 1) % leaf_count;
-                    Ok(leaf)
-                },
+                || sample_private_hnsw_oram_leaf(config.tree_height),
             )
         }
         .unwrap();
@@ -252,8 +243,6 @@ impl EncryptedSearchFixture {
         let query = self.query.clone();
         let params = self.params;
         let store = RefCell::new(self.buckets.clone());
-        let leaf_count = private_hnsw_oram_leaf_count(config.tree_height).unwrap();
-        let mut next_leaf = 0;
         let result = search_private_hnsw_oram_encrypted(
             &self.keys,
             self.base_context,
@@ -284,11 +273,7 @@ impl EncryptedSearchFixture {
                 }
                 Ok(())
             },
-            || {
-                let leaf = next_leaf;
-                next_leaf = (next_leaf + 1) % leaf_count;
-                Ok(leaf)
-            },
+            || sample_private_hnsw_oram_leaf(config.tree_height),
         )
         .unwrap();
         let metrics = result.access_metrics(&params);

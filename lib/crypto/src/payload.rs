@@ -786,11 +786,18 @@ impl PayloadTextEncryptor {
                         return Err(PayloadEncryptionError::AlreadyEncrypted(field.clone()));
                     }
                     ExistingPayloadMode::ReencryptIfStale => {
+                        // Freshness must cover the resource key lineage as well: a pure
+                        // resource-key rotation keeps key_id and material fingerprint but
+                        // changes rk_id/rk_epoch, and those envelopes must be re-wrapped.
                         if existing_envelope.schema_version == self.crypto_schema_version
                             && existing_envelope.encryption_epoch == self.encryption_epoch
                             && existing_envelope.envelope.key_id == self.keyring.key_id()
                             && existing_envelope.envelope.material_fingerprint
                                 == self.keyring.material_fingerprint()
+                            && existing_envelope.envelope.rk_id
+                                == self.keyring.resource_key_id().unwrap_or_default()
+                            && existing_envelope.envelope.rk_epoch
+                                == self.keyring.resource_key_epoch()
                         {
                             continue;
                         }

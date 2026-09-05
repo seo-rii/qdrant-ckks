@@ -1538,6 +1538,16 @@ fn private_result_oram_path_len(tree_height: u32) -> Result<usize, PrivateResult
         .ok_or(PrivateResultOramError::InvalidFetchPlanField("tree_height"))
 }
 
+/// Samples a uniformly random result ORAM leaf for a remap or padding access.
+///
+/// Every remap leaf passed to the result ORAM access/fetch helpers MUST be an independent uniform
+/// sample; a predictable schedule lets the server link consecutive payload fetches.
+pub fn sample_private_result_oram_leaf(tree_height: u32) -> Result<u64, PrivateResultOramError> {
+    let leaf_count = private_result_oram_leaf_count(tree_height)?;
+    crate::private_hnsw_client::sample_uniform_leaf(&ring::rand::SystemRandom::new(), leaf_count)
+        .ok_or_else(|| EncryptionError::RandomFailure.into())
+}
+
 pub fn private_result_oram_fixed_writeback_bucket_budget(
     oram: &OramParams,
 ) -> Result<usize, PrivateResultOramError> {
@@ -2400,7 +2410,7 @@ where
     NextLeaf: FnMut() -> Result<u64, PrivateResultOramError>,
 {
     validate_private_result_oram_client_config(config)?;
-    if writeback_epoch <= expected_epoch {
+    if Some(writeback_epoch) != expected_epoch.checked_add(1) {
         return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
     }
     if payload_fetch_tokens.is_empty() {
@@ -2791,7 +2801,7 @@ pub fn sign_private_result_oram_commit(
     if u32::try_from(plan.updated_buckets.len()).is_err() {
         return Err(PrivateResultOramError::InvalidCommitSignature);
     }
-    if plan.new_epoch <= plan.old_epoch {
+    if Some(plan.new_epoch) != plan.old_epoch.checked_add(1) {
         return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
     }
     decode_base64url_32(&plan.old_root_hash, "old_root_hash")?;
@@ -3088,7 +3098,7 @@ pub fn refresh_private_result_oram_manifest_for_commit(
     if manifest.index_epoch != plan.old_epoch || manifest.root_hash != plan.old_root_hash {
         return Err(PrivateResultOramError::ManifestCommitMismatch);
     }
-    if plan.new_epoch <= plan.old_epoch {
+    if Some(plan.new_epoch) != plan.old_epoch.checked_add(1) {
         return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
     }
     decode_base64url_32(&plan.new_root_hash, "root_hash")?;
@@ -3220,7 +3230,7 @@ fn validate_private_result_oram_commit_signature_shape(
     if u32::try_from(input.updated_buckets.len()).is_err() {
         return Err(PrivateResultOramError::InvalidCommitSignature);
     }
-    if input.new_epoch <= input.old_epoch {
+    if Some(input.new_epoch) != input.old_epoch.checked_add(1) {
         return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
     }
     decode_base64url_32(input.old_root_hash, "old_root_hash")?;
@@ -3509,7 +3519,7 @@ pub fn plan_private_result_oram_commit(
     current_leaf_commitments: &[String],
     updated_buckets: &[PrivateResultOramBucket],
 ) -> Result<PrivateResultOramCommitPlan, PrivateResultOramError> {
-    if new_epoch <= old_epoch {
+    if Some(new_epoch) != old_epoch.checked_add(1) {
         return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
     }
     if updated_buckets.is_empty() {
@@ -3611,7 +3621,7 @@ pub fn plan_private_result_oram_commit_for_manifest_context(
     if current_leaf_commitments.len() != manifest_bucket_count {
         return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
     }
-    if new_epoch <= old_epoch {
+    if Some(new_epoch) != old_epoch.checked_add(1) {
         return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
     }
     if updated_buckets.is_empty() {
@@ -8622,7 +8632,7 @@ mod tests {
         assert_eq!(
             plan_private_result_oram_commit_for_manifest(
                 &manifest,
-                44,
+                43,
                 &first_plan.leaf_commitments,
                 std::slice::from_ref(&second_bucket),
             ),
@@ -9475,6 +9485,7 @@ mod tests {
         );
 
         let tampered = PrivateResultOramCommitSignatureInput {
+            old_epoch: 43,
             new_epoch: 44,
             ..input
         };

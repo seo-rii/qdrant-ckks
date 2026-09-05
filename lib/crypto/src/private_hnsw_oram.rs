@@ -804,7 +804,7 @@ pub fn plan_private_hnsw_oram_commit(
     current_leaf_commitments: &[String],
     updated_buckets: &[PrivateHnswOramBucket],
 ) -> Result<PrivateHnswOramCommitPlan, PrivateHnswOramError> {
-    if new_epoch <= old_epoch {
+    if Some(new_epoch) != old_epoch.checked_add(1) {
         return Err(PrivateHnswOramError::InvalidManifestField("new_epoch"));
     }
     if updated_buckets.is_empty() {
@@ -904,7 +904,7 @@ pub fn plan_private_hnsw_oram_commit_for_manifest_context(
     if current_leaf_commitments.len() != manifest_bucket_count {
         return Err(PrivateHnswOramError::InvalidManifestField("bucket_count"));
     }
-    if new_epoch <= old_epoch {
+    if Some(new_epoch) != old_epoch.checked_add(1) {
         return Err(PrivateHnswOramError::InvalidManifestField("new_epoch"));
     }
     if updated_buckets.is_empty() {
@@ -965,7 +965,7 @@ pub fn refresh_private_hnsw_oram_manifest_for_commit(
     if manifest.index_epoch != plan.old_epoch || manifest.root_hash != plan.old_root_hash {
         return Err(PrivateHnswOramError::ManifestCommitMismatch);
     }
-    if plan.new_epoch <= plan.old_epoch {
+    if Some(plan.new_epoch) != plan.old_epoch.checked_add(1) {
         return Err(PrivateHnswOramError::InvalidManifestField("new_epoch"));
     }
     decode_base64url_32(&plan.new_root_hash, "root_hash")?;
@@ -1200,7 +1200,7 @@ fn validate_private_hnsw_oram_commit_signature_shape(
     if u32::try_from(input.updated_buckets.len()).is_err() {
         return Err(PrivateHnswOramError::InvalidCommitSignature);
     }
-    if input.new_epoch <= input.old_epoch {
+    if Some(input.new_epoch) != input.old_epoch.checked_add(1) {
         return Err(PrivateHnswOramError::InvalidManifestField("new_epoch"));
     }
     decode_base64url_32(input.old_root_hash, "old_root_hash")?;
@@ -3870,6 +3870,7 @@ mod tests {
         );
 
         let tampered = PrivateHnswOramCommitSignatureInput {
+            old_epoch: 43,
             new_epoch: 44,
             ..input
         };

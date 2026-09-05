@@ -2958,6 +2958,13 @@ non-directory or symlinked store, and stale existing store state fail before
 mutation. The historical transfer preinstall marker is not treated as proof
 that encrypted stores survived; it only authorizes a new source preinstall.
 
+Remap and padding leaves are chosen by the SDK caller, and the library only range-checks
+them. They MUST be independent uniform samples (`sample_private_hnsw_oram_leaf`
+and `sample_private_result_oram_leaf` wrap the system CSPRNG with unbiased
+rejection sampling). A predictable schedule such as a counter lets the server
+link consecutive path accesses and voids the ORAM guarantee; the in-repo recall
+tests and benchmarks therefore use random remap leaves as well.
+
 Target recovery writes a durable version-3 recovery marker with an explicit
 `resume` action before applying snapshot state. Version-1 and version-2 markers
 remain abort-only for compatibility. The fresh target stays `Partial`, and the

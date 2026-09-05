@@ -875,12 +875,17 @@ pub fn ckks_vector_sidecar_envelope_key(
     point_id: &str,
     vector_name: &str,
 ) -> Result<Option<CkksVectorSidecarEnvelopeKey>, CkksError> {
-    let Some(marker) = value
-        .as_object()
-        .and_then(|object| object.get(ENCRYPTED_CKKS_VECTOR_MARKER))
-    else {
+    let Some(object) = value.as_object() else {
         return Ok(None);
     };
+    let Some(marker) = object.get(ENCRYPTED_CKKS_VECTOR_MARKER) else {
+        return Ok(None);
+    };
+    if object.len() != 1 {
+        return Err(CkksError::MalformedEnvelope(
+            "encrypted CKKS vector marker must be the only key of the sidecar value".to_string(),
+        ));
+    }
     let encrypted: EncryptedCkksVector = serde_json::from_value(marker.clone())
         .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))?;
     if encrypted.version != VERSION {
@@ -1062,12 +1067,19 @@ pub fn validate_client_ckks_vector_payload_value_for_runtime(
 fn optional_client_ckks_vector_envelope(
     value: &Value,
 ) -> Result<Option<ClientCkksVectorEnvelope>, CkksError> {
-    let Some(marker) = value
-        .as_object()
-        .and_then(|object| object.get(CLIENT_CKKS_VECTOR_MARKER))
-    else {
+    let Some(object) = value.as_object() else {
         return Ok(None);
     };
+    let Some(marker) = object.get(CLIENT_CKKS_VECTOR_MARKER) else {
+        return Ok(None);
+    };
+    // The marker must be the only key: sibling keys next to the marker would let a caller
+    // smuggle plaintext or shadow fields past the sidecar policy checks.
+    if object.len() != 1 {
+        return Err(CkksError::MalformedEnvelope(
+            "client CKKS vector marker must be the only key of the sidecar value".to_string(),
+        ));
+    }
     serde_json::from_value(marker.clone())
         .map(Some)
         .map_err(|err| CkksError::MalformedEnvelope(err.to_string()))
