@@ -1307,7 +1307,7 @@ impl CommandOpenFheBackend {
             drop(workers);
             std::thread::sleep(WORKER_RESERVATION_POLL);
         }
-        let _spawn_slot = SpawnSlot(Arc::clone(&self.spawning));
+        let spawn_slot = SpawnSlot(Arc::clone(&self.spawning));
 
         let spawn_program = bridge_spawn_program(
             &self.program,
@@ -1437,6 +1437,11 @@ impl CommandOpenFheBackend {
             CkksError::Backend("OpenFHE bridge workers mutex was poisoned".to_string())
         })?;
         workers.push(Arc::clone(&worker_process));
+        // Release the spawn slot while the pool lock is still held: otherwise another caller
+        // briefly counts this worker twice (pushed and still spawning) and may report the pool
+        // as exhausted although a slot is free.
+        drop(spawn_slot);
+        drop(workers);
         Ok(WorkerReservation::reserved(worker_process))
     }
 
@@ -2751,3 +2756,7 @@ done
         assert!(format!("{err}").contains("exceeds"));
     }
 }
+
+#[cfg(test)]
+#[path = "openfhe_concurrency_tests.rs"]
+mod concurrency_tests;

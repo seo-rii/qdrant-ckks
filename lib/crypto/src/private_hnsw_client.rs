@@ -2971,6 +2971,17 @@ pub fn access_private_hnsw_oram_path(
         .ok_or(PrivateHnswClientError::MissingPosition)?;
     validate_private_hnsw_oram_leaf(remap_leaf, config.tree_height)?;
     let expected_bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(old_leaf, config.tree_height)?;
+    // Decide that the target exists before the path is loaded: failing after the load would
+    // leave the other path blocks in the stash while the server still stores them, and the
+    // next read of any overlapping path would then be rejected as a duplicate.
+    if !state.stash.contains_key(&target_node_id)
+        && !path_buckets
+            .iter()
+            .flat_map(|bucket| bucket.blocks.iter().flatten())
+            .any(|block| block.node_id == target_node_id)
+    {
+        return Err(PrivateHnswClientError::MissingBlock);
+    }
     load_private_hnsw_oram_path_into_stash(state, config, &expected_bucket_ids, path_buckets)?;
 
     let block = state
@@ -4411,6 +4422,12 @@ pub fn decode_private_hnsw_node_block(
             actual: neighbor_count,
             limit: fixed_neighbor_slots,
         });
+    }
+    // Every slot is serialized in full, so the counters can never exceed what the block still
+    // holds; checking here keeps the allocations below from being sized by an attacker.
+    let slot_len = 32 + 1;
+    if fixed_neighbor_slots > encoded.len().saturating_sub(cursor) / slot_len {
+        return Err(PrivateHnswClientError::InvalidBlockEncoding);
     }
     let vector_len = read_u32_usize(encoded, &mut cursor)?;
     let vector = read_exact(encoded, &mut cursor, vector_len)?.to_vec();

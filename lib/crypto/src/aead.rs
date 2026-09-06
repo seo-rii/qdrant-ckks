@@ -1437,3 +1437,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "aead_concurrency_tests.rs"]
+mod concurrency_tests;

@@ -4500,6 +4500,49 @@ Stores, bridge and API layer:
   an outcome; standalone reads and commits run store I/O outside the session
   registry mutex on a blocking thread.
 
+### Third pass: fuzz and concurrency tests
+
+`lib/crypto/tests/fuzz_security.rs` drives every untrusted-input surface of
+the crypto crate with `proptest`: AEAD envelope and payload envelope
+mutations, the control-plane envelope parser, leaf labels, the result ORAM
+block/bucket codecs, the HNSW node block/bucket codecs, sealed buckets and
+client state snapshots, Merkle path proofs (every field mutation, swapped or
+stale buckets, dropped leaves), fetch batch planning under leaf collisions, a
+Path ORAM client simulation for both ORAMs (no block is ever lost or
+duplicated, failed accesses leave the client state untouched), CKKS parameter
+validation, the staged insert frame codec and the owner lifecycle JSON frames.
+The invariants are: decoders never panic, encoders and decoders are exact
+inverses on the accepted set, every mutation of authenticated data is
+rejected, and request shapes do not depend on secret collisions.
+
+`lib/crypto/src/aead_concurrency_tests.rs` and
+`lib/crypto/src/openfhe_concurrency_tests.rs` exercise the AES-GCM invocation
+budget under thread contention (exactly the remaining budget is spent, nonces
+stay unique, decryption consumes nothing) and the bridge worker pool from many
+threads against a scripted bridge (`sh` on Unix, PowerShell on Windows): the
+pool never exceeds its size, a worker is reserved by one request at a time,
+stalled and garbage-emitting bridges are replaced without hanging callers, and
+spawn accounting returns to zero.
+
+Fixed while writing them:
+
+- `decode_private_hnsw_node_block` sized two allocations from the untrusted
+  `neighbor_count`/`fixed_neighbor_slots` counters before checking that the
+  block could hold that many slots; a crafted block claiming four billion
+  slots aborted the process on allocation failure. The counters are now bounded
+  by the remaining block bytes.
+- `access_private_result_oram_path` and `access_private_hnsw_oram_path` loaded
+  the served path into the stash before discovering that the target block was
+  missing, leaving the other path blocks stashed while the server still stored
+  them; the next overlapping read was then rejected as a duplicate and the
+  client was wedged. The target is now located before the stash is touched.
+- The bridge spawn slot was released after the pool lock was dropped, so a
+  concurrent caller could count a freshly pushed worker twice and report the
+  pool as exhausted although a slot was free.
+
+Run them with `cargo test -p qdrant-sec --test fuzz_security` and
+`cargo test -p qdrant-sec --lib concurrency_tests`.
+
 Known remaining limitations:
 
 - A private ORAM mutation generation whose owner disappears before the

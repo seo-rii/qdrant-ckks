@@ -1941,6 +1941,17 @@ pub fn access_private_result_oram_path(
     validate_private_result_oram_leaf(remap_leaf, config.tree_height)?;
     let expected_bucket_ids =
         private_result_oram_bucket_ids_for_leaf(old_leaf, config.tree_height)?;
+    // Decide that the target exists before the path is loaded: failing after the load would
+    // leave the other path blocks in the stash while the server still stores them, and the
+    // next read of any overlapping path would then be rejected as a duplicate.
+    if !state.stash.contains_key(&target_payload_fetch_token)
+        && !path_buckets
+            .iter()
+            .flat_map(|bucket| bucket.blocks.iter().flatten())
+            .any(|block| block.payload_fetch_token == target_payload_fetch_token)
+    {
+        return Err(PrivateResultOramError::MissingBlock);
+    }
     load_private_result_oram_path_into_stash(state, config, &expected_bucket_ids, path_buckets)?;
 
     let block = state
