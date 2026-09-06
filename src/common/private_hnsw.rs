@@ -1981,71 +1981,74 @@ async fn do_read_private_hnsw_paths_inner(
         validate_private_hnsw_oram_single_node_epoch_mode(toc.is_distributed())?;
     }
     let now_unix = current_unix_secs()?;
-    let mut registry = session_registry()
-        .lock()
-        .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
-    let plan = registry.with_session_mut_owned(
-        &request_context.collection_crypto_id,
-        vector_name,
-        session_id,
-        now_unix,
-        expected_owner,
-        |session| {
-            request_context.validate_manifest_runtime_context(&session.manifest)?;
-            if session.index_epoch != index_epoch || session.root_hash != root_hash {
-                return Err(StorageError::bad_request(
-                    "private HNSW ORAM session epoch/root mismatch",
-                ));
-            }
-            validate_private_hnsw_read_fixed_path_budget(
-                padding,
-                paths.len(),
-                session.path_batch_size,
-            )?;
-            validate_session_signature_owner_key(session, &client_signature.key_id)?;
-            let public_key = request_context.signature_public_key(&client_signature.key_id)?;
-            let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
-            validate_private_hnsw_oram_read_paths_signature(
-                PrivateHnswOramReadPathsSignatureInput {
-                    collection_id: &session.collection_id,
-                    vector_name,
-                    key_id: &session.manifest.key_id,
-                    rk_id: &session.manifest.rk_id,
-                    rk_epoch: session.manifest.rk_epoch,
-                    index_epoch,
-                    root_hash,
-                    paths: &path_refs,
-                    requested_paths: padding.requested_paths,
-                    dummy_paths_included: padding.dummy_paths_included,
-                    signature_alg: &client_signature.alg,
-                    signature_key_id: &client_signature.key_id,
-                },
-                &client_signature.sig,
-                PrivateHnswSignatureVerification {
-                    expected_key_id: &client_signature.key_id,
-                    public_key: &public_key,
-                },
-            )
-            .map_err(private_hnsw_error)?;
-            validate_private_hnsw_read_path_labels(&paths, session.tree_height)?;
-            let bucket_ids =
-                bucket_ids_for_path_batch(&paths, session.tree_height, session.bucket_count)?;
-            // Every path served through this session extends the writeback the client may commit.
-            session.read_path_count = session
-                .read_path_count
-                .saturating_add(u64::try_from(paths.len()).unwrap_or(u64::MAX));
-            Ok(PrivateHnswReadPlan {
-                collection_path: session.collection_path.clone(),
-                index_epoch: session.index_epoch,
-                root_hash: session.root_hash.clone(),
-                bucket_ids,
-                bucket_count: session.bucket_count,
-                max_bucket_ciphertext_bytes: session.max_bucket_ciphertext_bytes,
-                manifest: session.manifest.clone(),
-            })
-        },
-    )?;
-    drop(registry);
+    // The registry guard lives in its own block so the future stays `Send`: the store I/O
+    // below runs on a blocking thread while no lock is held.
+    let plan = {
+        let mut registry = session_registry().lock().map_err(|_| {
+            StorageError::service_error("private HNSW ORAM session registry poisoned")
+        })?;
+        registry.with_session_mut_owned(
+            &request_context.collection_crypto_id,
+            vector_name,
+            session_id,
+            now_unix,
+            expected_owner,
+            |session| {
+                request_context.validate_manifest_runtime_context(&session.manifest)?;
+                if session.index_epoch != index_epoch || session.root_hash != root_hash {
+                    return Err(StorageError::bad_request(
+                        "private HNSW ORAM session epoch/root mismatch",
+                    ));
+                }
+                validate_private_hnsw_read_fixed_path_budget(
+                    padding,
+                    paths.len(),
+                    session.path_batch_size,
+                )?;
+                validate_session_signature_owner_key(session, &client_signature.key_id)?;
+                let public_key = request_context.signature_public_key(&client_signature.key_id)?;
+                let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
+                validate_private_hnsw_oram_read_paths_signature(
+                    PrivateHnswOramReadPathsSignatureInput {
+                        collection_id: &session.collection_id,
+                        vector_name,
+                        key_id: &session.manifest.key_id,
+                        rk_id: &session.manifest.rk_id,
+                        rk_epoch: session.manifest.rk_epoch,
+                        index_epoch,
+                        root_hash,
+                        paths: &path_refs,
+                        requested_paths: padding.requested_paths,
+                        dummy_paths_included: padding.dummy_paths_included,
+                        signature_alg: &client_signature.alg,
+                        signature_key_id: &client_signature.key_id,
+                    },
+                    &client_signature.sig,
+                    PrivateHnswSignatureVerification {
+                        expected_key_id: &client_signature.key_id,
+                        public_key: &public_key,
+                    },
+                )
+                .map_err(private_hnsw_error)?;
+                validate_private_hnsw_read_path_labels(&paths, session.tree_height)?;
+                let bucket_ids =
+                    bucket_ids_for_path_batch(&paths, session.tree_height, session.bucket_count)?;
+                // Every path served through this session extends the writeback the client may commit.
+                session.read_path_count = session
+                    .read_path_count
+                    .saturating_add(u64::try_from(paths.len()).unwrap_or(u64::MAX));
+                Ok(PrivateHnswReadPlan {
+                    collection_path: session.collection_path.clone(),
+                    index_epoch: session.index_epoch,
+                    root_hash: session.root_hash.clone(),
+                    bucket_ids,
+                    bucket_count: session.bucket_count,
+                    max_bucket_ciphertext_bytes: session.max_bucket_ciphertext_bytes,
+                    manifest: session.manifest.clone(),
+                })
+            },
+        )?
+    };
     // Store I/O runs off the registry mutex and off the async worker thread: one tenant's slow
     // path reads no longer stall every other private ORAM request on the node.
     let vector_name = vector_name.to_string();
@@ -2294,10 +2297,13 @@ pub async fn do_commit_private_hnsw_paths(
     .await?;
     validate_private_hnsw_oram_single_node_epoch_mode(toc.is_distributed())?;
     let now_unix = current_unix_secs()?;
-    let mut registry = session_registry()
-        .lock()
-        .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
-    let plan = registry.begin_commit(
+    // The registry guard lives in its own block so the future stays `Send`: the store I/O
+    // below runs on a blocking thread while no lock is held.
+    let plan = {
+        let mut registry = session_registry().lock().map_err(|_| {
+            StorageError::service_error("private HNSW ORAM session registry poisoned")
+        })?;
+        registry.begin_commit(
         &request_context.collection_crypto_id,
         vector_name,
         session_id,
@@ -2367,8 +2373,8 @@ pub async fn do_commit_private_hnsw_paths(
             public_key,
         })
         },
-    )?;
-    drop(registry);
+        )?
+    };
     // Bucket writes and fsyncs run off the registry mutex and off the async worker; the session
     // stays `commit_in_progress` until the outcome is recorded below.
     let old = PrivateHnswOramEpochState {

@@ -1671,61 +1671,64 @@ async fn do_read_private_result_oram_buckets_inner(
         validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
     }
     let now_unix = current_unix_secs()?;
-    let mut registry = session_registry().lock().map_err(|_| {
-        StorageError::service_error("private result ORAM session registry poisoned")
-    })?;
-    let plan = registry.with_session_mut_owned(
-        &request_context.collection_crypto_id,
-        session_id,
-        now_unix,
-        expected_owner,
-        |session| {
-            request_context.validate_manifest_runtime_policy(&session.manifest)?;
-            if session.index_epoch != index_epoch || session.root_hash != root_hash {
-                return Err(StorageError::bad_request(
-                    "private result ORAM session epoch/root mismatch",
-                ));
-            }
-            validate_bucket_read_request_budget(&session.manifest, &bucket_ids)?;
-            validate_session_signature_owner_key(session, &read_signature.key_id)?;
-            let public_key = request_context.signature_public_key(&read_signature.key_id)?;
-            validate_private_result_oram_read_buckets_signature(
-                PrivateResultOramReadBucketsSignatureInput {
-                    collection_id: &session.manifest.collection_id,
-                    key_id: &session.manifest.key_id,
-                    rk_id: &session.manifest.rk_id,
-                    rk_epoch: session.manifest.rk_epoch,
-                    index_epoch,
-                    root_hash: &root_hash,
+    // The registry guard lives in its own block so the future stays `Send`: the store I/O
+    // below runs on a blocking thread while no lock is held.
+    let plan = {
+        let mut registry = session_registry().lock().map_err(|_| {
+            StorageError::service_error("private result ORAM session registry poisoned")
+        })?;
+        registry.with_session_mut_owned(
+            &request_context.collection_crypto_id,
+            session_id,
+            now_unix,
+            expected_owner,
+            |session| {
+                request_context.validate_manifest_runtime_policy(&session.manifest)?;
+                if session.index_epoch != index_epoch || session.root_hash != root_hash {
+                    return Err(StorageError::bad_request(
+                        "private result ORAM session epoch/root mismatch",
+                    ));
+                }
+                validate_bucket_read_request_budget(&session.manifest, &bucket_ids)?;
+                validate_session_signature_owner_key(session, &read_signature.key_id)?;
+                let public_key = request_context.signature_public_key(&read_signature.key_id)?;
+                validate_private_result_oram_read_buckets_signature(
+                    PrivateResultOramReadBucketsSignatureInput {
+                        collection_id: &session.manifest.collection_id,
+                        key_id: &session.manifest.key_id,
+                        rk_id: &session.manifest.rk_id,
+                        rk_epoch: session.manifest.rk_epoch,
+                        index_epoch,
+                        root_hash: &root_hash,
+                        bucket_count: session.bucket_count,
+                        bucket_ids: &bucket_ids,
+                        signature_alg: &read_signature.alg,
+                        signature_key_id: &read_signature.key_id,
+                    },
+                    &read_signature.sig,
+                    PrivateResultOramSignatureVerification {
+                        expected_key_id: &read_signature.key_id,
+                        public_key: &public_key,
+                    },
+                )
+                .map_err(private_result_oram_error)?;
+                validate_bucket_read_request_details(&session.manifest, &bucket_ids)?;
+                // Every path served through this session extends the writeback the client may commit.
+                let path_len = u64::from(session.manifest.oram.tree_height).saturating_add(1);
+                let read_paths = u64::try_from(bucket_ids.len()).unwrap_or(u64::MAX) / path_len;
+                session.read_path_count = session.read_path_count.saturating_add(read_paths);
+                Ok(PrivateResultOramReadPlan {
+                    collection_path: session.collection_path.clone(),
+                    index_epoch: session.index_epoch,
+                    root_hash: session.root_hash.clone(),
+                    bucket_ids,
                     bucket_count: session.bucket_count,
-                    bucket_ids: &bucket_ids,
-                    signature_alg: &read_signature.alg,
-                    signature_key_id: &read_signature.key_id,
-                },
-                &read_signature.sig,
-                PrivateResultOramSignatureVerification {
-                    expected_key_id: &read_signature.key_id,
-                    public_key: &public_key,
-                },
-            )
-            .map_err(private_result_oram_error)?;
-            validate_bucket_read_request_details(&session.manifest, &bucket_ids)?;
-            // Every path served through this session extends the writeback the client may commit.
-            let path_len = u64::from(session.manifest.oram.tree_height).saturating_add(1);
-            let read_paths = u64::try_from(bucket_ids.len()).unwrap_or(u64::MAX) / path_len;
-            session.read_path_count = session.read_path_count.saturating_add(read_paths);
-            Ok(PrivateResultOramReadPlan {
-                collection_path: session.collection_path.clone(),
-                index_epoch: session.index_epoch,
-                root_hash: session.root_hash.clone(),
-                bucket_ids,
-                bucket_count: session.bucket_count,
-                max_bucket_ciphertext_bytes: session.max_bucket_ciphertext_bytes,
-                manifest: session.manifest.clone(),
-            })
-        },
-    )?;
-    drop(registry);
+                    max_bucket_ciphertext_bytes: session.max_bucket_ciphertext_bytes,
+                    manifest: session.manifest.clone(),
+                })
+            },
+        )?
+    };
     // Store I/O runs off the registry mutex and off the async worker thread.
     let (plan, buckets, proof) = tokio::task::spawn_blocking(move || -> StorageResult<_> {
         let store = PrivateResultOramStore::new(&plan.collection_path);
@@ -1959,10 +1962,13 @@ pub async fn do_commit_private_result_oram_buckets(
     .await?;
     validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
     let now_unix = current_unix_secs()?;
-    let mut registry = session_registry().lock().map_err(|_| {
-        StorageError::service_error("private result ORAM session registry poisoned")
-    })?;
-    let plan = registry.begin_commit(
+    // The registry guard lives in its own block so the future stays `Send`: the store I/O
+    // below runs on a blocking thread while no lock is held.
+    let plan = {
+        let mut registry = session_registry().lock().map_err(|_| {
+            StorageError::service_error("private result ORAM session registry poisoned")
+        })?;
+        registry.begin_commit(
         &request_context.collection_crypto_id,
         session_id,
         now_unix,
@@ -2030,8 +2036,8 @@ pub async fn do_commit_private_result_oram_buckets(
                 public_key,
             })
         },
-    )?;
-    drop(registry);
+        )?
+    };
     // Bucket writes and fsyncs run off the registry mutex and off the async worker; the session
     // stays `commit_in_progress` until the outcome is recorded below.
     let old = PrivateResultOramEpochState {

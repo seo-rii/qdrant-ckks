@@ -3554,7 +3554,7 @@ impl TableOfContent {
                 });
             }
         }
-        let mut collections = self.collections.write().await;
+        let collections = self.collections.write().await;
         let mut validated_private_oram_resharding = HashSet::new();
         let mut private_oram_snapshot_recovery_aborts = HashMap::new();
         let mut private_oram_transfer_snapshot_recovery_aborts = HashMap::new();
