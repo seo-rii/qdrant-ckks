@@ -4601,9 +4601,9 @@ Fixed while writing them:
 Run them with `cargo test -p qdrant-sec --test fuzz_security` and
 `cargo test -p qdrant-sec --lib concurrency_tests`.
 
-The server (`cargo test -p qdrant --bin qdrant`) and storage (`cargo test
--p storage --lib`) unit-test binaries build again as of this pass. Run them on
-Linux: the private ORAM stores, mutation journal and recovery markers rely on
+The server (`cargo test -p qdrant --bin qdrant`), storage (`cargo test
+-p storage --lib`) and collection (`cargo test -p collection --lib`) unit-test
+binaries build again as of this pass. Run them on Linux: the private ORAM stores, mutation journal and recovery markers rely on
 Unix-only file semantics (directory `flock`, `O_DIRECTORY`/`O_NOFOLLOW`,
 mode bits, directory fsync), so on Windows those tests fail with
 "unsupported on this platform" or redacted I/O errors, and settings fixtures
