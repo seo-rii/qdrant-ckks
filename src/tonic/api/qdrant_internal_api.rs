@@ -2612,7 +2612,7 @@ pub(crate) async fn commit_private_hnsw_paths_coordinated(
             None,
             move || prepare_context.prepare_local(),
             move || abort_context.abort_local(),
-            move || finalize_context.finalize_local(lease_expires_unix),
+            move || finalize_context.finalize_local(now_unix, lease_expires_unix),
         )
         .await;
     match result {
@@ -2646,7 +2646,7 @@ pub(crate) async fn commit_private_hnsw_paths_coordinated(
                             false,
                         )
                         .await?;
-                    context.finalize_local(lease_expires_unix)?;
+                    context.finalize_local(now_unix, lease_expires_unix)?;
                     Ok(transition.new)
                 }
                 PrivateOramRecoveryAction::AbortPending => {
@@ -2893,7 +2893,7 @@ pub(crate) async fn commit_private_result_oram_buckets_coordinated(
             None,
             move || prepare_context.prepare_local(),
             move || abort_context.abort_local(),
-            move || finalize_context.finalize_local(lease_expires_unix),
+            move || finalize_context.finalize_local(now_unix, lease_expires_unix),
         )
         .await;
     match result {
@@ -2924,7 +2924,7 @@ pub(crate) async fn commit_private_result_oram_buckets_coordinated(
                             false,
                         )
                         .await?;
-                    context.finalize_local(lease_expires_unix)?;
+                    context.finalize_local(now_unix, lease_expires_unix)?;
                     Ok(transition.new)
                 }
                 PrivateOramRecoveryAction::AbortPending => {

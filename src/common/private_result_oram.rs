@@ -200,7 +200,11 @@ impl PrivateResultOramOwnerWritebackContext {
             .cancel_commit(&self.collection_id, &self.session_id)
     }
 
-    pub(crate) fn finalize_local(&self, lease_expires_unix: u64) -> StorageResult<()> {
+    pub(crate) fn finalize_local(
+        &self,
+        now_unix: u64,
+        lease_expires_unix: u64,
+    ) -> StorageResult<()> {
         self.settled.store(true, Ordering::Release);
         let committed = self
             .store
@@ -219,6 +223,7 @@ impl PrivateResultOramOwnerWritebackContext {
                 &self.collection_id,
                 &self.session_id,
                 &committed,
+                now_unix,
                 lease_expires_unix,
             )
     }
@@ -668,15 +673,18 @@ impl PrivateResultOramSessionRegistry {
         Ok(result)
     }
 
+    /// Records a finished commit. `now_unix` drives the expiry sweep and `lease_expires_unix`
+    /// is the renewed lease of this session only: sweeping with the (future) lease instead
+    /// used to expire every other idle session on the node whenever one client committed.
     fn complete_commit(
         &mut self,
         collection_id: &str,
         session_id: &str,
         committed: &PrivateResultOramEpochState,
+        now_unix: u64,
         lease_expires_unix: u64,
     ) -> StorageResult<()> {
-        let session =
-            self.checked_session_mut(collection_id, session_id, lease_expires_unix, true)?;
+        let session = self.checked_session_mut(collection_id, session_id, now_unix, true)?;
         if !session.commit_in_progress {
             return Err(StorageError::bad_request(
                 "private result ORAM session has no commit in progress",
@@ -686,6 +694,9 @@ impl PrivateResultOramSessionRegistry {
         session.root_hash = committed.root_hash.clone();
         session.lease_expires_unix = lease_expires_unix;
         session.commit_in_progress = false;
+        // The committed reads are spent: the next write-back is bounded by the paths read at
+        // the new epoch, not by everything read since the session opened.
+        session.read_path_count = 0;
         Ok(())
     }
 
@@ -725,6 +736,7 @@ impl PrivateResultOramSessionRegistry {
         if !abort {
             session.index_epoch = committed.index_epoch;
             session.root_hash = committed.root_hash.clone();
+            session.read_path_count = 0;
         }
         session.commit_in_progress = false;
         Ok(true)
@@ -2079,6 +2091,7 @@ pub async fn do_commit_private_result_oram_buckets(
                 &request_context.collection_crypto_id,
                 session_id,
                 &committed,
+                now_unix,
                 session_lease_expires_unix(now_unix)?,
             )?;
             Ok(committed)
@@ -4853,6 +4866,7 @@ mod private_result_oram_tests {
                 "collection-private-result-test",
                 "session-1",
                 &committed,
+                now,
                 30,
             )
             .unwrap();
@@ -6025,6 +6039,77 @@ mod private_result_oram_tests {
             signature_public_keys: HashMap::new(),
             public_key: vec![0; 32],
         }
+    }
+
+    #[test]
+    fn completing_a_commit_does_not_expire_other_sessions() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+        registry
+            .open(
+                PrivateResultOramSession {
+                    collection_id: "other-collection".to_string(),
+                    ..fixture_session("session-2", 20)
+                },
+                now,
+            )
+            .unwrap();
+        registry
+            .with_session_mut(
+                "collection-private-result-test",
+                "session-1",
+                now,
+                |session| {
+                    session.read_path_count = 7;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        registry
+            .begin_commit("collection-private-result-test", "session-1", now, |_| {
+                Ok(())
+            })
+            .unwrap();
+        let committed = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+        };
+        // The renewed lease lies in the future; it must not serve as the clock that expires
+        // everybody else.
+        registry
+            .complete_commit(
+                "collection-private-result-test",
+                "session-1",
+                &committed,
+                now,
+                session_lease_expires_unix(now).unwrap(),
+            )
+            .unwrap();
+        assert!(
+            registry.has_active_collection("other-collection", now),
+            "another tenant's session was expired by this commit"
+        );
+        assert!(registry.has_active_collection("collection-private-result-test", now));
+        registry
+            .with_session_mut("other-collection", "session-2", now, |_| Ok(()))
+            .unwrap();
+        registry
+            .with_session_mut(
+                "collection-private-result-test",
+                "session-1",
+                now,
+                |session| {
+                    assert_eq!(
+                        session.read_path_count, 0,
+                        "committed reads must not widen the next write-back"
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
     }
 
     fn fixture_session(session_id: &str, lease_expires_unix: u64) -> PrivateResultOramSession {
