@@ -1153,12 +1153,14 @@ pub fn validate_client_payload_value_after_runtime_verification(
     verified_envelope_key: &ClientPayloadVerifiedEnvelopeKey,
 ) -> Result<(), PayloadEncryptionError> {
     let validated = validate_client_payload_value_inner(value, context)?;
-    let envelope_key = client_payload_envelope_key_from_validated(validated).ok_or_else(|| {
-        PayloadEncryptionError::ExpectedEncryptedEnvelope {
+    // The proof was minted from a verified signature; an equal key below therefore proves that
+    // this envelope carries exactly those signature bytes, so no re-verification is needed.
+    let envelope_key = client_payload_envelope_key_from_validated(validated, false).ok_or_else(
+        || PayloadEncryptionError::ExpectedEncryptedEnvelope {
             field: context.field_path.to_string(),
             found: json_type_name(value),
-        }
-    })?;
+        },
+    )?;
     if verified_envelope_key.envelope_key() != &envelope_key {
         return Err(PayloadEncryptionError::RuntimeEnvelopeProofMismatch);
     }
@@ -1274,7 +1276,7 @@ fn validate_client_payload_value_inner(
     let ciphertext_sha256_b64 =
         client_payload_ciphertext_digest_b64(context.field_path, &envelope.ciphertext)?;
     validate_client_payload_blind_indexes(&envelope)?;
-    let signature_sha256_b64 = validate_client_payload_signature(
+    let (signature_sha256_b64, signature_verified) = validate_client_payload_signature(
         &envelope,
         context.signature_required,
         context.signature_verification,
@@ -1284,6 +1286,7 @@ fn validate_client_payload_value_inner(
         envelope,
         ciphertext_sha256_b64,
         signature_sha256_b64,
+        signature_verified,
     })
 }
 
@@ -1295,12 +1298,12 @@ pub fn validate_client_payload_value_for_runtime(
         return Err(PayloadEncryptionError::InvalidClientSignature);
     }
     let validated = validate_client_payload_value_inner(value, context)?;
-    let envelope_key = client_payload_envelope_key_from_validated(validated).ok_or_else(|| {
-        PayloadEncryptionError::ExpectedEncryptedEnvelope {
+    let envelope_key = client_payload_envelope_key_from_validated(validated, true).ok_or_else(
+        || PayloadEncryptionError::ExpectedEncryptedEnvelope {
             field: context.field_path.to_string(),
             found: json_type_name(value),
-        }
-    })?;
+        },
+    )?;
     let blind_indexes = client_payload_blind_index_token_keys(value, context.field_path)?;
 
     Ok(ClientPayloadVerifiedEnvelopeKey {
@@ -1378,9 +1381,19 @@ pub fn client_payload_envelope_key(
     }))
 }
 
+/// Builds the envelope key of a validated envelope.
+///
+/// With `require_verified_signature` the key is only produced when the signature was verified
+/// during validation, which is what a freshly minted verified-envelope proof must guarantee.
+/// Without it the key carries the digest of the present signature, which is enough to compare
+/// against an existing proof: equal digests mean the same signature bytes that were verified.
 fn client_payload_envelope_key_from_validated(
     validated: ValidatedClientPayloadEnvelope,
+    require_verified_signature: bool,
 ) -> Option<ClientPayloadEnvelopeKey> {
+    if require_verified_signature && !validated.signature_verified {
+        return None;
+    }
     let key_id = validated.envelope.key_id?;
     let rk_id = validated.envelope.rk_id?;
     let rk_epoch = validated.envelope.rk_epoch?;
@@ -1677,7 +1690,10 @@ impl Debug for ClientPayloadEnvelope {
 struct ValidatedClientPayloadEnvelope {
     envelope: ClientPayloadEnvelope,
     ciphertext_sha256_b64: String,
+    /// Digest of the well-formed signature carried by the envelope, if any.
     signature_sha256_b64: Option<String>,
+    /// Whether that signature was verified against the expected key during this validation.
+    signature_verified: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1736,16 +1752,21 @@ impl Debug for ClientPayloadSignature {
     }
 }
 
+/// Checks the envelope signature and returns its digest together with whether it was verified.
+///
+/// Callers that mint a verified-envelope proof must require the flag; callers that compare an
+/// envelope against an existing proof only need the digest, since an equal digest means the
+/// very signature bytes that were verified earlier.
 fn validate_client_payload_signature(
     envelope: &ClientPayloadEnvelope,
     signature_required: bool,
     signature_verification: Option<ClientPayloadSignatureVerification<'_>>,
-) -> Result<Option<String>, PayloadEncryptionError> {
+) -> Result<(Option<String>, bool), PayloadEncryptionError> {
     let Some(signature) = &envelope.signature else {
         return if signature_required || signature_verification.is_some() {
             Err(PayloadEncryptionError::MissingClientSignature)
         } else {
-            Ok(None)
+            Ok((None, false))
         };
     };
 
@@ -1772,10 +1793,10 @@ fn validate_client_payload_signature(
     }
 
     // A well-formed signature that nothing here can verify is tolerated when signatures are
-    // optional, but its digest is never reported: `Some` means "verified against the expected
-    // key", and downstream envelope keys derive their signed-provenance from it.
+    // optional; its digest is reported but flagged unverified, so a verified-envelope proof
+    // can never be minted from it.
     let Some(verification) = signature_verification else {
-        return Ok(None);
+        return Ok((Some(signature_sha256_b64), false));
     };
     if signature.key_id != verification.expected_key_id {
         return Err(PayloadEncryptionError::ClientSignatureKeyIdMismatch);
@@ -1788,7 +1809,7 @@ fn validate_client_payload_signature(
         .verify(&message, &signature_bytes)
         .map_err(|_| PayloadEncryptionError::InvalidClientSignature)?;
 
-    Ok(Some(signature_sha256_b64))
+    Ok((Some(signature_sha256_b64), true))
 }
 
 fn client_payload_signature_message_for_envelope(envelope: &ClientPayloadEnvelope) -> Vec<u8> {
@@ -2059,11 +2080,13 @@ mod tests {
     fn unverifiable_client_signature_is_never_reported_as_verified() {
         use ring::signature::KeyPair as _;
 
-        // Optional signatures without verification material: accepted, but no digest.
+        // Optional signatures without verification material: accepted, digest known, but
+        // never flagged verified, so no runtime proof can be minted from them.
         let value = valid_client_payload_value();
         let validated =
             validate_client_payload_value_inner(&value, client_payload_context()).unwrap();
-        assert!(validated.signature_sha256_b64.is_none());
+        assert!(!validated.signature_verified);
+        assert!(client_payload_envelope_key_from_validated(validated, true).is_none());
         validate_client_payload_value(&value, client_payload_context()).unwrap();
 
         // Required signatures without verification material fail closed.

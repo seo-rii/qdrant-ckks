@@ -4539,6 +4539,20 @@ Fixed while writing them:
 - The bridge spawn slot was released after the pool lock was dropped, so a
   concurrent caller could count a freshly pushed worker twice and report the
   pool as exhausted although a slot was free.
+- The ordered result ORAM fetch planner filled a batch that could no longer
+  avoid a leaf collision from the first leaf with tokens left, piling
+  collisions into the last batches; it now takes the leaf with the most tokens
+  left, which the planner test checks against the optimal collision count.
+- The second pass made the client payload signature digest "verified-only",
+  which broke `validate_client_payload_value_after_runtime_verification`
+  (every post-runtime check failed with `ExpectedEncryptedEnvelope`, caught by
+  the existing payload integration tests that the pass had not run). The
+  digest is reported again with an explicit verified flag; a runtime proof is
+  minted only from a verified signature, and the post-runtime comparison against
+  that proof needs only the digest.
+- `apply_private_oram_append_sparse_merkle_patch_v1` gained a property test:
+  the patched root equals a full recomputation and every proof or update
+  mutation is rejected.
 
 Run them with `cargo test -p qdrant-sec --test fuzz_security` and
 `cargo test -p qdrant-sec --lib concurrency_tests`.

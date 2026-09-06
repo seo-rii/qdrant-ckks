@@ -1843,12 +1843,15 @@ pub fn plan_private_result_oram_ordered_read_bucket_batches_for_fetch_tokens(
                 }
             }
             // Every remaining token collides with a leaf already in this batch: place one
-            // anyway, the batch planner pads the duplicate path with a dummy leaf.
+            // anyway (the batch planner pads the duplicate path with a dummy leaf), taking it
+            // from the leaf with the most tokens left so that collisions do not pile up in the
+            // last batches.
             let leaf = match selected_leaf {
                 Some(leaf) => leaf,
                 None => tokens_by_leaf
                     .iter()
-                    .find(|(_, tokens)| !tokens.is_empty())
+                    .filter(|(_, tokens)| !tokens.is_empty())
+                    .max_by_key(|(_, tokens)| tokens.len())
                     .map(|(leaf, _)| *leaf)
                     .ok_or(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))?,
             };
@@ -1941,18 +1944,13 @@ pub fn access_private_result_oram_path(
     validate_private_result_oram_leaf(remap_leaf, config.tree_height)?;
     let expected_bucket_ids =
         private_result_oram_bucket_ids_for_leaf(old_leaf, config.tree_height)?;
-    // Decide that the target exists before the path is loaded: failing after the load would
-    // leave the other path blocks in the stash while the server still stores them, and the
-    // next read of any overlapping path would then be rejected as a duplicate.
-    if !state.stash.contains_key(&target_payload_fetch_token)
-        && !path_buckets
-            .iter()
-            .flat_map(|bucket| bucket.blocks.iter().flatten())
-            .any(|block| block.payload_fetch_token == target_payload_fetch_token)
-    {
-        return Err(PrivateResultOramError::MissingBlock);
-    }
-    load_private_result_oram_path_into_stash(state, config, &expected_bucket_ids, path_buckets)?;
+    load_private_result_oram_path_into_stash(
+        state,
+        config,
+        &expected_bucket_ids,
+        path_buckets,
+        Some(&target_payload_fetch_token),
+    )?;
 
     let block = state
         .stash
@@ -1987,6 +1985,7 @@ pub fn evict_private_result_oram_path(
         config,
         &expected_bucket_ids,
         path_buckets,
+        None,
     )?;
     let writeback_buckets =
         evict_private_result_loaded_path(&mut working_state, config, &expected_bucket_ids)?;
@@ -1997,11 +1996,18 @@ pub fn evict_private_result_oram_path(
     })
 }
 
+/// Validates a served path and moves its blocks into the stash.
+///
+/// Every check runs before the first block is stashed: a path rejected here leaves the client
+/// state untouched. `required_payload_fetch_token` is the block an access needs; failing on it
+/// after the load would strand the other path blocks in the stash while the server still
+/// stores them, and the next read of an overlapping path would then be rejected as a duplicate.
 fn load_private_result_oram_path_into_stash(
     state: &mut PrivateResultOramClientState,
     config: PrivateResultOramClientConfig,
     expected_bucket_ids: &[u64],
     path_buckets: &[PrivateResultOramPlaintextBucket],
+    required_payload_fetch_token: Option<&[u8; 32]>,
 ) -> Result<(), PrivateResultOramError> {
     if path_buckets.len() != expected_bucket_ids.len()
         || path_buckets
@@ -2032,6 +2038,12 @@ fn load_private_result_oram_path_into_stash(
                 return Err(PrivateResultOramError::DuplicatePointToken);
             }
         }
+    }
+    if let Some(required) = required_payload_fetch_token
+        && !state.stash.contains_key(required)
+        && !path_payload_fetch_tokens.contains(required)
+    {
+        return Err(PrivateResultOramError::MissingBlock);
     }
     for block in path_buckets
         .iter()

@@ -2971,18 +2971,13 @@ pub fn access_private_hnsw_oram_path(
         .ok_or(PrivateHnswClientError::MissingPosition)?;
     validate_private_hnsw_oram_leaf(remap_leaf, config.tree_height)?;
     let expected_bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(old_leaf, config.tree_height)?;
-    // Decide that the target exists before the path is loaded: failing after the load would
-    // leave the other path blocks in the stash while the server still stores them, and the
-    // next read of any overlapping path would then be rejected as a duplicate.
-    if !state.stash.contains_key(&target_node_id)
-        && !path_buckets
-            .iter()
-            .flat_map(|bucket| bucket.blocks.iter().flatten())
-            .any(|block| block.node_id == target_node_id)
-    {
-        return Err(PrivateHnswClientError::MissingBlock);
-    }
-    load_private_hnsw_oram_path_into_stash(state, config, &expected_bucket_ids, path_buckets)?;
+    load_private_hnsw_oram_path_into_stash(
+        state,
+        config,
+        &expected_bucket_ids,
+        path_buckets,
+        Some(&target_node_id),
+    )?;
 
     let block = state
         .stash
@@ -3026,6 +3021,7 @@ where
         config,
         &expected_bucket_ids,
         path_buckets,
+        Some(&target_node_id),
     )?;
 
     let previous = working_state
@@ -3069,6 +3065,7 @@ pub fn evict_private_hnsw_oram_path(
         config,
         &expected_bucket_ids,
         path_buckets,
+        None,
     )?;
     let writeback_buckets =
         evict_private_hnsw_loaded_path(&mut working_state, config, &expected_bucket_ids)?;
@@ -3080,11 +3077,18 @@ pub fn evict_private_hnsw_oram_path(
     })
 }
 
+/// Validates a served path and moves its blocks into the stash.
+///
+/// Every check runs before the first block is stashed: a path rejected here leaves the client
+/// state untouched. `required_node_id` is the block an access needs; failing on it after the
+/// load would strand the other path blocks in the stash while the server still stores them,
+/// and the next read of an overlapping path would then be rejected as a duplicate.
 fn load_private_hnsw_oram_path_into_stash(
     state: &mut PrivateHnswOramClientState,
     config: PrivateHnswOramClientConfig,
     expected_bucket_ids: &[u64],
     path_buckets: &[PrivateHnswOramPlaintextBucket],
+    required_node_id: Option<&[u8; 32]>,
 ) -> Result<(), PrivateHnswClientError> {
     if path_buckets.len() != expected_bucket_ids.len()
         || path_buckets
@@ -3123,6 +3127,12 @@ fn load_private_hnsw_oram_path_into_stash(
                 return Err(PrivateHnswClientError::DuplicatePayloadFetchToken);
             }
         }
+    }
+    if let Some(required) = required_node_id
+        && !state.stash.contains_key(required)
+        && !path_node_ids.contains(required)
+    {
+        return Err(PrivateHnswClientError::MissingBlock);
     }
     for block in path_buckets
         .iter()

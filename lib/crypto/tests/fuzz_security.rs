@@ -22,6 +22,12 @@ use qdrant_sec::payload::{
 };
 use qdrant_sec::private_hnsw_client::*;
 use qdrant_sec::private_hnsw_oram::{OramKind, OramParams, PrivateHnswOramBucket};
+use qdrant_sec::private_oram_append_client::{
+    PRIVATE_ORAM_APPEND_MERKLE_PATCH_PROOF_V1_VERSION, PrivateOramAppendMerklePatchLeafV1,
+    PrivateOramAppendMerklePatchProofV1, PrivateOramAppendMerkleSiblingPositionV1,
+    PrivateOramAppendMerkleSiblingV1, apply_private_oram_append_sparse_merkle_patch_v1,
+};
+use qdrant_sec::private_oram_mutation::PrivateOramAppendBucketRefV1;
 use qdrant_sec::private_oram_owner_lifecycle::{
     decode_private_oram_owner_enrollment_genesis_commitment_v1,
     decode_private_oram_owner_enrollment_prepared_v1,
@@ -1071,13 +1077,15 @@ proptest! {
             4 => {
                 let leaf = &mut mutated.leaves[leaf_index];
                 prop_assume!(!leaf.siblings.is_empty());
-                let sibling = &mut leaf.siblings[index % leaf.siblings.len()];
+                let sibling_index = index % leaf.siblings.len();
+                let sibling = &mut leaf.siblings[sibling_index];
                 sibling.hash = mutate_string(&sibling.hash, choice, index, byte);
             }
             5 => {
                 let leaf = &mut mutated.leaves[leaf_index];
                 prop_assume!(!leaf.siblings.is_empty());
-                let sibling = &mut leaf.siblings[index % leaf.siblings.len()];
+                let sibling_index = index % leaf.siblings.len();
+                let sibling = &mut leaf.siblings[sibling_index];
                 sibling.position = match sibling.position {
                     PrivateResultOramMerkleSiblingPosition::Left => PrivateResultOramMerkleSiblingPosition::Right,
                     PrivateResultOramMerkleSiblingPosition::Right => PrivateResultOramMerkleSiblingPosition::Left,
@@ -1157,13 +1165,15 @@ proptest! {
             4 => {
                 let leaf = &mut mutated.leaves[leaf_index];
                 prop_assume!(!leaf.siblings.is_empty());
-                let sibling = &mut leaf.siblings[index % leaf.siblings.len()];
+                let sibling_index = index % leaf.siblings.len();
+                let sibling = &mut leaf.siblings[sibling_index];
                 sibling.hash = mutate_string(&sibling.hash, choice, index, byte);
             }
             5 => {
                 let leaf = &mut mutated.leaves[leaf_index];
                 prop_assume!(!leaf.siblings.is_empty());
-                let sibling = &mut leaf.siblings[index % leaf.siblings.len()];
+                let sibling_index = index % leaf.siblings.len();
+                let sibling = &mut leaf.siblings[sibling_index];
                 sibling.position = match sibling.position {
                     PrivateHnswMerkleSiblingPosition::Left => PrivateHnswMerkleSiblingPosition::Right,
                     PrivateHnswMerkleSiblingPosition::Right => PrivateHnswMerkleSiblingPosition::Left,
@@ -1286,6 +1296,15 @@ proptest! {
         if let Ok(ordered) = ordered {
             let naive_padding: usize = plan.batches.iter().map(|b| b.padding_leaves.len()).sum();
             let ordered_padding: usize = ordered.read_plan.batches.iter().map(|b| b.padding_leaves.len()).sum();
+            // A leaf with `n` tokens can be served once per batch, so the fewest collisions any
+            // ordering can reach is `token_count - sum(min(n, batch_count))`.
+            let mut counts: BTreeMap<u64, usize> = BTreeMap::new();
+            for position in &positions {
+                *counts.entry(position.leaf).or_default() += 1;
+            }
+            let optimal_padding = token_count - counts.values().map(|n| (*n).min(batch_count)).sum::<usize>();
+            prop_assert!(naive_padding >= optimal_padding);
+            prop_assert_eq!(ordered_padding, optimal_padding, "ordered planner must spread collisions optimally");
             prop_assert!(ordered_padding <= naive_padding);
             let mut sorted = ordered.payload_fetch_tokens.clone();
             sorted.sort();
@@ -1877,5 +1896,148 @@ proptest! {
             let _ = decode_private_oram_owner_prestage_package_v2(input);
             let _ = decode_private_oram_owner_prestage_attestation_v2(input);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sparse Merkle patches (append transactions)
+// ---------------------------------------------------------------------------------------------
+
+fn patch_proof(
+    index_epoch: u64,
+    old_commitments: &[String],
+    bucket_ids: &[u64],
+) -> PrivateOramAppendMerklePatchProofV1 {
+    let levels = merkle_levels(old_commitments);
+    PrivateOramAppendMerklePatchProofV1 {
+        version: PRIVATE_ORAM_APPEND_MERKLE_PATCH_PROOF_V1_VERSION,
+        index_epoch,
+        old_root_hash: BASE64URL_NOPAD.encode(&levels.last().unwrap()[0]),
+        bucket_count: old_commitments.len() as u64,
+        leaves: bucket_ids
+            .iter()
+            .map(|bucket_id| {
+                let mut index = *bucket_id as usize;
+                let siblings = levels[..levels.len() - 1]
+                    .iter()
+                    .enumerate()
+                    .map(|(level, hashes)| {
+                        let sibling = PrivateOramAppendMerkleSiblingV1 {
+                            level: level as u32,
+                            position: if index % 2 == 0 {
+                                PrivateOramAppendMerkleSiblingPositionV1::Right
+                            } else {
+                                PrivateOramAppendMerkleSiblingPositionV1::Left
+                            },
+                            hash: BASE64URL_NOPAD.encode(&hashes[index ^ 1]),
+                        };
+                        index /= 2;
+                        sibling
+                    })
+                    .collect();
+                PrivateOramAppendMerklePatchLeafV1 {
+                    bucket_id: *bucket_id,
+                    old_commitment: old_commitments[*bucket_id as usize].clone(),
+                    siblings,
+                }
+            })
+            .collect(),
+    }
+}
+
+proptest! {
+    #![proptest_config(cases(128))]
+
+    #[test]
+    fn sparse_merkle_patch_matches_full_recomputation_and_rejects_mutation(
+        bucket_count in 1u64..40,
+        old_seed in any::<u64>(),
+        updates in proptest::collection::btree_map(0u64..40, any::<u8>(), 1..8),
+        mutation in 0u32..9,
+        which in any::<usize>(),
+        byte in any::<u8>(),
+        choice in any::<u32>(),
+        index in any::<usize>(),
+    ) {
+        let old_commitments: Vec<String> = (0..bucket_count)
+            .map(|id| {
+                let mut hasher = Sha256::new();
+                hasher.update(old_seed.to_be_bytes());
+                hasher.update(id.to_be_bytes());
+                BASE64URL_NOPAD.encode(hasher.finalize().as_ref())
+            })
+            .collect();
+        let updates: BTreeMap<u64, u8> = updates.into_iter().filter(|(id, _)| *id < bucket_count).collect();
+        prop_assume!(!updates.is_empty());
+        let bucket_ids: Vec<u64> = updates.keys().copied().collect();
+        let proof = patch_proof(3, &old_commitments, &bucket_ids);
+        let old_root = proof.old_root_hash.clone();
+        let ordered_updates: Vec<PrivateOramAppendBucketRefV1> = updates
+            .iter()
+            .map(|(id, b)| PrivateOramAppendBucketRefV1 {
+                bucket_id: *id,
+                ciphertext_sha256: digest(*b),
+                bucket_commitment: digest(b.wrapping_add(1)),
+            })
+            .collect();
+
+        let patch = apply_private_oram_append_sparse_merkle_patch_v1(3, &old_root, bucket_count, &proof, &ordered_updates).unwrap();
+        let mut new_commitments = old_commitments.clone();
+        for update in &ordered_updates {
+            new_commitments[update.bucket_id as usize] = update.bucket_commitment.clone();
+        }
+        let expected_root = BASE64URL_NOPAD.encode(&merkle_levels(&new_commitments).last().unwrap()[0]);
+        prop_assert_eq!(&patch.new_root_hash, &expected_root, "sparse patch must equal a full recomputation");
+        prop_assert_eq!(patch.final_buckets.len(), ordered_updates.len());
+        if ordered_updates.iter().any(|u| u.bucket_commitment != old_commitments[u.bucket_id as usize]) {
+            prop_assert_ne!(&patch.new_root_hash, &old_root, "a changed commitment must move the root");
+        }
+
+        let leaf_index = which % proof.leaves.len();
+        let mut mutated = proof.clone();
+        let mut mutated_updates = ordered_updates.clone();
+        let mut expected_old_root = old_root.clone();
+        let mut epoch = 3u64;
+        match mutation {
+            0 => mutated.old_root_hash = digest(byte),
+            1 => expected_old_root = digest(byte),
+            2 => epoch = 4,
+            3 => mutated.leaves[leaf_index].old_commitment = digest(byte),
+            4 => {
+                let leaf = &mut mutated.leaves[leaf_index];
+                prop_assume!(!leaf.siblings.is_empty());
+                let sibling_index = index % leaf.siblings.len();
+                let hash = leaf.siblings[sibling_index].hash.clone();
+                leaf.siblings[sibling_index].hash = mutate_string(&hash, choice, index, byte);
+            }
+            5 => {
+                let leaf = &mut mutated.leaves[leaf_index];
+                prop_assume!(!leaf.siblings.is_empty());
+                leaf.siblings.pop();
+            }
+            6 => {
+                // An update for a bucket the proof does not cover.
+                let unproven = (0..bucket_count).find(|id| !bucket_ids.contains(id));
+                prop_assume!(unproven.is_some());
+                mutated_updates.push(PrivateOramAppendBucketRefV1 {
+                    bucket_id: unproven.unwrap(),
+                    ciphertext_sha256: digest(byte),
+                    bucket_commitment: digest(byte),
+                });
+            }
+            7 => mutated.bucket_count = bucket_count + 1,
+            _ => {
+                // Two leaves that disagree about a shared ancestor's sibling.
+                prop_assume!(mutated.leaves.len() > 1);
+                let leaf = &mut mutated.leaves[leaf_index];
+                prop_assume!(!leaf.siblings.is_empty());
+                leaf.siblings.last_mut().unwrap().hash = digest(byte);
+            }
+        }
+        prop_assume!(mutated != proof || mutated_updates != ordered_updates || expected_old_root != old_root || epoch != 3);
+        prop_assert!(
+            apply_private_oram_append_sparse_merkle_patch_v1(epoch, &expected_old_root, bucket_count, &mutated, &mutated_updates).is_err(),
+            "mutation {} accepted", mutation
+        );
     }
 }
