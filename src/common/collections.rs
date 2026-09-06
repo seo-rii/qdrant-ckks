@@ -3579,6 +3579,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
                 ..crate::settings::CryptoSettings::default()

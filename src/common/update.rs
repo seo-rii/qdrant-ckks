@@ -3846,6 +3846,7 @@ esac
                     signature_b64: None,
                     size: None,
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             )]),
         };
@@ -15473,6 +15474,7 @@ esac
         .unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn do_upsert_points_encrypts_payload_before_storage() {
         if std::env::var_os("QDRANT_SEC_LONG_UPDATE_TEST_STACK").is_none() {
