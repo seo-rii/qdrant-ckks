@@ -3227,7 +3227,11 @@ the SDK calls `read_paths`. This keeps SDK-generated batches compatible with
 the server-side duplicate path-label guard while still preserving a fixed path
 count; the leaf-label bucket-path helper also rejects duplicate labels before
 producing a request bucket sequence. Runtime and manifest validation reject path
-budgets larger than the available unique ORAM leaves. `plan_private_hnsw_oram_neighbor_clustered_leaves` provides a
+budgets larger than the available unique ORAM leaves. An SDK that reads a padded
+prefetch batch must also write back every path of that batch (evict the dummy
+paths with `evict_private_hnsw_oram_path`), because the server only bounds the
+write-back size: a write-back that covers the real paths alone reveals which of
+the prefetched paths were padding. `plan_private_hnsw_oram_neighbor_clustered_leaves` provides a
 deterministic graph-order leaf assignment helper for bulk builds, so SDK
 experiments can place entry-near neighbor chains on adjacent ORAM leaves before
 calling `build_private_hnsw_oram_plaintext_index_from_blocks`; the helper
@@ -4556,6 +4560,14 @@ Fixed while writing them:
 - `apply_private_oram_append_sparse_merkle_patch_v1` gained a property test:
   the patched root equals a full recomputation and every proof or update
   mutation is rejected.
+- A private result ORAM token fetch let the server tell real paths from the
+  dummy paths that pad a leaf collision, and therefore learn that two fetched
+  payloads shared a path: the read batch listed the real paths first and the
+  padding paths last, and only the real paths were written back (the server
+  enforces an upper bound on the write-back, not its shape). The planner now
+  emits each batch in canonical leaf order, and the fetch driver evicts every
+  padding path as well, so the write-back is exactly the read set. A property
+  test fetches random token sets with collisions and checks both.
 - The private ORAM bucket and client-state keys had no AES-GCM invocation
   budget although every path write-back seals a whole path with random nonces
   under the same derived key. `PrivateResultOramClientKeys` and
@@ -4582,6 +4594,10 @@ Known remaining limitations:
   nonces) on the client side as well.
 - Bridge responses carry no request id; a stray stdout line desynchronizes a
   worker until it is killed. Idle bridge stdout is queued without bound.
+- The server bounds the size of a private ORAM session write-back but does not
+  require it to cover exactly the paths the session read; the client library
+  writes back every read path (padding included), a third-party client that
+  writes back less reveals which of its reads were padding.
 - The internal replication lock is held across outbound peer calls and
   consensus waits during private ORAM recovery requests.
 - A mutation activation floor without an activation authority accepts a

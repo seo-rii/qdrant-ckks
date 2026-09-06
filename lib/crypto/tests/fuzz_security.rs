@@ -2418,3 +2418,140 @@ proptest! {
         prop_assert!(CiphertextEnvelope::from_stored_value(&extra).is_err(), "a second top-level key must be rejected");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Result ORAM token fetch: what the server observes must not depend on leaf collisions
+// ---------------------------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(cases(48))]
+
+    #[test]
+    fn result_token_fetch_reads_canonical_batches_and_writes_back_every_read_path(
+        tree_height in 2u32..4,
+        block_count in 2usize..8,
+        leaf_seed in proptest::collection::vec(any::<u64>(), 8),
+        fetch_mask in 1u8..255,
+        padding_offset in any::<u64>(),
+        remap_offset in any::<u64>(),
+    ) {
+        let config = result_config(tree_height, 2, 96);
+        let leaf_count = 1u64 << tree_height;
+        let mut manifest = result_manifest(tree_height, 2);
+        manifest.oram.bucket_size = 2;
+        manifest.oram.block_size_bytes = 96;
+        let index_epoch = manifest.index_epoch;
+
+        // Populate a plaintext tree through the client, then seal it as the server would hold it.
+        let mut server = ResultOramServer::new(config);
+        let mut state = PrivateResultOramClientState::new();
+        let mut blocks = Vec::new();
+        for i in 0..block_count {
+            let block = PrivateResultOramPayloadBlockPlaintext {
+                version: PRIVATE_RESULT_ORAM_PAYLOAD_BLOCK_VERSION,
+                payload_fetch_token: [i as u8 + 1; 32],
+                point_token: [i as u8 + 100; 32],
+                payload: vec![i as u8],
+                deleted: false,
+                generation: 1,
+            };
+            let leaf = leaf_seed[i % leaf_seed.len()] % leaf_count;
+            state.insert_new_stash_block(block.clone(), leaf, config).unwrap();
+            let eviction = evict_private_result_oram_path(&mut state, config, leaf, &server.path(leaf)).unwrap();
+            server.write_back(&eviction.writeback_buckets);
+            blocks.push(block);
+        }
+        let keys = result_keys();
+        let sealed: Vec<PrivateResultOramBucket> = server
+            .buckets
+            .iter()
+            .map(|bucket| {
+                seal_private_result_oram_plaintext_bucket(&keys, result_base_context(), index_epoch, bucket, config).unwrap()
+            })
+            .collect();
+        let commitments: Vec<String> = sealed.iter().map(|b| b.bucket_commitment.clone()).collect();
+        let root = private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+        let bucket_count = sealed.len() as u64;
+
+        // Fetch an even number of the stored tokens; collisions on a leaf are the interesting case.
+        let mut tokens: Vec<[u8; 32]> = blocks
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| fetch_mask & (1 << (i % 8)) != 0)
+            .map(|(_, block)| block.payload_fetch_token)
+            .collect();
+        if tokens.len() % 2 == 1 {
+            tokens.pop();
+        }
+        prop_assume!(!tokens.is_empty());
+        let positions: Vec<_> = tokens
+            .iter()
+            .map(|token| PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: *token,
+                leaf: state.position(token).unwrap(),
+            })
+            .collect();
+        let mut padding_cursor = padding_offset;
+        let plan = plan_private_result_oram_read_bucket_batches_for_fetch_tokens(&manifest, &tokens, &positions, || {
+            padding_cursor = padding_cursor.wrapping_add(1);
+            Ok(padding_cursor % leaf_count)
+        })
+        .unwrap();
+
+        // The batch layout is the canonical leaf order of real and padding paths together.
+        for (batch, chunk) in plan.batches.iter().zip(tokens.chunks(2)) {
+            let mut leaves: BTreeSet<u64> = chunk.iter().map(|token| state.position(token).unwrap()).collect();
+            leaves.extend(batch.padding_leaves.iter().copied());
+            let mut expected = Vec::new();
+            for leaf in &leaves {
+                expected.extend(private_result_oram_bucket_ids_for_leaf(*leaf, tree_height).unwrap());
+            }
+            prop_assert_eq!(&batch.bucket_ids, &expected, "batch must list paths in canonical leaf order");
+        }
+
+        let encrypted_batches: Vec<_> = plan
+            .batches
+            .iter()
+            .map(|batch| PrivateResultOramEncryptedBucketBatch {
+                index_epoch,
+                root_hash: root.clone(),
+                bucket_count,
+                proof_value: serde_json::to_string(&result_merkle_proof(index_epoch, &commitments, &batch.bucket_ids)).unwrap(),
+                buckets: batch.bucket_ids.iter().map(|id| sealed[*id as usize].clone()).collect(),
+            })
+            .collect();
+        let mut remap_cursor = remap_offset;
+        let result = fetch_private_result_oram_tokens_encrypted_verified(
+            &keys,
+            result_base_context(),
+            index_epoch,
+            &root,
+            bucket_count,
+            index_epoch + 1,
+            &mut state,
+            config,
+            &tokens,
+            &plan,
+            &encrypted_batches,
+            || {
+                remap_cursor = remap_cursor.wrapping_add(1);
+                Ok(remap_cursor % leaf_count)
+            },
+        )
+        .unwrap();
+
+        // The write-back covers exactly the read set, so it reveals nothing beyond the reads.
+        let read_set: BTreeSet<u64> = plan.batches.iter().flat_map(|b| b.bucket_ids.iter().copied()).collect();
+        let written: BTreeSet<u64> = result.updated_buckets.iter().map(|b| b.bucket_id).collect();
+        prop_assert_eq!(written, read_set, "write-back must cover every read path, real or padding");
+        prop_assert!(result.updated_buckets.iter().all(|b| b.index_epoch == index_epoch + 1));
+
+        // The fetched blocks are the right ones and the client state moved with them.
+        prop_assert_eq!(result.accesses.len(), tokens.len());
+        for access in &result.accesses {
+            let expected = blocks.iter().find(|b| b.payload_fetch_token == access.payload_fetch_token).unwrap();
+            prop_assert_eq!(&access.block, expected);
+            prop_assert_eq!(state.position(&access.payload_fetch_token), Some(access.new_leaf));
+        }
+    }
+}

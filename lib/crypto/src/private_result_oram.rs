@@ -1771,8 +1771,13 @@ pub fn plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
                 ));
             }
         }
+        // Canonical leaf order: listing the real paths first and the padding paths last would
+        // tell the server which paths pad a leaf collision, and therefore that two of the
+        // fetched payloads share a path.
+        let mut ordered_leaves: Vec<u64> = batch_leaves.iter().chain(&padding_leaves).copied().collect();
+        ordered_leaves.sort_unstable();
         let mut bucket_ids = Vec::new();
-        for leaf in batch_leaves.iter().chain(&padding_leaves) {
+        for leaf in &ordered_leaves {
             bucket_ids.extend(private_result_oram_bucket_ids_for_leaf(
                 *leaf,
                 manifest.oram.tree_height,
@@ -2606,7 +2611,10 @@ where
         if batch_leaves.len() != token_chunk.len() {
             return Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"));
         }
-        for leaf in &batch_leaves {
+        // The plan lists the batch in canonical leaf order (see the planner).
+        let mut ordered_leaves = batch_leaves.clone();
+        ordered_leaves.sort_unstable();
+        for leaf in &ordered_leaves {
             expected_bucket_ids.extend(private_result_oram_bucket_ids_for_leaf(
                 *leaf,
                 config.tree_height,
@@ -2695,6 +2703,35 @@ where
                 new_leaf: access.new_leaf,
                 block: access.block,
             });
+        }
+
+        // Every read path is written back, the dummy paths that pad a leaf collision included:
+        // a write-back that covered only the real paths would tell the server which of the
+        // read paths were padding, and therefore that two fetched payloads shared a leaf.
+        // Evicting along a dummy path is an ordinary Path ORAM eviction and only moves stash
+        // blocks whose own position lies on that path.
+        for padding_leaf in &batch_plan.padding_leaves {
+            let path_bucket_ids =
+                private_result_oram_bucket_ids_for_leaf(*padding_leaf, config.tree_height)?;
+            let path_buckets = path_bucket_ids
+                .iter()
+                .map(|bucket_id| {
+                    plaintext_by_bucket
+                        .get(bucket_id)
+                        .cloned()
+                        .ok_or(PrivateResultOramError::PathBucketMismatch)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let eviction = evict_private_result_oram_path(
+                &mut working_state,
+                config,
+                *padding_leaf,
+                &path_buckets,
+            )?;
+            for bucket in &eviction.writeback_buckets {
+                plaintext_by_bucket.insert(bucket.bucket_id, bucket.clone());
+                writeback_by_bucket.insert(bucket.bucket_id, bucket.clone());
+            }
         }
     }
 
@@ -7614,7 +7651,7 @@ mod tests {
         assert_eq!(plan.batches[0].token_count, 2);
         assert_eq!(plan.batches[0].bucket_ids, vec![0, 2, 5, 12, 0, 2, 6, 13]);
         assert_eq!(plan.batches[1].token_count, 2);
-        assert_eq!(plan.batches[1].bucket_ids, vec![0, 1, 3, 8, 0, 1, 3, 7]);
+        assert_eq!(plan.batches[1].bucket_ids, vec![0, 1, 3, 7, 0, 1, 3, 8]);
     }
 
     #[test]
@@ -7899,7 +7936,7 @@ mod tests {
         assert_eq!(padded.batches.len(), 1);
         assert_eq!(padded.batches[0].token_count, 2);
         assert_eq!(padded.batches[0].padding_leaves, vec![0]);
-        assert_eq!(padded.batches[0].bucket_ids, vec![0, 2, 5, 12, 0, 1, 3, 7]);
+        assert_eq!(padded.batches[0].bucket_ids, vec![0, 1, 3, 7, 0, 2, 5, 12]);
         // A padding source that only ever returns colliding leaves is rejected.
         assert_eq!(
             plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
