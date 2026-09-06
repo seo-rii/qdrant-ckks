@@ -2790,7 +2790,11 @@ fn validate_collection_crypto_runtime_inner_with_crypto_id(
     collection_crypto_id: &str,
     params: &CollectionParams,
 ) -> Result<(), StorageError> {
-    if let Some(encryption) = &params.encryption {
+    // A config left in `Disabled` by a completed decrypt run is not applied to any operation,
+    // so its rules have no runtime instances to check; validating them anyway kept decrypted
+    // collections from restarting or restoring once their instances were removed.
+    if let Some(encryption) = params.effective_encryption() {
+        let encryption = &encryption;
         if settings.cluster.enabled {
             let mut has_server_side_keyed_provider = false;
             for rule in &encryption.rules {
@@ -2853,12 +2857,18 @@ pub fn validate_recovered_collection_crypto_runtime(
                 encryption.migration_state,
             )));
         }
-        encryption.validate().map_err(|err| {
-            let detail = sanitize_collection_crypto_validation_error(err);
-            StorageError::bad_input(format!(
-                "recovered collection {collection_name} encryption config is invalid: {detail}",
-            ))
-        })?;
+        // A completed decrypt run leaves `Disabled` behind, which `effective_encryption()`
+        // treats as no encryption. The public config rules reject every non-active state so a
+        // client cannot request one directly; they must not keep such a collection from
+        // restarting.
+        if encryption.migration_state != CryptoMigrationState::Disabled {
+            encryption.validate().map_err(|err| {
+                let detail = sanitize_collection_crypto_validation_error(err);
+                StorageError::bad_input(format!(
+                    "recovered collection {collection_name} encryption config is invalid: {detail}",
+                ))
+            })?;
+        }
     }
     validate_collection_crypto_runtime_inner(settings, collection_name, params)
 }
@@ -2882,23 +2892,44 @@ pub fn validate_recovered_collection_crypto_config(
                 encryption.migration_state,
             )));
         }
-        encryption.validate().map_err(|err| {
-            let detail = sanitize_collection_crypto_validation_error(err);
-            StorageError::bad_input(format!(
-                "recovered collection {collection_name} encryption config is invalid: {detail}",
-            ))
-        })?;
+        // See validate_recovered_collection_crypto_runtime: a disabled config is inert and must
+        // not block a restore.
+        if encryption.migration_state != CryptoMigrationState::Disabled {
+            encryption.validate().map_err(|err| {
+                let detail = sanitize_collection_crypto_validation_error(err);
+                StorageError::bad_input(format!(
+                    "recovered collection {collection_name} encryption config is invalid: {detail}",
+                ))
+            })?;
+        }
     }
 
     let collection_crypto_id = config
         .uuid
         .map(|uuid| uuid.to_string())
         .unwrap_or_else(|| collection_name.to_string());
+    // The public params rules reject a disabled state outright; validate the rest of the params
+    // with the inert config stripped, exactly as effective_encryption() sees them.
+    let inert_params;
+    let params = if config
+        .params
+        .encryption
+        .as_ref()
+        .is_some_and(|encryption| encryption.migration_state == CryptoMigrationState::Disabled)
+    {
+        inert_params = CollectionParams {
+            encryption: None,
+            ..config.params.clone()
+        };
+        &inert_params
+    } else {
+        &config.params
+    };
     validate_collection_crypto_runtime_with_crypto_id(
         settings,
         collection_name,
         &collection_crypto_id,
-        &config.params,
+        params,
     )
 }
 
@@ -10660,6 +10691,7 @@ mod tests {
                     signature_b64: None,
                     size: Some(1),
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             )]),
         };
@@ -12126,6 +12158,7 @@ mod tests {
                     signature_b64: None,
                     size: Some(1),
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             )]),
         };
@@ -12879,6 +12912,7 @@ mod tests {
                 signature_b64: None,
                 size: None,
                 timeout_ms: None,
+                max_output_bytes: None,
             },
         );
         assert!(matches!(
@@ -13215,6 +13249,7 @@ mod tests {
                     signature_b64: None,
                     size: None,
                     timeout_ms: Some(1000),
+                    max_output_bytes: None,
                 },
             )]),
         };
@@ -13356,6 +13391,7 @@ mod tests {
                     signature_b64: None,
                     size: None,
                     timeout_ms: Some(1000),
+                    max_output_bytes: None,
                 },
             )]),
         };
@@ -14538,6 +14574,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(2),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
                 ..CryptoSettings::default()
@@ -14763,6 +14800,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
                 ..CryptoSettings::default()
@@ -17444,6 +17482,7 @@ mod tests {
                     signature_b64: None,
                     size: Some(4),
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             ),
             Err(CryptoSetupError::MissingBackendProgram {
@@ -17463,6 +17502,7 @@ mod tests {
                     signature_b64: None,
                     size: Some(4),
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             ),
             Err(CryptoSetupError::InvalidBackendProgram {
@@ -17482,6 +17522,7 @@ mod tests {
                     signature_b64: None,
                     size: None,
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             ),
             Err(CryptoSetupError::UnsupportedBackendKind {
@@ -17588,6 +17629,7 @@ mod tests {
                     signature_b64: None,
                     size: Some(1),
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             ),
             Ok(()),
@@ -17604,6 +17646,7 @@ mod tests {
                     signature_b64: None,
                     size: Some(1),
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             ),
             Err(CryptoSetupError::MissingBackendSha256Pin {
@@ -17622,6 +17665,7 @@ mod tests {
                     signature_b64: None,
                     size: Some(1),
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             ),
             Err(CryptoSetupError::InvalidBackendProgram { .. }),
@@ -17662,6 +17706,7 @@ mod tests {
                     signature_b64: None,
                     size: Some(1),
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             ),
             Err(CryptoSetupError::InvalidBackendProgram { .. }),
@@ -17683,6 +17728,7 @@ mod tests {
                 signature_b64: Some(signature_b64.clone()),
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
         )
         .expect("matching Ed25519 bridge signature must validate");
@@ -17709,6 +17755,7 @@ mod tests {
                 signature_b64: Some(signature_b64.clone()),
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
         )
         .expect_err("bridge signature validation must not bypass the sha256 program pin");
@@ -17779,6 +17826,7 @@ mod tests {
                 signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
         );
         let pool_result = validate_backend(
@@ -17791,6 +17839,7 @@ mod tests {
                 signature_b64: None,
                 size: Some(2),
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
         );
         let process_netns_result = validate_backend(
@@ -17803,6 +17852,7 @@ mod tests {
                 signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
         );
         let pool_netns_result = validate_backend(
@@ -17815,6 +17865,7 @@ mod tests {
                 signature_b64: None,
                 size: Some(2),
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
         );
 
@@ -17857,6 +17908,7 @@ mod tests {
                 signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
             &CryptoSettings::default(),
         )
@@ -17883,6 +17935,7 @@ mod tests {
                 signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
             &CryptoSettings::default(),
         )
@@ -17912,6 +17965,7 @@ mod tests {
                 signature_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 64])),
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
             &CryptoSettings::default(),
         )
@@ -17944,6 +17998,7 @@ mod tests {
                 signature_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 64])),
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
         )
         .expect_err("collection runtime validation must reject invalid bridge signature policy");
@@ -18006,6 +18061,7 @@ mod tests {
                 signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
             &settings,
         )
@@ -18027,6 +18083,7 @@ mod tests {
             size: 2,
             timeout_ms: Some(5_000),
             sensitive_env_names: vec![format!("ENV_{sentinel}")],
+            max_output_bytes: None,
         };
         let rendered = format!("{cache_key:?}");
 
@@ -18054,6 +18111,7 @@ mod tests {
             signature_b64: None,
             size: Some(2),
             timeout_ms: Some(5_000),
+            max_output_bytes: None,
         };
         let settings = CryptoSettings::default();
 
@@ -18108,6 +18166,7 @@ mod tests {
             signature_b64: None,
             size: Some(2),
             timeout_ms: Some(timeout_ms),
+            max_output_bytes: None,
         };
 
         openfhe_backend_from_config("openfhe_backend_0", &backend_config(5_000), &settings)
@@ -18174,6 +18233,7 @@ mod tests {
                 signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
             &CryptoSettings::default(),
         );
@@ -18201,6 +18261,7 @@ mod tests {
                 signature_b64: None,
                 size: None,
                 timeout_ms: Some(5_000),
+                max_output_bytes: None,
             },
             &CryptoSettings::default(),
         );
@@ -18226,6 +18287,7 @@ mod tests {
                     signature_b64: None,
                     size: Some(0),
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             ),
             Err(CryptoSetupError::InvalidBackendSize {
@@ -18245,6 +18307,7 @@ mod tests {
                     signature_b64: None,
                     size: Some(2),
                     timeout_ms: Some(5_000),
+                    max_output_bytes: None,
                 },
             ),
             Err(CryptoSetupError::InvalidBackendSize {
@@ -18269,6 +18332,7 @@ mod tests {
                     signature_b64: None,
                     size: None,
                     timeout_ms: Some(0),
+                    max_output_bytes: None,
                 },
             ),
             Err(CryptoSetupError::InvalidBackendTimeout {
@@ -20154,6 +20218,7 @@ mod tests {
                         signature_b64: None,
                         size: None,
                         timeout_ms: None,
+                        max_output_bytes: None,
                     },
                 )]),
                 allow_inline_key_material: true,
@@ -21390,6 +21455,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },
@@ -21812,6 +21878,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },
@@ -22201,7 +22268,7 @@ mod tests {
                 .expect_err("recovered in-flight migration state must fail closed");
             assert!(
                 matches!(err, StorageError::BadInput { ref description }
-                    if description.contains("in-flight or disabled crypto migration state")
+                    if description.contains("in-flight crypto migration state")
                         && description.contains("migration_state=active")),
                 "unexpected error for {migration_state:?}: {err:?}",
             );
@@ -22216,7 +22283,7 @@ mod tests {
             .expect_err("recovered in-flight migration config must fail closed");
             assert!(
                 matches!(err, StorageError::BadInput { ref description }
-                    if description.contains("in-flight or disabled crypto migration state")
+                    if description.contains("in-flight crypto migration state")
                         && description.contains("verified migration recovery manifest")),
                 "unexpected config error for {migration_state:?}: {err:?}",
             );
@@ -22551,6 +22618,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },
@@ -22730,6 +22798,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },
@@ -22814,6 +22883,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },
@@ -23239,6 +23309,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },
@@ -24985,6 +25056,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },
@@ -25065,6 +25137,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },
@@ -25148,6 +25221,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },
@@ -25231,6 +25305,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },
@@ -25300,6 +25375,7 @@ mod tests {
                         signature_b64: None,
                         size: Some(1),
                         timeout_ms: Some(5_000),
+                        max_output_bytes: None,
                     },
                 )]),
             },

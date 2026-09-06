@@ -4568,6 +4568,28 @@ Fixed while writing them:
   emits each batch in canonical leaf order, and the fetch driver evicts every
   padding path as well, so the write-back is exactly the read set. A property
   test fetches random token sets with collisions and checks both.
+- Completing a standalone private ORAM session commit (HNSW and result ORAM
+  alike) ran the registry's lease-expiry sweep with the committing session's
+  *renewed* lease as the clock, a value one full lease in the future, so every
+  other idle session on the node was evicted and its writer slot released
+  whenever any client committed. The sweep now uses the real clock and the
+  renewed lease is applied to the committing session only; a registry test
+  opens two sessions, commits one and checks the other survives. The same
+  commit now also resets the session's read-path counter, which only ever
+  grew, so a write-back is bounded by the paths read since the last commit
+  rather than by everything read since the session opened.
+- A collection whose decrypt migration had completed (`migration_state:
+  disabled`) could not be restarted or restored: the first pass relaxed the
+  in-flight gate of the recovery validators for `Disabled` but they still ran
+  the public config rules, which reject every non-active state so that clients
+  cannot request one directly, and the shared runtime validator checked the
+  disabled rules' instances against the runtime settings. The recovery
+  validators now skip those rules for `Disabled` and the runtime validator
+  works from `effective_encryption()`, which already treats `Disabled` as no
+  encryption, so a decrypted collection whose instances were retired restarts.
+  Found by building the server unit-test target for the first time; the test
+  that describes the intended behaviour had been failing since that pass, and
+  a sibling test still expected the previous error wording.
 - The private ORAM bucket and client-state keys had no AES-GCM invocation
   budget although every path write-back seals a whole path with random nonces
   under the same derived key. `PrivateResultOramClientKeys` and
