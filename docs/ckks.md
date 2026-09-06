@@ -4601,6 +4601,15 @@ Fixed while writing them:
 Run them with `cargo test -p qdrant-sec --test fuzz_security` and
 `cargo test -p qdrant-sec --lib concurrency_tests`.
 
+The server (`cargo test -p qdrant --bin qdrant`) and storage (`cargo test
+-p storage --lib`) unit-test binaries build again as of this pass. Run them on
+Linux: the private ORAM stores, mutation journal and recovery markers rely on
+Unix-only file semantics (directory `flock`, `O_DIRECTORY`/`O_NOFOLLOW`,
+mode bits, directory fsync), so on Windows those tests fail with
+"unsupported on this platform" or redacted I/O errors, and settings fixtures
+that use `/usr/local/bin/...` bridge paths fail the absolute-path check. All
+consensus-manager, session-registry and recovered-config tests pass on both.
+
 Known remaining limitations:
 
 - A private ORAM mutation generation whose owner disappears before the
