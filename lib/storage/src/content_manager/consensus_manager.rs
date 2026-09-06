@@ -5461,7 +5461,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_collection_layout_transition_applies_layout_before_meta_and_replays() {
+    fn private_oram_collection_layout_transition_applies_meta_before_layout_and_replays() {
         let dir = Builder::new()
             .prefix("private_oram_collection_layout_transition")
             .tempdir()
