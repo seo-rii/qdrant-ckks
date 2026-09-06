@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::aead::{EncryptionError, SecretKey, validate_resource_key_id};
+use crate::aead::{AeadInvocationBudget, EncryptionError, SecretKey, validate_resource_key_id};
 use crate::control_plane::{PRIVATE_HNSW_ORAM_BINDING, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER};
 use crate::private_hnsw_oram::{
     DistanceKind, FixedBudgetParams, OramParams, PrivateHnswManifestValidationContext,
@@ -226,6 +226,10 @@ pub struct PrivateHnswClientKeys {
     position_map: SecretKey,
     payload_token: SecretKey,
     blind_result: SecretKey,
+    /// AES-GCM invocations spent on `bucket_aead` by this instance.
+    bucket_seals: AeadInvocationBudget,
+    /// AES-GCM invocations spent on `position_map` (the client-state key) by this instance.
+    client_state_seals: AeadInvocationBudget,
 }
 
 impl PrivateHnswClientKeys {
@@ -244,6 +248,8 @@ impl PrivateHnswClientKeys {
             position_map: resource_key.derive_subkey(PRIVATE_HNSW_POSITION_MAP_DOMAIN)?,
             payload_token: resource_key.derive_subkey(PRIVATE_HNSW_PAYLOAD_TOKEN_DOMAIN)?,
             blind_result: resource_key.derive_subkey(PRIVATE_HNSW_BLIND_RESULT_DOMAIN)?,
+            bucket_seals: AeadInvocationBudget::new(),
+            client_state_seals: AeadInvocationBudget::new(),
         })
     }
 
@@ -314,6 +320,8 @@ impl PrivateHnswClientKeys {
             position_map,
             payload_token,
             blind_result,
+            bucket_seals: AeadInvocationBudget::new(),
+            client_state_seals: AeadInvocationBudget::new(),
         })
     }
 
@@ -335,6 +343,16 @@ impl PrivateHnswClientKeys {
 
     pub fn blind_result_key(&self) -> &SecretKey {
         &self.blind_result
+    }
+
+    /// AES-GCM seals performed with the bucket key by this instance.
+    pub fn bucket_seal_invocations(&self) -> u64 {
+        self.bucket_seals.invocations()
+    }
+
+    /// AES-GCM seals performed with the client-state key by this instance.
+    pub fn client_state_seal_invocations(&self) -> u64 {
+        self.client_state_seals.invocations()
     }
 }
 
@@ -1696,6 +1714,8 @@ pub fn seal_private_hnsw_oram_client_state_snapshot(
     PrivateHnswOramClientState::from_snapshot(snapshot)?;
     let plaintext = serde_json::to_vec(snapshot)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?;
+    keys.client_state_seals
+        .reserve("private HNSW ORAM client state key")?;
 
     let rng = SystemRandom::new();
     let mut nonce_bytes = [0u8; BUCKET_AEAD_NONCE_LEN];
@@ -4540,6 +4560,8 @@ pub fn seal_private_hnsw_oram_bucket(
     plaintext: &[u8],
 ) -> Result<PrivateHnswOramBucket, PrivateHnswClientError> {
     validate_bucket_context(context)?;
+    keys.bucket_seals
+        .reserve("private HNSW ORAM bucket key")?;
 
     let rng = SystemRandom::new();
     let mut nonce_bytes = [0u8; BUCKET_AEAD_NONCE_LEN];
@@ -13052,3 +13074,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "private_hnsw_client_budget_tests.rs"]
+mod budget_tests;

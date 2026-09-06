@@ -423,6 +423,65 @@ pub const AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT: u64 = 1 << 32;
 /// First invocation at which the cipher logs that the key is approaching its budget.
 const AES_GCM_RANDOM_NONCE_INVOCATION_WARNING: u64 = AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT / 2;
 
+/// Random-nonce AES-GCM invocation budget of one key.
+///
+/// [`AeadCipher`] embeds one; keys that are used through free-standing seal functions (the
+/// private ORAM bucket and client-state keys) carry their own, so every AES-GCM key in the
+/// process observes the same [`AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT`].
+pub struct AeadInvocationBudget {
+    invocations: AtomicU64,
+}
+
+impl AeadInvocationBudget {
+    pub const fn new() -> Self {
+        Self {
+            invocations: AtomicU64::new(0),
+        }
+    }
+
+    /// Number of invocations reserved so far.
+    pub fn invocations(&self) -> u64 {
+        self.invocations.load(Ordering::Relaxed)
+    }
+
+    /// Reserves one random-nonce invocation, refusing once the per-key budget is spent.
+    /// `key_label` names the key in the warning logged when half of the budget is gone.
+    pub fn reserve(&self, key_label: &str) -> Result<(), EncryptionError> {
+        let previous = self
+            .invocations
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                (used < AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT).then(|| used + 1)
+            })
+            .map_err(|_| EncryptionError::KeyUsageExhausted)?;
+        if previous + 1 == AES_GCM_RANDOM_NONCE_INVOCATION_WARNING {
+            log::warn!(
+                "{key_label} used for {previous} AES-GCM invocations in this process; it stops \
+                 encrypting at {AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT}, rotate the resource key"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_for_test(&self, invocations: u64) {
+        self.invocations.store(invocations, Ordering::Release);
+    }
+}
+
+impl Default for AeadInvocationBudget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Debug for AeadInvocationBudget {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AeadInvocationBudget")
+            .field("invocations", &self.invocations())
+            .finish()
+    }
+}
+
 pub struct AeadCipher {
     key_id: String,
     material_fingerprint: String,
@@ -430,7 +489,7 @@ pub struct AeadCipher {
     rk_epoch: Option<u64>,
     key: SecretKey,
     /// Number of encryptions performed with `key` by this instance.
-    invocations: AtomicU64,
+    invocations: AeadInvocationBudget,
 }
 
 impl Drop for AeadCipher {
@@ -678,7 +737,7 @@ impl AeadCipher {
             rk_id: String::new(),
             rk_epoch: None,
             key,
-            invocations: AtomicU64::new(0),
+            invocations: AeadInvocationBudget::new(),
         })
     }
 
@@ -747,30 +806,17 @@ impl AeadCipher {
 
     /// Number of encryptions this cipher instance has performed.
     pub fn invocations(&self) -> u64 {
-        self.invocations.load(Ordering::Relaxed)
+        self.invocations.invocations()
     }
 
     /// Reserves one random-nonce invocation, refusing once the per-key budget is spent.
     fn reserve_invocation(&self) -> Result<(), EncryptionError> {
-        let previous = self
-            .invocations
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-                (used < AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT).then(|| used + 1)
-            })
-            .map_err(|_| EncryptionError::KeyUsageExhausted)?;
-        if previous + 1 == AES_GCM_RANDOM_NONCE_INVOCATION_WARNING {
-            log::warn!(
-                "encryption key used for {previous} AES-GCM invocations in this process; it \
-                 stops encrypting at {AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT}, rotate the \
-                 resource key"
-            );
-        }
-        Ok(())
+        self.invocations.reserve("encryption key")
     }
 
     #[cfg(test)]
-    fn set_invocations_for_test(&self, invocations: u64) {
-        self.invocations.store(invocations, Ordering::Release);
+    pub(crate) fn set_invocations_for_test(&self, invocations: u64) {
+        self.invocations.set_for_test(invocations);
     }
 
     pub(crate) fn encrypt_with_aad_suffix(

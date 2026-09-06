@@ -4553,6 +4553,13 @@ Fixed while writing them:
 - `apply_private_oram_append_sparse_merkle_patch_v1` gained a property test:
   the patched root equals a full recomputation and every proof or update
   mutation is rejected.
+- The private ORAM bucket and client-state keys had no AES-GCM invocation
+  budget although every path write-back seals a whole path with random nonces
+  under the same derived key. `PrivateResultOramClientKeys` and
+  `PrivateHnswClientKeys` now carry the same per-key 2^32 budget as
+  `AeadCipher` (`AeadInvocationBudget`), refuse further seals with
+  `KeyUsageExhausted` once it is spent and warn at half; opening never
+  consumes budget. Rotating the resource key resets it.
 
 Run them with `cargo test -p qdrant-sec --test fuzz_security` and
 `cargo test -p qdrant-sec --lib concurrency_tests`.

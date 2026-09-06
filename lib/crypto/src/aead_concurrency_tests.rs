@@ -29,10 +29,7 @@ fn invocation_budget_is_exact_under_contention() {
     const ATTEMPTS_PER_THREAD: usize = 16;
 
     let cipher = Arc::new(test_cipher(7));
-    cipher.invocations.store(
-        AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT - REMAINING,
-        Ordering::SeqCst,
-    );
+    cipher.set_invocations_for_test(AES_GCM_RANDOM_NONCE_INVOCATION_LIMIT - REMAINING);
     let barrier = Arc::new(Barrier::new(THREADS));
     let successes = Arc::new(AtomicU64::new(0));
     let exhausted = Arc::new(AtomicU64::new(0));

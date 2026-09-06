@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::aead::{EncryptionError, SecretKey, validate_resource_key_id};
+use crate::aead::{AeadInvocationBudget, EncryptionError, SecretKey, validate_resource_key_id};
 use crate::control_plane::{PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING};
 use crate::private_hnsw_oram::OramParams;
 
@@ -635,6 +635,10 @@ impl PrivateResultOramClientState {
 pub struct PrivateResultOramClientKeys {
     bucket_aead: SecretKey,
     client_state: SecretKey,
+    /// AES-GCM invocations spent on `bucket_aead` by this instance.
+    bucket_seals: AeadInvocationBudget,
+    /// AES-GCM invocations spent on `client_state` by this instance.
+    client_state_seals: AeadInvocationBudget,
 }
 
 impl PrivateResultOramClientKeys {
@@ -650,6 +654,8 @@ impl PrivateResultOramClientKeys {
             bucket_aead: resource_key.derive_subkey(PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN)?,
             client_state: resource_key
                 .derive_subkey(PRIVATE_RESULT_ORAM_CLIENT_STATE_AEAD_DOMAIN)?,
+            bucket_seals: AeadInvocationBudget::new(),
+            client_state_seals: AeadInvocationBudget::new(),
         })
     }
 
@@ -689,6 +695,8 @@ impl PrivateResultOramClientKeys {
         Ok(Self {
             bucket_aead,
             client_state,
+            bucket_seals: AeadInvocationBudget::new(),
+            client_state_seals: AeadInvocationBudget::new(),
         })
     }
 
@@ -698,6 +706,16 @@ impl PrivateResultOramClientKeys {
 
     pub fn client_state_key(&self) -> &SecretKey {
         &self.client_state
+    }
+
+    /// AES-GCM seals performed with the bucket key by this instance.
+    pub fn bucket_seal_invocations(&self) -> u64 {
+        self.bucket_seals.invocations()
+    }
+
+    /// AES-GCM seals performed with the client-state key by this instance.
+    pub fn client_state_seal_invocations(&self) -> u64 {
+        self.client_state_seals.invocations()
     }
 }
 
@@ -816,6 +834,8 @@ pub fn seal_private_result_oram_client_state_snapshot(
     PrivateResultOramClientState::from_snapshot(snapshot)?;
     let plaintext = serde_json::to_vec(snapshot)
         .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?;
+    keys.client_state_seals
+        .reserve("private result ORAM client state key")?;
 
     let rng = SystemRandom::new();
     let mut nonce_bytes = [0u8; PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN];
@@ -2299,6 +2319,8 @@ pub fn seal_private_result_oram_bucket(
     plaintext: &[u8],
 ) -> Result<PrivateResultOramBucket, PrivateResultOramError> {
     validate_private_result_bucket_context(context)?;
+    keys.bucket_seals
+        .reserve("private result ORAM bucket key")?;
 
     let rng = SystemRandom::new();
     let mut nonce_bytes = [0u8; PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN];
@@ -10170,3 +10192,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "private_result_oram_budget_tests.rs"]
+mod budget_tests;
