@@ -4504,7 +4504,10 @@ Stores, bridge and API layer:
 
 `lib/crypto/tests/fuzz_security.rs` drives every untrusted-input surface of
 the crypto crate with `proptest`: AEAD envelope and payload envelope
-mutations, the control-plane envelope parser, leaf labels, the result ORAM
+mutations, the control-plane envelope parser and stored-value round trip, the
+server-side ingress validators (upload bundles and manifests of both ORAMs
+with single-field mutations of an otherwise valid bundle, client CKKS
+sidecars), leaf labels, the result ORAM
 block/bucket codecs, the HNSW node block/bucket codecs, sealed buckets and
 client state snapshots, Merkle path proofs (every field mutation, swapped or
 stale buckets, dropped leaves), fetch batch planning under leaf collisions, a

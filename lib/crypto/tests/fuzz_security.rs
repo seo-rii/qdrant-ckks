@@ -14,14 +14,22 @@ use std::collections::{BTreeMap, BTreeSet};
 use data_encoding::BASE64URL_NOPAD;
 use proptest::prelude::*;
 use qdrant_sec::control_plane::{
-    CiphertextEnvelope, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
+    CiphertextEnvelope, CryptoCapability, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+    PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
 };
 use qdrant_sec::payload::{
     ClientPayloadValidationContext, PayloadEncryptionPolicy, PayloadTextEncryptor,
     is_client_encrypted_payload_value, is_encrypted_payload_value, validate_client_payload_value,
 };
 use qdrant_sec::private_hnsw_client::*;
-use qdrant_sec::private_hnsw_oram::{OramKind, OramParams, PrivateHnswOramBucket};
+use qdrant_sec::private_hnsw_oram::{
+    DistanceKind, FixedBudgetParams, OramKind, OramParams, PrivateHnswManifestValidationContext,
+    PrivateHnswOramBucket, PrivateHnswOramManifest, PrivateHnswOramSignature,
+    PrivateHnswOramUploadBundle, PrivateHnswParams, PrivateHnswSignatureVerification,
+    ResultPrivacyMode, validate_private_hnsw_oram_manifest_shape,
+    validate_private_hnsw_oram_manifest_signature_shape, validate_private_hnsw_oram_upload_bundle,
+    validate_private_hnsw_oram_upload_bundle_with_signature,
+};
 use qdrant_sec::private_oram_append_client::{
     PRIVATE_ORAM_APPEND_MERKLE_PATCH_PROOF_V1_VERSION, PrivateOramAppendMerklePatchLeafV1,
     PrivateOramAppendMerklePatchProofV1, PrivateOramAppendMerkleSiblingPositionV1,
@@ -40,7 +48,12 @@ use qdrant_sec::private_oram_owner_reservation_prepare::decode_private_oram_owne
 use qdrant_sec::private_oram_owner_reservation_resolution::decode_private_oram_owner_reservation_resolution_receipt_v1;
 use qdrant_sec::private_oram_point_staging::*;
 use qdrant_sec::private_result_oram::*;
-use qdrant_sec::vector::{CkksParameters, CkksPublicMaterial};
+use qdrant_sec::vector::{
+    CkksParameters, CkksPublicMaterial, ClientCkksVectorSignatureVerification,
+    ClientCkksVectorValidationContext, client_ckks_vector_sidecar_envelope_key,
+    client_ckks_vector_signature_message, is_client_ckks_vector_payload_value,
+    is_encrypted_ckks_vector_payload_value, validate_client_ckks_vector_payload_value_for_runtime,
+};
 use qdrant_sec::{AeadCipher, EncryptedEnvelope, EncryptionContext, SecretKey};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -2039,5 +2052,369 @@ proptest! {
             apply_private_oram_append_sparse_merkle_patch_v1(epoch, &expected_old_root, bucket_count, &mutated, &mutated_updates).is_err(),
             "mutation {} accepted", mutation
         );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Server-side ingress validators: upload bundles, manifests, client CKKS sidecars
+// ---------------------------------------------------------------------------------------------
+
+static ZERO_PUBLIC_KEY: [u8; 32] = [0; 32];
+
+fn hnsw_manifest_fixture() -> PrivateHnswOramManifest {
+    PrivateHnswOramManifest {
+        version: 1,
+        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+        binding: PRIVATE_HNSW_ORAM_BINDING.to_string(),
+        collection_id: COLLECTION_ID.to_string(),
+        vector_name: VECTOR_NAME.to_string(),
+        key_id: KEY_ID.to_string(),
+        rk_id: RK_ID.to_string(),
+        rk_epoch: RK_EPOCH,
+        dim: 4,
+        distance: DistanceKind::Euclid,
+        hnsw: PrivateHnswParams {
+            m: 2,
+            ef_construction: 32,
+            max_layers: 4,
+            fixed_neighbor_slots: 2,
+        },
+        oram: OramParams {
+            kind: OramKind::PathOram,
+            bucket_size: 2,
+            block_size_bytes: 512,
+            tree_height: 1,
+            path_batch_size: 2,
+        },
+        fixed_budget: FixedBudgetParams {
+            enabled: true,
+            upper_layer_steps: 4,
+            base_layer_steps: 8,
+            paths_per_round: 2,
+            fixed_result_k: 2,
+        },
+        index_epoch: 5,
+        root_hash: digest(0),
+        bucket_count: 3,
+        logical_node_count: 3,
+        dummy_node_count: 0,
+        result_privacy: ResultPrivacyMode::IdsVisible,
+        owner_signing_key_id: "tenant-a/owner".to_string(),
+        created_at_unix: 1,
+    }
+}
+
+fn hnsw_validation_context() -> PrivateHnswManifestValidationContext<'static> {
+    PrivateHnswManifestValidationContext {
+        expected_collection_id: COLLECTION_ID,
+        expected_vector_name: VECTOR_NAME,
+        expected_key_id: KEY_ID,
+        expected_rk_id: RK_ID,
+        min_rk_epoch: RK_EPOCH,
+        max_rk_epoch: RK_EPOCH,
+        expected_dim: 4,
+        expected_distance: DistanceKind::Euclid,
+        signature_verification: PrivateHnswSignatureVerification {
+            expected_key_id: "tenant-a/owner",
+            public_key: &ZERO_PUBLIC_KEY,
+        },
+    }
+}
+
+/// A structurally valid HNSW upload bundle: fixed-size sealed buckets whose commitments match
+/// the manifest root, with a well-formed (but unverifiable) owner signature.
+fn hnsw_upload_bundle() -> PrivateHnswOramUploadBundle {
+    let mut manifest = hnsw_manifest_fixture();
+    let config = hnsw_config(1, 2, 512, 2);
+    let keys = hnsw_keys();
+    let buckets: Vec<PrivateHnswOramBucket> = (0..3)
+        .map(|id| {
+            seal_private_hnsw_oram_plaintext_bucket(
+                &keys,
+                hnsw_base_context(),
+                manifest.index_epoch,
+                &empty_private_hnsw_oram_plaintext_bucket(id, config).unwrap(),
+                config,
+            )
+            .unwrap()
+        })
+        .collect();
+    let commitments: Vec<String> = buckets.iter().map(|b| b.bucket_commitment.clone()).collect();
+    manifest.root_hash = private_hnsw_oram_merkle_root_for_commitments(&commitments).unwrap();
+    PrivateHnswOramUploadBundle {
+        manifest,
+        manifest_signature: PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/owner".to_string(),
+            sig: BASE64URL_NOPAD.encode(&[1u8; 64]),
+        },
+        buckets,
+    }
+}
+
+fn result_upload_bundle() -> PrivateResultOramUploadBundle {
+    let mut manifest = result_manifest(1, 2);
+    let config = result_config(1, 4, 256);
+    let keys = result_keys();
+    let buckets: Vec<PrivateResultOramBucket> = (0..3)
+        .map(|id| {
+            seal_private_result_oram_plaintext_bucket(
+                &keys,
+                result_base_context(),
+                manifest.index_epoch,
+                &empty_private_result_oram_plaintext_bucket(id, config).unwrap(),
+                config,
+            )
+            .unwrap()
+        })
+        .collect();
+    let commitments: Vec<String> = buckets.iter().map(|b| b.bucket_commitment.clone()).collect();
+    manifest.root_hash = private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+    PrivateResultOramUploadBundle {
+        manifest,
+        manifest_signature: PrivateResultOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/owner".to_string(),
+            sig: BASE64URL_NOPAD.encode(&[1u8; 64]),
+        },
+        buckets,
+    }
+}
+
+/// Replaces one manifest field either with arbitrary JSON or with a same-typed tweak.
+fn mutate_manifest_field(
+    manifest_value: &Value,
+    field: usize,
+    replacement: Value,
+    byte: u8,
+) -> (String, Vec<Value>) {
+    let object = manifest_value.as_object().unwrap();
+    let keys: Vec<&String> = object.keys().collect();
+    let key = keys[field % keys.len()].clone();
+    let original = object[&key].clone();
+    let tweaked = match &original {
+        Value::String(s) => Value::String(mutate_string(s, field as u32, field, byte)),
+        Value::Number(n) => json!(n.as_u64().unwrap_or(0).wrapping_add(u64::from(byte) + 1)),
+        Value::Bool(b) => Value::Bool(!b),
+        other => other.clone(),
+    };
+    let candidates = [replacement, tweaked]
+        .into_iter()
+        .map(|mutated| {
+            let mut candidate = manifest_value.clone();
+            candidate[key.as_str()] = mutated;
+            candidate
+        })
+        .collect();
+    (key, candidates)
+}
+
+const HNSW_BINDING_FIELDS: &[&str] = &[
+    "version",
+    "provider",
+    "binding",
+    "collection_id",
+    "vector_name",
+    "key_id",
+    "rk_id",
+    "rk_epoch",
+    "index_epoch",
+    "root_hash",
+    "bucket_count",
+    "owner_signing_key_id",
+];
+
+const RESULT_BINDING_FIELDS: &[&str] = &[
+    "version",
+    "provider",
+    "binding",
+    "collection_id",
+    "key_id",
+    "rk_id",
+    "rk_epoch",
+    "index_epoch",
+    "root_hash",
+    "bucket_count",
+    "owner_signing_key_id",
+];
+
+proptest! {
+    #![proptest_config(cases(256))]
+
+    #[test]
+    fn ingress_validators_never_panic_on_arbitrary_json(value in json_value()) {
+        if let Ok(manifest) = serde_json::from_value::<PrivateHnswOramManifest>(value.clone()) {
+            let _ = validate_private_hnsw_oram_manifest_shape(&manifest);
+        }
+        if let Ok(signature) = serde_json::from_value::<PrivateHnswOramSignature>(value.clone()) {
+            let _ = validate_private_hnsw_oram_manifest_signature_shape(&signature);
+        }
+        if let Ok(bundle) = serde_json::from_value::<PrivateHnswOramUploadBundle>(value.clone()) {
+            let _ = validate_private_hnsw_oram_upload_bundle(&bundle);
+        }
+        if let Ok(manifest) = serde_json::from_value::<PrivateResultOramManifest>(value.clone()) {
+            let _ = validate_private_result_oram_manifest_shape(&manifest);
+        }
+        if let Ok(bundle) = serde_json::from_value::<PrivateResultOramUploadBundle>(value.clone()) {
+            let _ = validate_private_result_oram_upload_bundle(&bundle);
+        }
+        let _ = is_encrypted_ckks_vector_payload_value(&value);
+        let _ = is_client_ckks_vector_payload_value(&value);
+        let _ = client_ckks_vector_signature_message(&value);
+        let _ = client_ckks_vector_sidecar_envelope_key(&value, "text");
+        let context_digest = digest(3);
+        let _ = validate_client_ckks_vector_payload_value_for_runtime(
+            &value,
+            ClientCkksVectorValidationContext {
+                collection_id: "docs",
+                point_id: "1",
+                vector_name: "text",
+                expected_key_id: KEY_ID,
+                expected_rk_id: RK_ID,
+                min_rk_epoch: 0,
+                max_rk_epoch: u64::MAX,
+                expected_context_digest: &context_digest,
+                max_slots: 16,
+                signature_verification: ClientCkksVectorSignatureVerification {
+                    expected_key_id: "tenant-a/signing",
+                    public_key: &ZERO_PUBLIC_KEY,
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn hnsw_upload_bundle_validation_survives_manifest_mutations(
+        field in any::<usize>(),
+        replacement in json_value(),
+        byte in any::<u8>(),
+    ) {
+        let bundle = hnsw_upload_bundle();
+        let commitments = validate_private_hnsw_oram_upload_bundle(&bundle).unwrap();
+        prop_assert_eq!(commitments.len(), 3);
+        // A well-formed signature that does not verify never passes the signed validation.
+        prop_assert!(
+            validate_private_hnsw_oram_upload_bundle_with_signature(&bundle, hnsw_validation_context()).is_err()
+        );
+
+        let manifest_value = serde_json::to_value(&bundle.manifest).unwrap();
+        let (key, candidates) = mutate_manifest_field(&manifest_value, field, replacement, byte);
+        for candidate in candidates {
+            let Ok(manifest) = serde_json::from_value::<PrivateHnswOramManifest>(candidate) else {
+                continue;
+            };
+            if manifest == bundle.manifest {
+                continue;
+            }
+            let _ = validate_private_hnsw_oram_manifest_shape(&manifest);
+            let mutated = PrivateHnswOramUploadBundle {
+                manifest,
+                manifest_signature: bundle.manifest_signature.clone(),
+                buckets: bundle.buckets.clone(),
+            };
+            let result = validate_private_hnsw_oram_upload_bundle(&mutated);
+            if HNSW_BINDING_FIELDS.contains(&key.as_str()) {
+                prop_assert!(result.is_err(), "mutated manifest field {} was accepted", key);
+            }
+            let _ = validate_private_hnsw_oram_upload_bundle_with_signature(&mutated, hnsw_validation_context());
+        }
+    }
+
+    #[test]
+    fn result_upload_bundle_validation_survives_manifest_mutations(
+        field in any::<usize>(),
+        replacement in json_value(),
+        byte in any::<u8>(),
+    ) {
+        let bundle = result_upload_bundle();
+        let commitments = validate_private_result_oram_upload_bundle(&bundle).unwrap();
+        prop_assert_eq!(commitments.len(), 3);
+
+        let manifest_value = serde_json::to_value(&bundle.manifest).unwrap();
+        let (key, candidates) = mutate_manifest_field(&manifest_value, field, replacement, byte);
+        for candidate in candidates {
+            let Ok(manifest) = serde_json::from_value::<PrivateResultOramManifest>(candidate) else {
+                continue;
+            };
+            if manifest == bundle.manifest {
+                continue;
+            }
+            let _ = validate_private_result_oram_manifest_shape(&manifest);
+            let mutated = PrivateResultOramUploadBundle {
+                manifest,
+                manifest_signature: bundle.manifest_signature.clone(),
+                buckets: bundle.buckets.clone(),
+            };
+            let result = validate_private_result_oram_upload_bundle(&mutated);
+            if RESULT_BINDING_FIELDS.contains(&key.as_str()) {
+                prop_assert!(result.is_err(), "mutated manifest field {} was accepted", key);
+            }
+        }
+    }
+
+    #[test]
+    fn upload_bundle_bucket_mutations_are_rejected(
+        which in any::<usize>(),
+        field in 0u32..5,
+        choice in any::<u32>(),
+        index in any::<usize>(),
+        byte in any::<u8>(),
+    ) {
+        let mut bundle = hnsw_upload_bundle();
+        let bucket_index = which % bundle.buckets.len();
+        let original = bundle.buckets[bucket_index].clone();
+        {
+            let bucket = &mut bundle.buckets[bucket_index];
+            match field {
+                0 => bucket.ciphertext = mutate_string(&original.ciphertext, choice, index, byte),
+                1 => bucket.ciphertext_sha256 = mutate_string(&original.ciphertext_sha256, choice, index, byte),
+                2 => bucket.bucket_commitment = mutate_string(&original.bucket_commitment, choice, index, byte),
+                3 => bucket.bucket_id = (original.bucket_id + 1 + u64::from(byte)) % 3,
+                _ => bucket.index_epoch = original.index_epoch.wrapping_add(u64::from(byte) + 1),
+            }
+        }
+        prop_assume!(bundle.buckets[bucket_index] != original);
+        prop_assert!(validate_private_hnsw_oram_upload_bundle(&bundle).is_err(), "mutated bucket accepted");
+        // Duplicated or missing buckets are rejected as well.
+        let mut duplicated = hnsw_upload_bundle();
+        let clone = duplicated.buckets[bucket_index].clone();
+        duplicated.buckets.push(clone);
+        prop_assert!(validate_private_hnsw_oram_upload_bundle(&duplicated).is_err());
+        let mut missing = hnsw_upload_bundle();
+        missing.buckets.remove(bucket_index);
+        prop_assert!(validate_private_hnsw_oram_upload_bundle(&missing).is_err());
+    }
+
+    #[test]
+    fn control_plane_envelope_round_trips(
+        version in 1u16..=u16::MAX,
+        provider in "[a-z0-9._:/@-]{1,32}",
+        fingerprint in "[a-z0-9._:/@-]{1,32}",
+        key_id in "[a-z0-9._:/@-]{1,32}",
+        binding in proptest::option::of("[a-z0-9._:/@-]{1,32}"),
+        headers in json_value(),
+        body in "[A-Za-z0-9_-]{1,64}",
+        capability in 0u8..4,
+    ) {
+        let capability = match capability {
+            0 => CryptoCapability::PayloadValue,
+            1 => CryptoCapability::VectorCiphertext,
+            2 => CryptoCapability::MetadataValue,
+            _ => CryptoCapability::MetadataExactMatchToken,
+        };
+        let headers = match headers {
+            Value::Object(map) => map,
+            _ => Map::new(),
+        };
+        let envelope = match CiphertextEnvelope::new(version, capability, provider, fingerprint, key_id, binding, headers, body) {
+            Ok(envelope) => envelope,
+            Err(_) => return Ok(()),
+        };
+        let stored = envelope.to_stored_value();
+        let parsed = CiphertextEnvelope::from_stored_value(&stored).unwrap();
+        prop_assert!(parsed == Some(envelope.clone()), "stored envelope must parse back to itself");
+        let mut extra = stored.clone();
+        extra.as_object_mut().unwrap().insert("extra".to_string(), json!(1));
+        prop_assert!(CiphertextEnvelope::from_stored_value(&extra).is_err(), "a second top-level key must be rejected");
     }
 }
