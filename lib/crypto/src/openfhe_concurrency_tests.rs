@@ -126,12 +126,9 @@ fn worker_pool_never_exceeds_pool_size_under_contention() {
             thread::spawn(move || {
                 barrier.wait();
                 for _ in 0..ITERATIONS {
-                    let reservation = match backend.worker_process() {
-                        Ok(reservation) => reservation,
-                        Err(_) => {
-                            failures.fetch_add(1, Ordering::SeqCst);
-                            continue;
-                        }
+                    let Ok(reservation) = backend.worker_process() else {
+                        failures.fetch_add(1, Ordering::SeqCst);
+                        continue;
                     };
                     let now = live.fetch_add(1, Ordering::SeqCst) + 1;
                     max_live.fetch_max(now, Ordering::SeqCst);

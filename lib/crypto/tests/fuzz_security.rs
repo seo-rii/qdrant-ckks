@@ -203,7 +203,9 @@ fn merkle_levels(commitments: &[String]) -> Vec<Vec<[u8; 32]>> {
         let next = levels
             .last()
             .unwrap()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 let mut hasher = Sha256::new();
                 hasher.update([1]);
@@ -238,7 +240,7 @@ fn result_merkle_proof(
                     .map(|(level, hashes)| {
                         let sibling = PrivateResultOramMerkleSibling {
                             level: level as u32,
-                            position: if index % 2 == 0 {
+                            position: if index.is_multiple_of(2) {
                                 PrivateResultOramMerkleSiblingPosition::Right
                             } else {
                                 PrivateResultOramMerkleSiblingPosition::Left
@@ -280,7 +282,7 @@ fn hnsw_merkle_proof(
                     .map(|(level, hashes)| {
                         let sibling = PrivateHnswOramMerkleSibling {
                             level: level as u32,
-                            position: if index % 2 == 0 {
+                            position: if index.is_multiple_of(2) {
                                 PrivateHnswMerkleSiblingPosition::Right
                             } else {
                                 PrivateHnswMerkleSiblingPosition::Left
@@ -578,9 +580,8 @@ proptest! {
         if let Ok(mutated_value) = serde_json::from_str::<Value>(&mutated) {
             let mut mutated_payload = Map::new();
             mutated_payload.insert("body".to_string(), mutated_value);
-            match encryptor.decrypt_selected_fields("1", &mut mutated_payload, &policy) {
-                Ok(_) => prop_assert_eq!(mutated_payload["body"].as_str(), Some(body.as_str())),
-                Err(_) => {}
+            if encryptor.decrypt_selected_fields("1", &mut mutated_payload, &policy).is_ok() {
+                prop_assert_eq!(mutated_payload["body"].as_str(), Some(body.as_str()));
             }
         }
         // A different point id never opens the envelope.
@@ -1878,9 +1879,8 @@ proptest! {
             Value::Object(map) => Some(map),
             _ => None,
         };
-        let encoded = match encode_private_oram_staged_insert_frame_v1(&frame) {
-            Ok(encoded) => encoded,
-            Err(_) => return Ok(()),
+        let Ok(encoded) = encode_private_oram_staged_insert_frame_v1(&frame) else {
+            return Ok(());
         };
         let decoded = decode_private_oram_staged_insert_frame_v1(&encoded).unwrap();
         prop_assert!(decoded == frame, "frame round trip");
@@ -1937,7 +1937,7 @@ fn patch_proof(
                     .map(|(level, hashes)| {
                         let sibling = PrivateOramAppendMerkleSiblingV1 {
                             level: level as u32,
-                            position: if index % 2 == 0 {
+                            position: if index.is_multiple_of(2) {
                                 PrivateOramAppendMerkleSiblingPositionV1::Right
                             } else {
                                 PrivateOramAppendMerkleSiblingPositionV1::Left
@@ -2406,9 +2406,8 @@ proptest! {
             Value::Object(map) => map,
             _ => Map::new(),
         };
-        let envelope = match CiphertextEnvelope::new(version, capability, provider, fingerprint, key_id, binding, headers, body) {
-            Ok(envelope) => envelope,
-            Err(_) => return Ok(()),
+        let Ok(envelope) = CiphertextEnvelope::new(version, capability, provider, fingerprint, key_id, binding, headers, body) else {
+            return Ok(());
         };
         let stored = envelope.to_stored_value();
         let parsed = CiphertextEnvelope::from_stored_value(&stored).unwrap();
