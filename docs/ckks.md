@@ -4610,8 +4610,89 @@ mode bits, directory fsync), so on Windows those tests fail with
 that use `/usr/local/bin/...` bridge paths fail the absolute-path check. All
 consensus-manager, session-registry and recovered-config tests pass on both.
 
+### Fourth pass: module audits
+
+This pass read the crypto crate's append pipeline, activation/recovery,
+mutation and owner-lifecycle modules and the collection crate's owner journal
+and store adapter end to end, and re-checked the CKKS sidecar and control-plane
+envelopes, the AEAD envelope binding, the payload envelope and blind index, the
+HNSW manifest/commit code, the consensus session leases and the REST/gRPC body
+limits. Fixed:
+
+- An HNSW append transaction issued one server path per queued action and
+  refused a window whose paths repeated, so two candidates whose Path ORAM
+  positions coincide, or a rewrite path equal to the insert-eviction or a
+  padding leaf of the same window, aborted the attempt and, after the first
+  window, poisoned it. The abandoned attempt told the server that two secret
+  positions collided. Windows are now built from slots: actions that resolve
+  to the same leaf share one path read (every member's block is on that path
+  or already stashed, so one load and one eviction serve all of them) and each
+  merged action frees a slot that reads the next spare padding leaf of the
+  plan. The plan carries one padding leaf per fixed read path, more than the
+  schedule consumes, so the substitutes need no plan change; a window is
+  refused (`padding_leaves`) only when the spare leaves run out. Every window
+  still carries exactly `paths_per_window` distinct paths and repeats across
+  windows stay allowed. Tests cover a padding-leaf collision, two candidates
+  on one leaf, the insert eviction colliding with a rewrite path and spare-leaf
+  exhaustion.
+- A wrong window sequence passed to `accept_verified_window` of either append
+  transaction consumed nothing but still poisoned the attempt; it now keeps
+  waiting for the right response.
+- `validate_private_oram_owner_capsule_install_request_signature_v2` hashed
+  the package body (up to 128 MiB) before verifying the coordinator signature
+  that already commits to the body's length and digest; the signature is now
+  checked first.
+- Peer recovery requests accepted peer id 0 (Raft's "no peer" sentinel) for
+  either party, unlike the adoption and capsule-transport requests.
+- The staged insert frame decoder pre-reserved `count * size_of::<Value>()`
+  bytes for every JSON array before parsing an element; nested arrays with
+  large declared counts reserved tens of bytes per input byte at every level.
+  The reservation is capped by what the remaining input could pay for.
+- The owner lifecycle and reservation-prepare signer validators accepted any
+  `key_id` next to a well-formed public key; like the cleanup and resolution
+  validators they now require the id derived from the key.
+
+Checked and left as is: every signature and digest message in the audited
+modules is domain-separated and length-prefixed; activation manifests, mixed
+version proofs and terminal evidence bind the fields an attacker could swap;
+the owner journal's persistence layer (exclusive-create, fsync, no-replace
+rename, canonical re-encode, pinned directory descriptors, exact mode and
+link counts) and its digest coverage are sound; AEAD, wrapped-key and sidecar
+envelopes bind their full context; session leases and lease renewals use the
+server clock only.
+
 Known remaining limitations:
 
+- The collection-side paired owner journal
+  (`<hnsw store>/temp/private-oram-owner-v2/active`) is never archived or
+  removed once its terminal record is written; the storage-level mutation
+  journal archives only its own `active/` after clear. A later `prepare` or
+  prestage adoption for the same collection compares the new journal against
+  the retained one byte for byte, reports `ConcurrentMutation`, and adoption
+  then installs an insert-only `Quarantined` terminal marker on the intent. A
+  coordinator retry of `adopt_for_parent_v2` after the child reached its
+  terminal takes the same path. Retiring the owner journal after the storage
+  archive step is the missing lifecycle transition; it needs the same
+  durability discipline as the rest of the journal and can only be exercised
+  on Linux.
+- `prepare_reservation_fence_v1` returns an existing fence for a matching
+  challenge before checking whether its cancellation is already durable (the
+  fence file is unlinked after the resolution is fsynced), so a crash between
+  the two steps lets a cancelled attempt be signed `ReadyExact` once more; and
+  preparing a new challenge unlinks an unconsumed Finalized resolution, after
+  which `confirm_installed_reservation_resolution_v1` cannot produce the
+  completion receipt locally.
+- The owner store adapter maps every owner journal error, including
+  `Indeterminate` raised after a terminal rename succeeded, to `bad_request`.
+- The all-owner cleanup certificate cannot check its own completeness
+  (`owner_count` is self-declared); callers must compare it with the roster.
+- HNSW append graph planning fails after the candidate windows, poisoning the
+  attempt, when a selected neighbor has a level-0 neighbor outside the
+  candidate set; the checkpoint carries no adjacency, so SDKs must pass a
+  closed candidate set.
+- Append checkpoints are sealed with random-nonce AES-GCM under one derived key
+  per collection and manifest without an invocation budget (2^32 mutations of
+  one collection).
 - A private ORAM mutation generation whose owner disappears before the
   recovery capsules are ready cannot be reclaimed; an owner-eviction or early
   abort certificate is still missing.
