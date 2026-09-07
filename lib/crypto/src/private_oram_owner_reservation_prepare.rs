@@ -11,7 +11,8 @@ use thiserror::Error;
 use crate::{
     PRIVATE_ORAM_PEER_RECOVERY_SIGNATURE_ALGORITHM, PRIVATE_ORAM_PEER_RECOVERY_SIGNATURE_VERSION,
     PrivateOramOwnerCleanupSignatureV1, PrivateOramOwnerCleanupSignerV1,
-    PrivateOramOwnerLifecycleStateV1,
+    PrivateOramOwnerLifecycleStateV1, PrivateOramPeerRecoveryPublicKeyV1,
+    validate_private_oram_peer_recovery_public_key_v1,
 };
 
 pub const PRIVATE_ORAM_OWNER_RESERVATION_PREPARE_VERSION_V1: u16 = 1;
@@ -441,16 +442,20 @@ fn verify_signature(
 fn validate_signer(
     signer: &PrivateOramOwnerCleanupSignerV1,
 ) -> Result<(), PrivateOramOwnerReservationPrepareError> {
-    if signer.version != PRIVATE_ORAM_PEER_RECOVERY_SIGNATURE_VERSION
-        || signer.alg != PRIVATE_ORAM_PEER_RECOVERY_SIGNATURE_ALGORITHM
-        || signer.key_epoch == 0
-    {
-        return Err(PrivateOramOwnerReservationPrepareError::InvalidField(
-            "signer",
-        ));
-    }
+    // A signer is only well formed when `key_id` is the id derived from `public_key`; the
+    // cleanup and resolution validators require the same, so a record keyed by `key_id` can
+    // never carry another owner's id next to an unrelated key.
     validate_identifier(&signer.key_id, "key_id")?;
-    validate_base64_exact(&signer.public_key, DIGEST_BYTES, "public_key")
+    let peer = PrivateOramPeerRecoveryPublicKeyV1 {
+        version: signer.version,
+        alg: signer.alg.clone(),
+        key_epoch: signer.key_epoch,
+        key_id: signer.key_id.clone(),
+        public_key: signer.public_key.clone(),
+    };
+    validate_private_oram_peer_recovery_public_key_v1(&peer)
+        .map(|_| ())
+        .map_err(|_| PrivateOramOwnerReservationPrepareError::InvalidField("signer"))
 }
 
 fn validate_signature_shape(

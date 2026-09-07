@@ -955,7 +955,12 @@ fn decode_json_value(
             let child_depth = depth
                 .checked_add(1)
                 .ok_or(PrivateOramStagingError::LimitExceeded("json_depth"))?;
-            let mut values = try_vec_with_capacity(count)?;
+            // Every element costs at least one encoded byte, so `count <= remaining` bounds the
+            // element count but not the reservation: an untrusted count would otherwise reserve
+            // `size_of::<Value>()` bytes per input byte at every nesting level. Reserve only what
+            // the remaining input could pay for and let the vector grow past that.
+            let reservation = count.min(decoder.remaining() / std::mem::size_of::<Value>().max(1));
+            let mut values = try_vec_with_capacity(reservation)?;
             for _ in 0..count {
                 values.push(decode_json_value(decoder, child_depth, context)?);
             }
