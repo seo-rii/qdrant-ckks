@@ -548,6 +548,15 @@ fn read_transcript_rejects_noncontiguous_windows_and_malformed_paths() {
             "read_windows.paths"
         ))
     );
+
+    let mut duplicate_in_window = read_windows(0);
+    duplicate_in_window[0].paths[1] = duplicate_in_window[0].paths[0].clone();
+    assert_eq!(
+        transcript(&duplicate_in_window),
+        Err(PrivateOramMutationError::InvalidMutationField(
+            "read_windows.paths"
+        ))
+    );
 }
 
 fn signature_case(
@@ -1097,6 +1106,28 @@ fn hnsw_only_visible_point_append_validates() {
 }
 
 #[test]
+fn append_rejects_observed_transcript_whose_digest_does_not_cover_its_paths() {
+    let (key_pair, manifest, mutation) = fixture(true);
+    let old_state_digest =
+        private_oram_signed_state_v2_digest(&mutation.mutation.old_state.state).unwrap();
+    let mut expected = expected_validation(&manifest, &old_state_digest);
+    // The digest still matches the writeback, but no longer covers the labels it sits beside.
+    expected.observed_read_transcripts[0]
+        .ordered_leaf_labels
+        .swap(0, 1);
+    assert_eq!(
+        validate_private_oram_append_mutation_v1(
+            &manifest,
+            &mutation,
+            validation_context(&key_pair, &manifest, &expected),
+        ),
+        Err(PrivateOramMutationError::InvalidMutationField(
+            "observed_read_transcripts.transcript_digest"
+        ))
+    );
+}
+
+#[test]
 fn manifest_rejects_capacity_without_reserved_slack_and_mixed_capacities() {
     let mut manifest = fixture_manifest(true);
     manifest.indexes[0].capacity.reserved_physical_slots = 29;
@@ -1382,7 +1413,9 @@ fn append_rejects_unobserved_read_transcript_and_stale_writer_fence() {
             &mutation,
             validation_context(&key_pair, &manifest, &expected),
         ),
-        Err(PrivateOramMutationError::FixedBudgetMismatch)
+        Err(PrivateOramMutationError::InvalidMutationField(
+            "observed_read_transcripts.transcript_digest"
+        ))
     );
 
     let (key_pair, manifest, mutation) = fixture(true);
@@ -1396,7 +1429,9 @@ fn append_rejects_unobserved_read_transcript_and_stale_writer_fence() {
             &mutation,
             validation_context(&key_pair, &manifest, &expected),
         ),
-        Err(PrivateOramMutationError::FixedBudgetMismatch)
+        Err(PrivateOramMutationError::InvalidMutationField(
+            "observed_read_transcripts.transcript_digest"
+        ))
     );
 
     let (key_pair, manifest, mutation) = fixture(true);

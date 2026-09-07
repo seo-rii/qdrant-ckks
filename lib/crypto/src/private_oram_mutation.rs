@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
@@ -1145,9 +1146,12 @@ pub fn try_private_oram_append_read_transcript_v1_digest_message(
                 "read_windows",
             ));
         }
+        // A window reads `paths_per_window` distinct paths (a collision is padded with a fresh
+        // leaf), which is also what the server-side read validator enforces.
+        let mut window_leaves = BTreeSet::new();
         for path in &window.paths {
             let leaf = u64::from_be_bytes(decode_base64url_8(path)?);
-            if leaf >= leaf_count {
+            if leaf >= leaf_count || !window_leaves.insert(leaf) {
                 return Err(PrivateOramMutationError::InvalidMutationField(
                     "read_windows.paths",
                 ));
@@ -2367,6 +2371,57 @@ fn validate_observed_read_transcripts(
                     "observed_read_transcripts.ordered_leaf_labels",
                 ));
             }
+        }
+        // The digest is recomputed from the labels rather than trusted. A transcript that was
+        // deserialized from storage could otherwise carry any digest, which would make the later
+        // `transcript_digest == writeback.read_transcript_digest` check tautological.
+        let paths_per_window = usize::try_from(transcript.paths_per_window).map_err(|_| {
+            PrivateOramMutationError::InvalidMutationField("observed_read_transcripts.geometry")
+        })?;
+        if !transcript
+            .ordered_leaf_labels
+            .len()
+            .is_multiple_of(paths_per_window)
+        {
+            return Err(PrivateOramMutationError::InvalidMutationField(
+                "observed_read_transcripts.geometry",
+            ));
+        }
+        let windows = transcript
+            .ordered_leaf_labels
+            .chunks(paths_per_window)
+            .enumerate()
+            .map(|(sequence, paths)| {
+                Ok(PrivateOramAppendReadWindowV1 {
+                    sequence: u32::try_from(sequence).map_err(|_| {
+                        PrivateOramMutationError::InvalidMutationField(
+                            "observed_read_transcripts.geometry",
+                        )
+                    })?,
+                    paths: paths.to_vec(),
+                })
+            })
+            .collect::<Result<Vec<_>, PrivateOramMutationError>>()?;
+        let expected_digest =
+            digest_message(try_private_oram_append_read_transcript_v1_digest_message(
+                PrivateOramAppendReadTranscriptDigestInput {
+                    collection_id: &transcript.collection_id,
+                    manifest_digest: &transcript.manifest_digest,
+                    mutation_id: &transcript.mutation_id,
+                    old_state_digest: &transcript.old_state_digest,
+                    writer_lease_digest: &transcript.writer_lease_digest,
+                    writer_fence: transcript.writer_fence,
+                    paths_per_window: transcript.paths_per_window,
+                    tree_height: transcript.tree_height,
+                    kind: transcript.kind,
+                    index_name: &transcript.index_name,
+                    windows: &windows,
+                },
+            )?);
+        if expected_digest != transcript.transcript_digest {
+            return Err(PrivateOramMutationError::InvalidMutationField(
+                "observed_read_transcripts.transcript_digest",
+            ));
         }
     }
     Ok(())
