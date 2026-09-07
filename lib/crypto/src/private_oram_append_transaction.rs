@@ -10,12 +10,13 @@ use crate::private_hnsw_client::{
     PrivateHnswBucketAeadBaseContext, PrivateHnswClientError, PrivateHnswClientKeys,
     PrivateHnswEncryptedPathBatch, PrivateHnswNodeBlockPlaintext, PrivateHnswOramClientConfig,
     PrivateHnswOramClientState, PrivateHnswOramClientStateSnapshot, PrivateHnswOramMerkleProof,
-    PrivateHnswOramPlaintextBucket, PrivateHnswVectorEncoding, access_private_hnsw_oram_path,
-    access_private_hnsw_oram_path_with_append_rewrite, decode_private_hnsw_oram_leaf_label,
+    PrivateHnswOramPlaintextBucket, PrivateHnswVectorEncoding, decode_private_hnsw_oram_leaf_label,
     encode_private_hnsw_node_block, encode_private_hnsw_oram_leaf_label,
-    evict_private_hnsw_oram_path, open_private_hnsw_oram_verified_path_batch,
-    private_hnsw_oram_bucket_count, private_hnsw_oram_bucket_ids_for_leaf,
-    seal_private_hnsw_oram_plaintext_bucket, validate_private_hnsw_upload_bucket,
+    evict_private_hnsw_oram_loaded_path, load_private_hnsw_oram_path_for_append,
+    open_private_hnsw_oram_verified_path_batch, private_hnsw_oram_bucket_count,
+    private_hnsw_oram_bucket_ids_for_leaf, remap_private_hnsw_oram_stash_block,
+    rewrite_private_hnsw_oram_stash_block, seal_private_hnsw_oram_plaintext_bucket,
+    validate_private_hnsw_upload_bucket,
 };
 use crate::private_hnsw_oram::{PrivateHnswOramBucket, private_hnsw_oram_bucket_ciphertext_bytes};
 use crate::private_oram_append_client::{
@@ -487,16 +488,29 @@ impl PrivateOramAppendHnswPathActionV2 {
     }
 }
 
+/// One served path of a read window and the actions applied on its single load/evict cycle.
+///
+/// Actions whose current leaf coincides within a window share one path read: every member's
+/// block is on that path (or already stashed), so one load and one eviction serve all of them.
+/// The slot a merged action would have used reads an independent padding leaf instead, so a
+/// window always carries `paths_per_window` distinct paths and the server never learns whether
+/// two secret positions collided.
+#[derive(Clone)]
+struct PrivateOramAppendHnswWindowSlotV2 {
+    leaf: u64,
+    actions: Vec<PrivateOramAppendHnswPathActionV2>,
+}
+
 enum PrivateOramAppendHnswTransactionStatusV2 {
     Ready,
     MarkerPrepared {
         marker: Box<PrivateOramAppendRecoveryMarkerV3>,
         window: PrivateOramAppendReadWindowV1,
-        actions: Vec<PrivateOramAppendHnswPathActionV2>,
+        slots: Vec<PrivateOramAppendHnswWindowSlotV2>,
     },
     Awaiting {
         window: PrivateOramAppendReadWindowV1,
-        actions: Vec<PrivateOramAppendHnswPathActionV2>,
+        slots: Vec<PrivateOramAppendHnswWindowSlotV2>,
     },
     Poisoned,
 }
@@ -924,13 +938,15 @@ impl PrivateOramAppendHnswTransactionV2 {
             .take(paths_per_window)
             .cloned()
             .collect::<Vec<_>>();
-        let paths = match actions
+        let slots = match self.group_window_slots(actions) {
+            Ok(slots) => slots,
+            Err(error) => return self.fail_prepare(error),
+        };
+        let paths = match slots
             .iter()
-            .map(|action| {
-                action.leaf(&self.working_state).and_then(|leaf| {
-                    encode_private_hnsw_oram_leaf_label(leaf, self.config.tree_height)
-                        .map_err(Into::into)
-                })
+            .map(|slot| {
+                encode_private_hnsw_oram_leaf_label(slot.leaf, self.config.tree_height)
+                    .map_err(Into::into)
             })
             .collect::<Result<Vec<_>, PrivateOramAppendTransactionError>>()
         {
@@ -954,9 +970,50 @@ impl PrivateOramAppendHnswTransactionV2 {
         self.status = PrivateOramAppendHnswTransactionStatusV2::MarkerPrepared {
             marker: Box::new(marker.clone()),
             window: window.clone(),
-            actions,
+            slots,
         };
         Ok(Some(marker))
+    }
+
+    /// Turns the next window's actions into one slot per served path.
+    ///
+    /// Actions that resolve to the same leaf join the slot of the first one; each merged
+    /// action frees a slot, which reads the next padding leaf of the plan that is distinct
+    /// from every other path of the window. The window shape therefore never depends on
+    /// whether secret positions collided, and the plan's spare padding leaves (it carries
+    /// one per fixed read path, more than the schedule consumes) pay for the substitutes.
+    fn group_window_slots(
+        &mut self,
+        actions: Vec<PrivateOramAppendHnswPathActionV2>,
+    ) -> Result<Vec<PrivateOramAppendHnswWindowSlotV2>, PrivateOramAppendTransactionError> {
+        let mut slots: Vec<PrivateOramAppendHnswWindowSlotV2> = Vec::with_capacity(actions.len());
+        let mut substitute_count = 0usize;
+        for action in actions {
+            let leaf = action.leaf(&self.working_state)?;
+            match slots.iter_mut().find(|slot| slot.leaf == leaf) {
+                Some(slot) => {
+                    slot.actions.push(action);
+                    substitute_count += 1;
+                }
+                None => slots.push(PrivateOramAppendHnswWindowSlotV2 {
+                    leaf,
+                    actions: vec![action],
+                }),
+            }
+        }
+        for _ in 0..substitute_count {
+            let leaf = loop {
+                let leaf = self.next_padding_leaf()?;
+                if slots.iter().all(|slot| slot.leaf != leaf) {
+                    break leaf;
+                }
+            };
+            slots.push(PrivateOramAppendHnswWindowSlotV2 {
+                leaf,
+                actions: vec![PrivateOramAppendHnswPathActionV2::Padding { leaf }],
+            });
+        }
+        Ok(slots)
     }
 
     /// Reveals the prepared path window only after the caller supplies the
@@ -1002,7 +1059,7 @@ impl PrivateOramAppendHnswTransactionV2 {
         let PrivateOramAppendHnswTransactionStatusV2::MarkerPrepared {
             marker,
             window,
-            actions,
+            slots,
         } = pending
         else {
             let error = match pending {
@@ -1024,16 +1081,18 @@ impl PrivateOramAppendHnswTransactionV2 {
             self.status = PrivateOramAppendHnswTransactionStatusV2::MarkerPrepared {
                 marker,
                 window,
-                actions,
+                slots,
             };
             return Err(PrivateOramAppendTransactionError::RecoveryMarkerMismatch);
         }
-        let action_count = actions.len();
+        // Every window consumes exactly `paths_per_window` queued actions; merged actions are
+        // replaced by substitute padding slots, so the slot count equals the action count.
+        let action_count = slots.len();
         self.actions.drain(..action_count);
         self.requested_window_count = marker.requested_window_count;
         self.status = PrivateOramAppendHnswTransactionStatusV2::Awaiting {
             window: window.clone(),
-            actions,
+            slots,
         };
         Ok(PrivateOramAppendHnswReadRequestV2 {
             window,
@@ -1057,16 +1116,19 @@ impl PrivateOramAppendHnswTransactionV2 {
             &mut self.status,
             PrivateOramAppendHnswTransactionStatusV2::Poisoned,
         );
-        let PrivateOramAppendHnswTransactionStatusV2::Awaiting { window, actions } = pending else {
+        let PrivateOramAppendHnswTransactionStatusV2::Awaiting { window, slots } = pending else {
             self.status = pending;
             return Err(PrivateOramAppendTransactionError::WindowNotPending);
         };
         if window.sequence != sequence {
+            // Nothing has been consumed yet: keep waiting for the right response instead of
+            // poisoning the attempt on a caller or server sequencing slip.
+            self.status = PrivateOramAppendHnswTransactionStatusV2::Awaiting { window, slots };
             return Err(PrivateOramAppendTransactionError::WindowSequenceMismatch);
         }
         let snapshot = self.window_snapshot();
         if let Err(error) =
-            self.accept_verified_window_inner(&window, &actions, keys, encrypted_batch)
+            self.accept_verified_window_inner(&window, &slots, keys, encrypted_batch)
         {
             self.restore_window_snapshot(snapshot);
             return Err(error);
@@ -1443,23 +1505,20 @@ impl PrivateOramAppendHnswTransactionV2 {
     fn accept_verified_window_inner(
         &mut self,
         window: &PrivateOramAppendReadWindowV1,
-        actions: &[PrivateOramAppendHnswPathActionV2],
+        slots: &[PrivateOramAppendHnswWindowSlotV2],
         keys: &PrivateHnswClientKeys,
         encrypted_batch: &PrivateHnswEncryptedPathBatch,
     ) -> Result<(), PrivateOramAppendTransactionError> {
-        if actions.len() != window.paths.len()
+        if slots.len() != window.paths.len()
             || window.paths.len()
                 != usize::try_from(self.plan.paths_per_window)
                     .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("window"))?
         {
             return Err(PrivateOramAppendTransactionError::InvalidInput("window"));
         }
-        let expected_bucket_ids = actions
+        let expected_bucket_ids = slots
             .iter()
-            .map(|action| action.leaf(&self.working_state))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .map(|leaf| private_hnsw_oram_bucket_ids_for_leaf(leaf, self.config.tree_height))
+            .map(|slot| private_hnsw_oram_bucket_ids_for_leaf(slot.leaf, self.config.tree_height))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .flatten()
@@ -1515,92 +1574,98 @@ impl PrivateOramAppendHnswTransactionV2 {
                 .map_err(|_| PrivateOramAppendTransactionError::ProofSetMismatch)?;
         self.merge_proof(&PrivateOramAppendMerklePatchProofV1::from(&proof))?;
 
-        for action in actions {
-            let leaf = action.leaf(&self.working_state)?;
-            let path_bucket_ids =
-                private_hnsw_oram_bucket_ids_for_leaf(leaf, self.config.tree_height)?;
-            let path_buckets = path_bucket_ids
+        for slot in slots {
+            let path_buckets =
+                private_hnsw_oram_bucket_ids_for_leaf(slot.leaf, self.config.tree_height)?
+                    .iter()
+                    .map(|bucket_id| {
+                        self.plaintext_overlay
+                            .get(bucket_id)
+                            .or_else(|| old_plaintext_by_id.get(bucket_id))
+                            .cloned()
+                            .ok_or(
+                                PrivateOramAppendTransactionError::ResponseBucketSequenceMismatch,
+                            )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+            // Every access of the slot needs its block on this path (or already stashed); the
+            // loader checks all of them before it moves a single block, so a served path that
+            // lacks one leaves the working state untouched.
+            let required_node_ids = slot
+                .actions
                 .iter()
-                .map(|bucket_id| {
-                    self.plaintext_overlay
-                        .get(bucket_id)
-                        .or_else(|| old_plaintext_by_id.get(bucket_id))
-                        .cloned()
-                        .ok_or(PrivateOramAppendTransactionError::ResponseBucketSequenceMismatch)
+                .filter_map(|action| match action {
+                    PrivateOramAppendHnswPathActionV2::Candidate { node_id, .. }
+                    | PrivateOramAppendHnswPathActionV2::Rewrite { node_id, .. } => Some(*node_id),
+                    PrivateOramAppendHnswPathActionV2::Insert { .. }
+                    | PrivateOramAppendHnswPathActionV2::Padding { .. } => None,
                 })
-                .collect::<Result<Vec<_>, _>>()?;
-            let writeback_buckets = match action {
-                PrivateOramAppendHnswPathActionV2::Candidate {
-                    node_id,
-                    remap_leaf,
-                } => {
-                    let access = access_private_hnsw_oram_path(
-                        &mut self.working_state,
-                        self.config,
-                        *node_id,
-                        &path_buckets,
-                        *remap_leaf,
-                    )?;
-                    self.candidate_blocks.push(access.block);
-                    access.writeback_buckets
-                }
-                PrivateOramAppendHnswPathActionV2::Rewrite {
-                    node_id,
-                    remap_leaf,
-                    previous,
-                    replacement,
-                } => {
-                    let previous = previous.as_ref().clone();
-                    let replacement = replacement.as_ref().clone();
-                    access_private_hnsw_oram_path_with_append_rewrite(
-                        &mut self.working_state,
-                        self.config,
-                        *node_id,
-                        &path_buckets,
-                        *remap_leaf,
-                        move |observed| {
-                            if observed != &previous {
-                                return Err(PrivateHnswClientError::InvalidAppendRewrite);
-                            }
-                            Ok(replacement)
-                        },
-                    )?
-                    .writeback_buckets
-                }
-                PrivateOramAppendHnswPathActionV2::Insert { leaf } => {
-                    if self.inserted {
-                        return Err(PrivateOramAppendTransactionError::InvalidInput("insert"));
+                .collect::<Vec<_>>();
+            let path_bucket_ids = load_private_hnsw_oram_path_for_append(
+                &mut self.working_state,
+                self.config,
+                slot.leaf,
+                &path_buckets,
+                &required_node_ids,
+            )?;
+            for action in &slot.actions {
+                match action {
+                    PrivateOramAppendHnswPathActionV2::Candidate {
+                        node_id,
+                        remap_leaf,
+                    } => {
+                        let block = remap_private_hnsw_oram_stash_block(
+                            &mut self.working_state,
+                            self.config,
+                            *node_id,
+                            *remap_leaf,
+                        )?;
+                        self.candidate_blocks.push(block);
                     }
-                    let new_block = self
-                        .graph_delta
-                        .as_ref()
-                        .ok_or(PrivateOramAppendTransactionError::Incomplete)?
-                        .new_block
-                        .clone();
-                    self.working_state.insert_new_stash_block(
-                        new_block,
-                        self.point.initial_leaf,
-                        self.config,
-                    )?;
-                    let eviction = evict_private_hnsw_oram_path(
-                        &mut self.working_state,
-                        self.config,
-                        *leaf,
-                        &path_buckets,
-                    )?;
-                    self.inserted = true;
-                    eviction.writeback_buckets
+                    PrivateOramAppendHnswPathActionV2::Rewrite {
+                        node_id,
+                        remap_leaf,
+                        previous,
+                        replacement,
+                    } => {
+                        rewrite_private_hnsw_oram_stash_block(
+                            &mut self.working_state,
+                            self.config,
+                            *node_id,
+                            *remap_leaf,
+                            |observed| {
+                                if observed != previous.as_ref() {
+                                    return Err(PrivateHnswClientError::InvalidAppendRewrite);
+                                }
+                                Ok(replacement.as_ref().clone())
+                            },
+                        )?;
+                    }
+                    PrivateOramAppendHnswPathActionV2::Insert { .. } => {
+                        if self.inserted {
+                            return Err(PrivateOramAppendTransactionError::InvalidInput("insert"));
+                        }
+                        let new_block = self
+                            .graph_delta
+                            .as_ref()
+                            .ok_or(PrivateOramAppendTransactionError::Incomplete)?
+                            .new_block
+                            .clone();
+                        self.working_state.insert_new_stash_block(
+                            new_block,
+                            self.point.initial_leaf,
+                            self.config,
+                        )?;
+                        self.inserted = true;
+                    }
+                    PrivateOramAppendHnswPathActionV2::Padding { .. } => {}
                 }
-                PrivateOramAppendHnswPathActionV2::Padding { leaf } => {
-                    evict_private_hnsw_oram_path(
-                        &mut self.working_state,
-                        self.config,
-                        *leaf,
-                        &path_buckets,
-                    )?
-                    .writeback_buckets
-                }
-            };
+            }
+            let writeback_buckets = evict_private_hnsw_oram_loaded_path(
+                &mut self.working_state,
+                self.config,
+                &path_bucket_ids,
+            )?;
             if self.working_state.stash_len() > self.max_client_stash_blocks {
                 return Err(PrivateOramAppendTransactionError::StashBoundExceeded);
             }
@@ -1609,7 +1674,7 @@ impl PrivateOramAppendHnswTransactionV2 {
         self.accepted_path_count = self
             .accepted_path_count
             .checked_add(
-                u32::try_from(actions.len())
+                u32::try_from(slots.len())
                     .map_err(|_| PrivateOramAppendTransactionError::Incomplete)?,
             )
             .ok_or(PrivateOramAppendTransactionError::Incomplete)?;

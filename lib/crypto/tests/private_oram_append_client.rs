@@ -488,6 +488,147 @@ fn hnsw_append_transaction_fixture_with_candidate_generation(
     }
 }
 
+/// Two live candidates that both sit at leaf 1, so a candidate window reading both collides.
+fn hnsw_append_transaction_fixture_with_colliding_candidates() -> HnswAppendTransactionFixture {
+    let mut manifest = manifest();
+    let PrivateOramImmutableIndexParamsV2::Hnsw {
+        oram,
+        fixed_search_budget,
+        ..
+    } = &mut manifest.indexes[0].params
+    else {
+        panic!("fixture HNSW manifest is missing");
+    };
+    oram.path_batch_size = 2;
+    fixed_search_budget.paths_per_round = 2;
+    let second_candidate = PrivateHnswNodeBlockPlaintext {
+        version: 1,
+        node_id: [12; 32],
+        point_token: [13; 32],
+        level_mask: 1,
+        vector_encoding: PrivateHnswVectorEncoding::F32Le,
+        vector: [0.0f32, 1.0]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect(),
+        neighbors: vec![],
+        neighbor_levels: vec![],
+        deleted: false,
+        generation: 0,
+        payload_fetch_token: Some([14; 32]),
+    };
+    let mut checkpoint = checkpoint(&manifest);
+    checkpoint.points.push(PrivateOramAppendPointRecordV2 {
+        point_token: BASE64URL_NOPAD.encode(&second_candidate.point_token),
+        visible_point_id: None,
+        payload_fetch_token: Some(BASE64URL_NOPAD.encode(&[14; 32])),
+    });
+    {
+        let PrivateOramAppendClientIndexCheckpointV2::Hnsw { state, records, .. } =
+            &mut checkpoint.indexes[0]
+        else {
+            panic!("fixture HNSW checkpoint is missing");
+        };
+        state.positions.push(PrivateHnswPositionMapSnapshotEntry {
+            node_id: BASE64URL_NOPAD.encode(&second_candidate.node_id),
+            leaf_label: encode_private_hnsw_oram_leaf_label(1, 2).unwrap(),
+        });
+        records.push(PrivateOramAppendHnswRecordV2 {
+            node_id: BASE64URL_NOPAD.encode(&second_candidate.node_id),
+            point_token: BASE64URL_NOPAD.encode(&second_candidate.point_token),
+            level_mask: 1,
+            generation: 0,
+        });
+        let PrivateOramAppendClientIndexCheckpointV2::Result { state, records, .. } =
+            &mut checkpoint.indexes[1]
+        else {
+            panic!("fixture result checkpoint is missing");
+        };
+        state
+            .positions
+            .push(PrivateResultOramPositionMapSnapshotEntry {
+                payload_fetch_token: BASE64URL_NOPAD.encode(&[14; 32]),
+                leaf_label: encode_private_result_oram_leaf_label(2, 2).unwrap(),
+            });
+        records.push(PrivateOramAppendResultRecordV2 {
+            payload_fetch_token: BASE64URL_NOPAD.encode(&[14; 32]),
+            point_token: BASE64URL_NOPAD.encode(&second_candidate.point_token),
+            generation: 0,
+        });
+    }
+    let config = PrivateHnswOramClientConfig {
+        tree_height: 2,
+        bucket_size: 2,
+        block_size_bytes: 512,
+        fixed_neighbor_slots: 2,
+    };
+    let mut plaintext_buckets = (0..capacity().bucket_count)
+        .map(|bucket_id| empty_private_hnsw_oram_plaintext_bucket(bucket_id, config).unwrap())
+        .collect::<Vec<_>>();
+    let candidate_leaf_bucket = usize::try_from(
+        *private_hnsw_oram_bucket_ids_for_leaf(1, 2)
+            .unwrap()
+            .last()
+            .unwrap(),
+    )
+    .unwrap();
+    plaintext_buckets[candidate_leaf_bucket].blocks[0] = Some(checkpoint_candidate_block());
+    plaintext_buckets[candidate_leaf_bucket].blocks[1] = Some(second_candidate);
+
+    let resource_key = SecretKey::from_bytes([31; 32]);
+    let keys = PrivateHnswClientKeys::derive_from_resource_key_with_context(
+        &resource_key,
+        &manifest.collection_id,
+        "text",
+        "tenant-a/vector-rk",
+        7,
+    )
+    .unwrap();
+    let base_context = PrivateHnswBucketAeadBaseContext {
+        collection_id: &manifest.collection_id,
+        vector_name: "text",
+        key_id: "tenant-a/vector-rk",
+        rk_id: "tenant-a/vector-rk",
+        rk_epoch: 7,
+    };
+    let buckets = plaintext_buckets
+        .iter()
+        .map(|bucket| {
+            seal_private_hnsw_oram_plaintext_bucket(&keys, base_context, 11, bucket, config)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let root_hash = private_hnsw_oram_merkle_root_for_commitments(
+        &buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let PrivateOramAppendClientIndexCheckpointV2::Hnsw {
+        root_hash: checkpoint_root,
+        ..
+    } = &mut checkpoint.indexes[0]
+    else {
+        panic!("fixture HNSW checkpoint is missing");
+    };
+    *checkpoint_root = root_hash.clone();
+    let mut state = state(&manifest, digest(30));
+    state.indexes[0].root_hash = root_hash;
+    for index in &mut state.indexes {
+        index.logical_count = 2;
+        index.dummy_count = 2;
+    }
+
+    HnswAppendTransactionFixture {
+        manifest,
+        state,
+        checkpoint,
+        keys,
+        buckets,
+    }
+}
+
 fn hnsw_append_transaction_plan() -> PrivateOramAppendHnswTransactionPlanV2 {
     PrivateOramAppendHnswTransactionPlanV2 {
         index_name: "text".to_string(),
@@ -538,6 +679,37 @@ fn encrypted_hnsw_window_batch(
             .map(|bucket_id| buckets[usize::try_from(*bucket_id).unwrap()].clone())
             .collect(),
     }
+}
+
+fn hnsw_leaf_label(leaf: u64) -> String {
+    encode_private_hnsw_oram_leaf_label(leaf, 2).unwrap()
+}
+
+/// Drives an HNSW append transaction to completion and returns the path labels of every
+/// window the server was asked to read, in order.
+fn hnsw_append_transaction_window_paths(
+    fixture: &HnswAppendTransactionFixture,
+    plan: PrivateOramAppendHnswTransactionPlanV2,
+    point: PrivateOramAppendLevel0PointV2,
+) -> (PrivateOramAppendHnswTransactionOutputV2, Vec<Vec<String>>) {
+    let mut transaction = PrivateOramAppendHnswTransactionV2::begin(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        point,
+        plan,
+    )
+    .unwrap();
+    let mut windows = Vec::new();
+    while let Some(marker) = transaction.prepare_next_read_window().unwrap() {
+        let request = transaction.next_read_window(&marker).unwrap();
+        let batch = encrypted_hnsw_window_batch(&request.window, &fixture.buckets);
+        transaction
+            .accept_verified_window(request.window.sequence, &fixture.keys, &batch)
+            .unwrap();
+        windows.push(request.window.paths);
+    }
+    (transaction.finalize().unwrap(), windows)
 }
 
 fn complete_hnsw_append_transaction(
@@ -3236,37 +3408,78 @@ fn hnsw_append_transaction_rejects_duplicate_point_before_first_read() {
 }
 
 #[test]
-fn hnsw_append_transaction_rejects_duplicate_paths_within_a_fixed_window() {
+fn hnsw_append_transaction_reads_a_substitute_path_when_a_padding_leaf_collides() {
     let fixture = hnsw_append_transaction_fixture_with_path_batch_size(2);
     let mut plan = hnsw_append_transaction_plan();
     plan.paths_per_window = 2;
-    plan.padding_leaves[0] = 1;
-    let mut transaction = PrivateOramAppendHnswTransactionV2::begin(
-        &fixture.manifest,
-        &fixture.state,
-        &fixture.checkpoint,
-        hnsw_append_transaction_point(),
-        plan,
-    )
-    .unwrap();
+    // The candidate sits at leaf 1. The padding leaf that shares its window collides with it,
+    // and so does the first spare padding leaf, so the substitute search has to skip one.
+    plan.padding_leaves = vec![1, 1, 2, 0];
+    let (output, windows) =
+        hnsw_append_transaction_window_paths(&fixture, plan, hnsw_append_transaction_point());
     assert_eq!(
-        transaction.prepare_next_read_window(),
-        Err(PrivateOramAppendTransactionError::InvalidInput(
-            "duplicate_window_path",
-        ))
+        windows,
+        vec![
+            vec![hnsw_leaf_label(1), hnsw_leaf_label(2)],
+            vec![hnsw_leaf_label(2), hnsw_leaf_label(0)],
+        ]
     );
-    assert!(!transaction.requires_recovery());
+    assert_eq!(output.read_transcript.read_path_count, 4);
 }
 
 #[test]
-fn hnsw_append_transaction_poisoned_when_later_window_plan_fails() {
+fn hnsw_append_transaction_merges_colliding_candidates_into_one_path_read() {
+    let fixture = hnsw_append_transaction_fixture_with_colliding_candidates();
+    let mut plan = hnsw_append_transaction_plan();
+    plan.paths_per_window = 2;
+    plan.candidate_node_ids = vec![[2; 32], [12; 32]];
+    plan.candidate_remap_leaves = vec![2, 3];
+    let (output, windows) =
+        hnsw_append_transaction_window_paths(&fixture, plan, hnsw_append_transaction_point());
+    // Both candidates share leaf 1: one read serves both and the freed slot reads the first
+    // spare padding leaf, so the server still sees two distinct paths per window and cannot
+    // tell that the secret positions collided.
+    assert_eq!(windows.len(), 2);
+    assert_eq!(windows[0], vec![hnsw_leaf_label(1), hnsw_leaf_label(3)]);
+    assert_eq!(windows[1].len(), 2);
+    assert_ne!(windows[1][0], windows[1][1]);
+    assert_eq!(output.read_transcript.read_path_count, 4);
+    // Both candidates were found on the shared path and became neighbors of the new block.
+    let mut neighbors = output.graph_delta.new_block.neighbors.clone();
+    neighbors.sort_unstable();
+    assert_eq!(neighbors, vec![[2; 32], [12; 32]]);
+}
+
+#[test]
+fn hnsw_append_transaction_merges_the_insert_eviction_into_a_colliding_rewrite_path() {
     let fixture = hnsw_append_transaction_fixture_with_path_batch_size(2);
     let mut plan = hnsw_append_transaction_plan();
     plan.paths_per_window = 2;
-    plan.padding_leaves[0] = 0;
-    // The insert evicts the next padding leaf; make it collide with the rewrite path (2) that
-    // shares its window.
-    plan.padding_leaves[1] = 2;
+    // Candidate window: leaf 1 plus padding leaf 0. Rewrite window: the rewrite path (the
+    // candidate's remap leaf 2) collides with the insert eviction leaf 2, and the next spare
+    // padding leaf collides as well, so the substitute is leaf 0.
+    plan.padding_leaves = vec![0, 2, 2, 0];
+    let mut point = hnsw_append_transaction_point();
+    point.initial_leaf = 2;
+    let (output, windows) = hnsw_append_transaction_window_paths(&fixture, plan, point);
+    assert_eq!(
+        windows,
+        vec![
+            vec![hnsw_leaf_label(1), hnsw_leaf_label(0)],
+            vec![hnsw_leaf_label(2), hnsw_leaf_label(0)],
+        ]
+    );
+    assert_eq!(output.read_transcript.read_path_count, 4);
+}
+
+#[test]
+fn hnsw_append_transaction_poisoned_when_substitute_padding_leaves_run_out() {
+    let fixture = hnsw_append_transaction_fixture_with_path_batch_size(2);
+    let mut plan = hnsw_append_transaction_plan();
+    plan.paths_per_window = 2;
+    // Every spare padding leaf equals the rewrite path, so the second window cannot be shaped
+    // after the first one has already been disclosed.
+    plan.padding_leaves = vec![0, 2, 2, 2];
     let mut point = hnsw_append_transaction_point();
     point.initial_leaf = 2;
     let mut transaction = PrivateOramAppendHnswTransactionV2::begin(
@@ -3287,7 +3500,7 @@ fn hnsw_append_transaction_poisoned_when_later_window_plan_fails() {
     assert_eq!(
         transaction.prepare_next_read_window(),
         Err(PrivateOramAppendTransactionError::InvalidInput(
-            "duplicate_window_path",
+            "padding_leaves",
         ))
     );
     assert!(transaction.is_poisoned());
@@ -3295,6 +3508,61 @@ fn hnsw_append_transaction_poisoned_when_later_window_plan_fails() {
         transaction.recovery_marker().unwrap().phase,
         PrivateOramAppendRecoveryPhaseV2::Poisoned
     );
+}
+
+#[test]
+fn hnsw_append_transaction_keeps_waiting_after_a_window_sequence_mismatch() {
+    let fixture = hnsw_append_transaction_fixture();
+    let mut transaction = PrivateOramAppendHnswTransactionV2::begin(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        hnsw_append_transaction_point(),
+        hnsw_append_transaction_plan(),
+    )
+    .unwrap();
+    let marker = transaction.prepare_next_read_window().unwrap().unwrap();
+    let request = transaction.next_read_window(&marker).unwrap();
+    let batch = encrypted_hnsw_window_batch(&request.window, &fixture.buckets);
+    let before = transaction.progress();
+
+    // A response for the wrong window consumes nothing, so the attempt stays retryable.
+    assert_eq!(
+        transaction.accept_verified_window(request.window.sequence + 1, &fixture.keys, &batch),
+        Err(PrivateOramAppendTransactionError::WindowSequenceMismatch)
+    );
+    assert!(!transaction.is_poisoned());
+    assert_eq!(transaction.progress(), before);
+    transaction
+        .accept_verified_window(request.window.sequence, &fixture.keys, &batch)
+        .unwrap();
+}
+
+#[test]
+fn result_append_transaction_keeps_waiting_after_a_window_sequence_mismatch() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(2);
+    let mut transaction = PrivateOramAppendResultTransactionV2::begin(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        result_append_transaction_point(),
+        result_append_transaction_plan(2),
+    )
+    .unwrap();
+    let marker = transaction.prepare_next_read_window().unwrap().unwrap();
+    let request = transaction.next_read_window(&marker).unwrap();
+    let batch = encrypted_result_window_batch(&request.window, &fixture.buckets);
+    let before = transaction.progress();
+
+    assert_eq!(
+        transaction.accept_verified_window(request.window.sequence + 1, &fixture.keys, &batch),
+        Err(PrivateOramAppendTransactionError::WindowSequenceMismatch)
+    );
+    assert!(!transaction.is_poisoned());
+    assert_eq!(transaction.progress(), before);
+    transaction
+        .accept_verified_window(request.window.sequence, &fixture.keys, &batch)
+        .unwrap();
 }
 
 #[test]

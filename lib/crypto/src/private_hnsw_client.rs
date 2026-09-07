@@ -2996,7 +2996,7 @@ pub fn access_private_hnsw_oram_path(
         config,
         &expected_bucket_ids,
         path_buckets,
-        Some(&target_node_id),
+        std::slice::from_ref(&target_node_id),
     )?;
 
     let block = state
@@ -3041,7 +3041,7 @@ where
         config,
         &expected_bucket_ids,
         path_buckets,
-        Some(&target_node_id),
+        std::slice::from_ref(&target_node_id),
     )?;
 
     let previous = working_state
@@ -3085,7 +3085,7 @@ pub fn evict_private_hnsw_oram_path(
         config,
         &expected_bucket_ids,
         path_buckets,
-        None,
+        &[],
     )?;
     let writeback_buckets =
         evict_private_hnsw_loaded_path(&mut working_state, config, &expected_bucket_ids)?;
@@ -3097,18 +3097,96 @@ pub fn evict_private_hnsw_oram_path(
     })
 }
 
+/// Loads the served path for `leaf` into the stash for an append window slot.
+///
+/// A slot may carry several accesses whose blocks all sit on this path (their secret positions
+/// coincide), so every node in `required_node_ids` must be stashed or on the path before any
+/// block is moved. Returns the path's bucket ids, root first, for the matching eviction.
+pub(crate) fn load_private_hnsw_oram_path_for_append(
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    leaf: u64,
+    path_buckets: &[PrivateHnswOramPlaintextBucket],
+    required_node_ids: &[[u8; 32]],
+) -> Result<Vec<u64>, PrivateHnswClientError> {
+    validate_oram_client_config(config)?;
+    validate_private_hnsw_oram_leaf(leaf, config.tree_height)?;
+    let expected_bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?;
+    load_private_hnsw_oram_path_into_stash(
+        state,
+        config,
+        &expected_bucket_ids,
+        path_buckets,
+        required_node_ids,
+    )?;
+    Ok(expected_bucket_ids)
+}
+
+/// Moves a stashed block to `remap_leaf` and returns it; the block must already be loaded.
+pub(crate) fn remap_private_hnsw_oram_stash_block(
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    node_id: [u8; 32],
+    remap_leaf: u64,
+) -> Result<PrivateHnswNodeBlockPlaintext, PrivateHnswClientError> {
+    validate_private_hnsw_oram_leaf(remap_leaf, config.tree_height)?;
+    let block = state
+        .stash
+        .get(&node_id)
+        .cloned()
+        .ok_or(PrivateHnswClientError::MissingBlock)?;
+    state.position_map.insert(node_id, remap_leaf);
+    Ok(block)
+}
+
+/// Replaces a stashed block through an append rewrite and moves it to `remap_leaf`.
+pub(crate) fn rewrite_private_hnsw_oram_stash_block<Rewrite>(
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    node_id: [u8; 32],
+    remap_leaf: u64,
+    rewrite: Rewrite,
+) -> Result<PrivateHnswNodeBlockPlaintext, PrivateHnswClientError>
+where
+    Rewrite: FnOnce(
+        &PrivateHnswNodeBlockPlaintext,
+    ) -> Result<PrivateHnswNodeBlockPlaintext, PrivateHnswClientError>,
+{
+    validate_private_hnsw_oram_leaf(remap_leaf, config.tree_height)?;
+    let previous = state
+        .stash
+        .get(&node_id)
+        .cloned()
+        .ok_or(PrivateHnswClientError::MissingBlock)?;
+    let replacement = rewrite(&previous)?;
+    validate_private_hnsw_append_rewrite(&previous, &replacement, config)?;
+    state.stash.insert(node_id, replacement.clone());
+    state.position_map.insert(node_id, remap_leaf);
+    Ok(replacement)
+}
+
+/// Evicts the stash along a path loaded by [`load_private_hnsw_oram_path_for_append`].
+pub(crate) fn evict_private_hnsw_oram_loaded_path(
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    expected_bucket_ids: &[u64],
+) -> Result<Vec<PrivateHnswOramPlaintextBucket>, PrivateHnswClientError> {
+    validate_oram_client_config(config)?;
+    evict_private_hnsw_loaded_path(state, config, expected_bucket_ids)
+}
+
 /// Validates a served path and moves its blocks into the stash.
 ///
 /// Every check runs before the first block is stashed: a path rejected here leaves the client
-/// state untouched. `required_node_id` is the block an access needs; failing on it after the
-/// load would strand the other path blocks in the stash while the server still stores them,
+/// state untouched. `required_node_ids` are the blocks the accesses need; failing on them after
+/// the load would strand the other path blocks in the stash while the server still stores them,
 /// and the next read of an overlapping path would then be rejected as a duplicate.
 fn load_private_hnsw_oram_path_into_stash(
     state: &mut PrivateHnswOramClientState,
     config: PrivateHnswOramClientConfig,
     expected_bucket_ids: &[u64],
     path_buckets: &[PrivateHnswOramPlaintextBucket],
-    required_node_id: Option<&[u8; 32]>,
+    required_node_ids: &[[u8; 32]],
 ) -> Result<(), PrivateHnswClientError> {
     if path_buckets.len() != expected_bucket_ids.len()
         || path_buckets
@@ -3148,9 +3226,9 @@ fn load_private_hnsw_oram_path_into_stash(
             }
         }
     }
-    if let Some(required) = required_node_id
-        && !state.stash.contains_key(required)
-        && !path_node_ids.contains(required)
+    if required_node_ids
+        .iter()
+        .any(|required| !state.stash.contains_key(required) && !path_node_ids.contains(required))
     {
         return Err(PrivateHnswClientError::MissingBlock);
     }
@@ -4560,8 +4638,7 @@ pub fn seal_private_hnsw_oram_bucket(
     plaintext: &[u8],
 ) -> Result<PrivateHnswOramBucket, PrivateHnswClientError> {
     validate_bucket_context(context)?;
-    keys.bucket_seals
-        .reserve("private HNSW ORAM bucket key")?;
+    keys.bucket_seals.reserve("private HNSW ORAM bucket key")?;
 
     let rng = SystemRandom::new();
     let mut nonce_bytes = [0u8; BUCKET_AEAD_NONCE_LEN];

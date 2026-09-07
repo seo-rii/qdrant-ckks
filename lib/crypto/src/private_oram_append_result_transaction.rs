@@ -741,6 +741,9 @@ impl PrivateOramAppendResultTransactionV2 {
             return Err(PrivateOramAppendTransactionError::WindowNotPending);
         };
         if window.sequence != sequence {
+            // Nothing has been consumed yet: keep waiting for the right response instead of
+            // poisoning the attempt on a caller or server sequencing slip.
+            self.status = PrivateOramAppendResultTransactionStatusV2::Awaiting { window, actions };
             return Err(PrivateOramAppendTransactionError::WindowSequenceMismatch);
         }
         let snapshot = self.window_snapshot();
