@@ -374,10 +374,15 @@ pub fn validate_private_oram_peer_recovery_request_v2_shape(
         "parent_descriptor_digest",
     )?;
     decode_base64url_32(&request.decision_record_digest, "decision_record_digest")?;
-    if request.coordinator_peer_id == request.owner_peer_id {
+    // Peer id 0 is Raft's "no peer" sentinel: a request naming it as either party is
+    // meaningless, and the adoption and capsule-transport requests already refuse it.
+    if request.coordinator_peer_id == 0 || request.coordinator_peer_id == request.owner_peer_id {
         return Err(PrivateOramPeerRecoveryError::InvalidField(
             "coordinator_peer_id",
         ));
+    }
+    if request.owner_peer_id == 0 {
+        return Err(PrivateOramPeerRecoveryError::InvalidField("owner_peer_id"));
     }
     validate_bounded_name(&request.vector_name, MAX_VECTOR_NAME_BYTES, "vector_name")?;
     validate_resource_id(&request.owner_signing_key_id, "owner_signing_key_id")?;
@@ -1189,6 +1194,32 @@ mod tests {
         terminal.terminal_evidence_digest =
             try_private_oram_peer_recovery_terminal_evidence_digest_v2(request, &terminal).unwrap();
         terminal
+    }
+
+    #[test]
+    fn peer_recovery_request_shape_rejects_the_no_peer_sentinel_for_either_party() {
+        validate_private_oram_peer_recovery_request_v2_shape(&request()).unwrap();
+
+        let mut zero_owner = request();
+        zero_owner.owner_peer_id = 0;
+        assert_eq!(
+            validate_private_oram_peer_recovery_request_v2_shape(&zero_owner).unwrap_err(),
+            PrivateOramPeerRecoveryError::InvalidField("owner_peer_id"),
+        );
+
+        let mut zero_coordinator = request();
+        zero_coordinator.coordinator_peer_id = 0;
+        assert_eq!(
+            validate_private_oram_peer_recovery_request_v2_shape(&zero_coordinator).unwrap_err(),
+            PrivateOramPeerRecoveryError::InvalidField("coordinator_peer_id"),
+        );
+
+        let mut same_peer = request();
+        same_peer.coordinator_peer_id = same_peer.owner_peer_id;
+        assert_eq!(
+            validate_private_oram_peer_recovery_request_v2_shape(&same_peer).unwrap_err(),
+            PrivateOramPeerRecoveryError::InvalidField("coordinator_peer_id"),
+        );
     }
 
     #[test]

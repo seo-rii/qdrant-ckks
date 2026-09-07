@@ -670,7 +670,10 @@ pub fn validate_private_oram_owner_capsule_install_request_signature_v2(
     signature: &PrivateOramPeerRecoverySignatureV2,
 ) -> Result<VerifiedPrivateOramOwnerCapsuleInstallRequestV2, PrivateOramOwnerCapsuleTransportError>
 {
-    validate_private_oram_owner_capsule_install_package_v2(request, package_canonical_json)?;
+    // The request signature already commits to `package_len` and `package_sha256`, so verify
+    // it before hashing the package body: a forged request must not cost the receiver a hash
+    // pass over up to `PRIVATE_ORAM_OWNER_CAPSULE_MAX_CANONICAL_BYTES_V2` bytes.
+    validate_private_oram_owner_capsule_install_request_v2_shape(request)?;
     let public_key = validate_private_oram_peer_recovery_public_key_v1(coordinator_public_key)
         .map_err(|_| PrivateOramOwnerCapsuleTransportError::SignatureKeyMismatch)?;
     validate_transport_signature(signature, coordinator_public_key)?;
@@ -682,6 +685,7 @@ pub fn validate_private_oram_owner_capsule_install_request_signature_v2(
     UnparsedPublicKey::new(&ED25519, public_key)
         .verify(&message, &signature_bytes)
         .map_err(|_| PrivateOramOwnerCapsuleTransportError::InvalidSignature)?;
+    validate_private_oram_owner_capsule_install_package_v2(request, package_canonical_json)?;
     Ok(VerifiedPrivateOramOwnerCapsuleInstallRequestV2 {
         request: request.clone(),
         coordinator_public_key: coordinator_public_key.clone(),
@@ -1200,6 +1204,43 @@ mod tests {
             )
             .unwrap_err(),
             PrivateOramOwnerCapsuleTransportError::BodyMismatch,
+        );
+    }
+
+    #[test]
+    fn owner_capsule_install_request_verifies_the_signature_before_hashing_the_body() {
+        let coordinator = key_pair(14);
+        let package = br#"{"capsule":"opaque"}"#;
+        let request = request(package);
+        let coordinator_public_key =
+            private_oram_peer_recovery_public_key_v1(&coordinator, 1).unwrap();
+        let mut forged_signature =
+            sign_private_oram_owner_capsule_install_request_v2(&coordinator, 1, &request).unwrap();
+        forged_signature.sig = BASE64URL_NOPAD.encode(&[0x5a; 64]);
+
+        // A body that does not match the request would fail the body check, but a request
+        // whose signature does not verify must be rejected as such without hashing the body.
+        let mut wrong_package = package.to_vec();
+        wrong_package[0] ^= 1;
+        assert_eq!(
+            validate_private_oram_owner_capsule_install_request_signature_v2(
+                &coordinator_public_key,
+                &request,
+                &wrong_package,
+                &forged_signature,
+            )
+            .unwrap_err(),
+            PrivateOramOwnerCapsuleTransportError::InvalidSignature,
+        );
+        assert_eq!(
+            validate_private_oram_owner_capsule_install_request_signature_v2(
+                &coordinator_public_key,
+                &request,
+                package,
+                &forged_signature,
+            )
+            .unwrap_err(),
+            PrivateOramOwnerCapsuleTransportError::InvalidSignature,
         );
     }
 
