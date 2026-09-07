@@ -4556,6 +4556,12 @@ fn paired_mutation_finalizer_signs_and_self_validates_the_exact_pending_artifact
     let mutation = &owner_prepare.mutation_bundle.mutation;
     let owner_roster = vec![11, 12];
     let owner_roster_digest = private_oram_owner_prestage_roster_digest_v2(&owner_roster).unwrap();
+    assert!(matches!(
+        private_oram_owner_prestage_roster_digest_v2(&[0, 11, 12]),
+        Err(PrivateOramOwnerPrestageError::InvalidField(
+            "owner_peer_ids"
+        ))
+    ));
     let package = PrivateOramOwnerPrestagePackageV2 {
         version: PRIVATE_ORAM_OWNER_PRESTAGE_PROTOCOL_VERSION_V2,
         collection_name: "docs".to_string(),
@@ -4652,8 +4658,17 @@ fn paired_mutation_finalizer_signs_and_self_validates_the_exact_pending_artifact
         )
         .is_err()
     );
+    assert!(matches!(
+        private_oram_owner_prestage_attestation_statement_v2(
+            &request,
+            &response,
+            br#"{"receipt":"changed"}"#,
+        ),
+        Err(PrivateOramOwnerPrestageError::ResponseMismatch)
+    ));
     let statement =
-        private_oram_owner_prestage_attestation_statement_v2(&request, &response).unwrap();
+        private_oram_owner_prestage_attestation_statement_v2(&request, &response, receipt_bytes)
+            .unwrap();
     let attestation =
         sign_private_oram_owner_prestage_attestation_v2(&key_pair, 9, &statement).unwrap();
     let attestation_bytes =

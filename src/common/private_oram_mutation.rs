@@ -2254,9 +2254,12 @@ pub(crate) async fn coordinate_private_oram_owner_prestage_v2(
                     receipt.receipt_digest().to_string(),
                 )
                 .map_err(|_| invalid_owner_prestage())?;
-                let statement =
-                    private_oram_owner_prestage_attestation_statement_v2(&request, &response)
-                        .map_err(|_| invalid_owner_prestage())?;
+                let statement = private_oram_owner_prestage_attestation_statement_v2(
+                    &request,
+                    &response,
+                    &receipt_canonical_json,
+                )
+                .map_err(|_| invalid_owner_prestage())?;
                 let attestation = identity
                     .sign_owner_prestage_attestation(&statement)
                     .map_err(|_| invalid_owner_prestage())?;

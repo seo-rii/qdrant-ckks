@@ -464,6 +464,7 @@ pub fn private_oram_owner_prestage_roster_digest_v2(
     owner_peer_ids: &[u64],
 ) -> Result<String, PrivateOramOwnerPrestageError> {
     if owner_peer_ids.is_empty()
+        || owner_peer_ids.first() == Some(&0)
         || owner_peer_ids.len() > MAX_OWNER_COUNT
         || owner_peer_ids.windows(2).any(|pair| pair[0] >= pair[1])
     {
@@ -662,17 +663,15 @@ pub fn validate_private_oram_owner_prestage_response_signature_v2(
     })
 }
 
+/// Builds the statement an owner attests to. `response` must be the response the owner produced
+/// for `request` over `receipt_canonical_json`, so the attested receipt hash and length are bound
+/// to the receipt bytes instead of being copied from a self-asserted response.
 pub fn private_oram_owner_prestage_attestation_statement_v2(
     request: &PrivateOramOwnerPrestageRequestV2,
     response: &PrivateOramOwnerPrestageResponseV2,
+    receipt_canonical_json: &[u8],
 ) -> Result<PrivateOramOwnerPrestageAttestationStatementV2, PrivateOramOwnerPrestageError> {
-    validate_request_shape(request)?;
-    if response.request_digest != request_digest(request)?
-        || response.intent_key != request.intent_key
-        || response.receipt_digest.is_empty()
-    {
-        return Err(PrivateOramOwnerPrestageError::ResponseMismatch);
-    }
+    validate_response(request, response, receipt_canonical_json)?;
     Ok(PrivateOramOwnerPrestageAttestationStatementV2 {
         protocol_version: PRIVATE_ORAM_OWNER_PRESTAGE_PROTOCOL_VERSION_V2,
         collection_id: request.collection_id.clone(),
@@ -819,6 +818,8 @@ fn validate_package_shape(
     if package.activation_registry_generation == 0
         || package.lease_generation == 0
         || package.writer_fence == 0
+        || package.owner_peer_id == 0
+        || package.coordinator_peer_id == 0
         || !package
             .owner_peer_ids
             .contains(&package.coordinator_peer_id)
@@ -887,6 +888,8 @@ fn validate_request_shape(
         || request.lease_generation == 0
         || request.writer_fence == 0
         || request.activation_registry_generation == 0
+        || request.owner_peer_id == 0
+        || request.coordinator_peer_id == 0
         || request.intent_key != private_oram_owner_prestage_intent_key_v2(request)?
     {
         return Err(PrivateOramOwnerPrestageError::InvalidField("request"));
@@ -923,6 +926,7 @@ fn validate_attestation_statement(
         || statement.lease_generation == 0
         || statement.writer_fence == 0
         || statement.activation_registry_generation == 0
+        || statement.owner_peer_id == 0
     {
         return Err(PrivateOramOwnerPrestageError::InvalidField("attestation"));
     }

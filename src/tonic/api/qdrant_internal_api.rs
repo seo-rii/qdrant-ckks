@@ -3839,11 +3839,6 @@ impl QdrantInternal for QdrantInternalService {
             decode_canonical_private_oram_owner_recovery_json(
                 &wire.reservation_challenge_canonical_json,
             )?;
-        let prestage_package =
-            decode_private_oram_owner_prestage_package_v2(&wire.prestage_package_canonical_json)
-                .map_err(|_| {
-                    Status::invalid_argument("private ORAM owner pre-stage package is invalid")
-                })?;
         let coordinator_public_key: PrivateOramPeerRecoveryPublicKeyV1 =
             decode_canonical_private_oram_owner_recovery_json(
                 &wire.coordinator_public_key_canonical_json,
@@ -3893,6 +3888,13 @@ impl QdrantInternal for QdrantInternalService {
         .map_err(|_| {
             Status::invalid_argument("private ORAM owner pre-stage authentication failed")
         })?;
+        // The package (up to 480 MiB) is parsed only after the coordinator is authenticated: the
+        // signature covers its canonical bytes and nothing above needs the parsed form.
+        let prestage_package =
+            decode_private_oram_owner_prestage_package_v2(&wire.prestage_package_canonical_json)
+                .map_err(|_| {
+                    Status::invalid_argument("private ORAM owner pre-stage package is invalid")
+                })?;
         let disposition = self
             .consensus_state
             .private_oram_mutation_v3_reservation_challenge_disposition(
@@ -3993,6 +3995,7 @@ impl QdrantInternal for QdrantInternalService {
         let attestation_statement = private_oram_owner_prestage_attestation_statement_v2(
             &prestage_request,
             &prestage_response,
+            &receipt_canonical_json,
         )
         .map_err(|_| Status::internal("private ORAM owner pre-stage attestation failed"))?;
         let owner_attestation = identity

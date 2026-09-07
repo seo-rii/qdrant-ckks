@@ -1037,6 +1037,8 @@ impl ChannelService {
             || statement.intent_key != request.intent_key
             || statement.package_sha256 != request.package_sha256
             || statement.receipt_digest != receipt.receipt_digest()
+            || statement.receipt_sha256 != prestage_response.receipt_sha256
+            || prestage_response.receipt_digest != receipt.receipt_digest()
             || receipt.owner_peer_id() != peer_id
             || receipt.intent_key() != request.intent_key
             || receipt.package_sha256() != request.package_sha256
