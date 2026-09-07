@@ -2082,4 +2082,69 @@ mod tests {
             .is_err()
         );
     }
+
+    mod field_mutation_fuzz {
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::json_mutation::mutate_json_leaf;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(192))]
+
+            /// Every scalar field of a signed authorization or receipt is covered by the
+            /// signature or a digest it commits to: changing any one of them is rejected.
+            #[test]
+            fn every_field_mutation_is_rejected(index in any::<usize>(), salt in any::<u8>()) {
+                let authority_key = key(1);
+                let owner_key = key(2);
+                let (authority_signer, signed_authorization) = authorization(
+                    &authority_key,
+                    &owner_key,
+                    0,
+                    11,
+                    PrivateOramOwnerCleanupNegativeOutcomeKindV1::AdmissionRejected,
+                );
+                let mut value = serde_json::to_value(&signed_authorization).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<SignedPrivateOramOwnerCleanupAuthorizationV1>(value)
+                {
+                    prop_assert!(
+                        validate_self_consistent_signed_private_oram_owner_cleanup_authorization_v1(
+                            &mutated,
+                            &authority_signer,
+                        )
+                        .is_err(),
+                        "authorization mutation at {} was accepted",
+                        path
+                    );
+                }
+
+                let verified = verified_authorization(&signed_authorization, &authority_signer);
+                let receipt = private_oram_owner_cleanup_receipt_v1(
+                    &verified,
+                    PrivateOramOwnerCleanupObservedPrestateV1::Intent,
+                )
+                .unwrap();
+                let signed_receipt =
+                    sign_private_oram_owner_cleanup_receipt_v1(&owner_key, 9, &receipt).unwrap();
+                let mut value = serde_json::to_value(&signed_receipt).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<SignedPrivateOramOwnerCleanupReceiptV1>(value)
+                {
+                    prop_assert!(
+                        validate_self_consistent_signed_private_oram_owner_cleanup_receipt_v1(
+                            &mutated,
+                            &signed_authorization.authorization,
+                        )
+                        .is_err(),
+                        "receipt mutation at {} was accepted",
+                        path
+                    );
+                }
+            }
+        }
+    }
 }

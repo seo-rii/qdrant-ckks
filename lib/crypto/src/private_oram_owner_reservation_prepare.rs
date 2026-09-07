@@ -642,4 +642,55 @@ mod tests {
             Err(PrivateOramOwnerReservationPrepareError::InvalidSignature)
         );
     }
+
+    mod field_mutation_fuzz {
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::json_mutation::mutate_json_leaf;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(192))]
+
+            /// Every scalar field of a prepare record, the challenge it carries included, is
+            /// covered by the prepare digest and signature: changing any one of them is rejected
+            /// even when the verifier is handed the mutated challenge as the expected one.
+            #[test]
+            fn every_field_mutation_is_rejected(index in any::<usize>(), salt in any::<u8>()) {
+                let key = Ed25519KeyPair::from_seed_unchecked(&[31; 32]).unwrap();
+                let signer = private_oram_owner_cleanup_signer_v1(&key, 4).unwrap();
+                let challenge = challenge();
+                let state = private_oram_owner_lifecycle_genesis_state_v1(
+                    challenge.owner_store_incarnation_digest.clone(),
+                )
+                .unwrap();
+                let prepare = sign_private_oram_owner_reservation_prepare_v1(
+                    &key,
+                    challenge,
+                    state.clone(),
+                    state.generation,
+                    digest(19),
+                    signer.clone(),
+                )
+                .unwrap();
+                let mut value = serde_json::to_value(&prepare).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramOwnerReservationPrepareV1>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_owner_reservation_prepare_v1(
+                            &mutated,
+                            &mutated.challenge,
+                            &signer,
+                            &state,
+                        )
+                        .is_err(),
+                        "mutation at {} was accepted",
+                        path
+                    );
+                }
+            }
+        }
+    }
 }

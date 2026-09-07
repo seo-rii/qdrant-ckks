@@ -1016,4 +1016,37 @@ mod tests {
             Err(PrivateOramOwnerReservationResolutionError::NonCanonicalEncoding)
         );
     }
+
+    mod field_mutation_fuzz {
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::json_mutation::mutate_json_leaf;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(192))]
+
+            /// Every scalar field of a signed resolution receipt, its embedded signer included,
+            /// is covered by the signature: changing any one of them is rejected.
+            #[test]
+            fn every_field_mutation_is_rejected(index in any::<usize>(), salt in any::<u8>()) {
+                let (_signer, signed) = signed_fixture();
+                let mut value = serde_json::to_value(&signed).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) = serde_json::from_value::<
+                    SignedPrivateOramOwnerReservationResolutionReceiptV1,
+                >(value)
+                {
+                    prop_assert!(
+                        validate_self_consistent_signed_private_oram_owner_reservation_resolution_receipt_v1(
+                            &mutated,
+                        )
+                        .is_err(),
+                        "mutation at {} was accepted",
+                        path
+                    );
+                }
+            }
+        }
+    }
 }

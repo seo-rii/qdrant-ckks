@@ -1445,4 +1445,97 @@ mod tests {
             PrivateOramOwnerCapsuleTransportError::SignatureKeyMismatch,
         );
     }
+
+    mod field_mutation_fuzz {
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::json_mutation::mutate_json_leaf;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(192))]
+
+            /// Every scalar field of an install request, response or durable attestation is
+            /// covered by its signature: changing any one of them is rejected.
+            #[test]
+            fn every_field_mutation_is_rejected(index in any::<usize>(), salt in any::<u8>()) {
+                let coordinator = key_pair(10);
+                let owner = key_pair(70);
+                let package = br#"{"capsule":"opaque"}"#;
+                let request = request(package);
+                let coordinator_public_key =
+                    private_oram_peer_recovery_public_key_v1(&coordinator, 1).unwrap();
+                let request_signature =
+                    sign_private_oram_owner_capsule_install_request_v2(&coordinator, 1, &request)
+                        .unwrap();
+                let mut value = serde_json::to_value(&request).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramOwnerCapsuleInstallRequestV2>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_owner_capsule_install_request_signature_v2(
+                            &coordinator_public_key,
+                            &mutated,
+                            package,
+                            &request_signature,
+                        )
+                        .is_err(),
+                        "request mutation at {} was accepted",
+                        path
+                    );
+                }
+
+                let receipt = br#"{"receipt":"opaque"}"#;
+                let response =
+                    private_oram_owner_capsule_install_response_v2(&request, receipt, digest(6))
+                        .unwrap();
+                let owner_public_key = private_oram_peer_recovery_public_key_v1(&owner, 1).unwrap();
+                let response_signature = sign_private_oram_owner_capsule_install_response_v2(
+                    &owner, 1, &request, &response, receipt,
+                )
+                .unwrap();
+                let mut value = serde_json::to_value(&response).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramOwnerCapsuleInstallResponseV2>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_owner_capsule_install_response_signature_v2(
+                            &owner_public_key,
+                            &request,
+                            &mutated,
+                            receipt,
+                            &response_signature,
+                        )
+                        .is_err(),
+                        "response mutation at {} was accepted",
+                        path
+                    );
+                }
+
+                let statement = private_oram_owner_capsule_install_attestation_statement_v2(
+                    &request,
+                    receipt,
+                    digest(31),
+                )
+                .unwrap();
+                let attestation =
+                    sign_private_oram_owner_capsule_install_attestation_v2(&owner, 4, &statement)
+                        .unwrap();
+                let mut value = serde_json::to_value(&attestation).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramOwnerCapsuleInstallAttestationV2>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_owner_capsule_install_attestation_v2(&mutated)
+                            .is_err(),
+                        "attestation mutation at {} was accepted",
+                        path
+                    );
+                }
+            }
+        }
+    }
 }

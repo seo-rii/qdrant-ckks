@@ -1155,4 +1155,67 @@ mod tests {
             decode_private_oram_owner_lifecycle_status_attestation_v1(padded.as_bytes()).is_err()
         );
     }
+
+    mod field_mutation_fuzz {
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::json_mutation::mutate_json_leaf;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(192))]
+
+            /// Every scalar field of a genesis commitment or status attestation is covered by
+            /// its digest and signature: changing any one of them is rejected, for the
+            /// attestation even when the mutated challenge is handed over as the expected one.
+            #[test]
+            fn every_field_mutation_is_rejected(index in any::<usize>(), salt in any::<u8>()) {
+                let (key, prepared, challenge) = fixture();
+                let commitment =
+                    sign_private_oram_owner_enrollment_genesis_commitment_v1(&key, &prepared)
+                        .unwrap();
+                let mut value = serde_json::to_value(&commitment).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramOwnerEnrollmentGenesisCommitmentV1>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_owner_enrollment_genesis_commitment_v1(
+                            &mutated, &prepared,
+                        )
+                        .is_err(),
+                        "commitment mutation at {} was accepted",
+                        path
+                    );
+                }
+
+                let attestation = sign_private_oram_owner_lifecycle_status_attestation_v1(
+                    &key,
+                    challenge,
+                    prepared.expected_genesis_state.clone(),
+                    PrivateOramOwnerLifecycleStatusModeV1::ReadyExact,
+                    true,
+                    prepared.owner_signer.clone(),
+                )
+                .unwrap();
+                let mut value = serde_json::to_value(&attestation).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramOwnerLifecycleStatusAttestationV1>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_owner_lifecycle_status_attestation_v1(
+                            &mutated,
+                            &mutated.challenge,
+                            &prepared.owner_signer,
+                            &prepared.expected_genesis_state,
+                        )
+                        .is_err(),
+                        "attestation mutation at {} was accepted",
+                        path
+                    );
+                }
+            }
+        }
+    }
 }

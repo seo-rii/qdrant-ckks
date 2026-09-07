@@ -1,7 +1,14 @@
 use data_encoding::BASE64URL_NOPAD;
+use proptest::prelude::*;
 use qdrant_sec::*;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::Digest;
+
+use crate::json_mutation::mutate_json_leaf;
+
+#[allow(dead_code)]
+#[path = "../src/json_mutation.rs"]
+mod json_mutation;
 
 fn digest(byte: u8) -> String {
     BASE64URL_NOPAD.encode(&[byte; 32])
@@ -1623,4 +1630,30 @@ fn contract_serde_rejects_unknown_fields_and_debug_redacts_values() {
         )
     );
     assert!(!error_debug.contains("signature-algorithm-sentinel"));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Every scalar field of a signed append mutation bundle (the embedded signed states and
+    /// the bundle signature included) is covered by a signature or a digest the validator
+    /// recomputes: changing any one of them is rejected.
+    #[test]
+    fn every_field_mutation_of_a_signed_append_mutation_is_rejected(
+        index in any::<usize>(),
+        salt in any::<u8>(),
+    ) {
+        let (key_pair, manifest, mutation) = fixture(true);
+        let old_state_digest =
+            private_oram_signed_state_v2_digest(&mutation.mutation.old_state.state).unwrap();
+        let mut value = serde_json::to_value(&mutation).unwrap();
+        let path = mutate_json_leaf(&mut value, index, salt);
+        if let Ok(mutated) = serde_json::from_value::<PrivateOramAppendMutationBundleV1>(value) {
+            prop_assert!(
+                validate_fixture(&key_pair, &manifest, &mutated, &old_state_digest).is_err(),
+                "mutation at {} was accepted",
+                path
+            );
+        }
+    }
 }

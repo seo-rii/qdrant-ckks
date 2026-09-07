@@ -665,6 +665,9 @@ pub use vector::{
 };
 
 #[cfg(test)]
+mod json_mutation;
+
+#[cfg(test)]
 mod crate_root_reexport_tests {
     use super::*;
 

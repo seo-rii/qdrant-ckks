@@ -1188,3 +1188,128 @@ fn push_len(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+    use ring::signature::Ed25519KeyPair;
+
+    use super::*;
+    use crate::json_mutation::mutate_json_leaf;
+
+    fn fixed_digest(seed: u8) -> String {
+        BASE64URL_NOPAD.encode(&[seed; 32])
+    }
+
+    fn request(package: &[u8]) -> PrivateOramOwnerPrestageRequestV2 {
+        let mut request = PrivateOramOwnerPrestageRequestV2 {
+            protocol_version: PRIVATE_ORAM_OWNER_PRESTAGE_PROTOCOL_VERSION_V2,
+            challenge_nonce: BASE64URL_NOPAD.encode(&[7; 16]),
+            collection_name: "docs".to_string(),
+            collection_id: "collection-uuid-1".to_string(),
+            mutation_id: fixed_digest(1),
+            mutation_digest: fixed_digest(2),
+            transition_digest: fixed_digest(3),
+            expected_aggregate_digest: fixed_digest(4),
+            lease_generation: 4,
+            writer_fence: 9,
+            parent_descriptor_digest: fixed_digest(5),
+            parent_lease_acquired_record_digest: fixed_digest(6),
+            owner_roster_digest: private_oram_owner_prestage_roster_digest_v2(&[11, 12]).unwrap(),
+            coordinator_peer_id: 11,
+            owner_peer_id: 12,
+            vector_name: "text".to_string(),
+            owner_signing_key_id: "tenant-a/private-oram-owner-v1".to_string(),
+            activation_registry_generation: 3,
+            activation_manifest_digest: fixed_digest(7),
+            intent_key: String::new(),
+            package_sha256: digest(package),
+            package_len: u64::try_from(package.len()).unwrap(),
+        };
+        request.intent_key = private_oram_owner_prestage_intent_key_v2(&request).unwrap();
+        request
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(192))]
+
+        /// Every scalar field of a pre-stage request, response or attestation is covered by
+        /// its signature: changing any one of them is rejected.
+        #[test]
+        fn every_field_mutation_is_rejected(index in any::<usize>(), salt in any::<u8>()) {
+            let coordinator = Ed25519KeyPair::from_seed_unchecked(&[41; 32]).unwrap();
+            let owner = Ed25519KeyPair::from_seed_unchecked(&[42; 32]).unwrap();
+            let package = br#"{"package":"opaque"}"#;
+            let request = request(package);
+            let coordinator_public_key =
+                crate::private_oram_peer_recovery_public_key_v1(&coordinator, 1).unwrap();
+            let request_signature =
+                sign_private_oram_owner_prestage_request_v2(&coordinator, 1, &request).unwrap();
+            let mut value = serde_json::to_value(&request).unwrap();
+            let path = mutate_json_leaf(&mut value, index, salt);
+            if let Ok(mutated) = serde_json::from_value::<PrivateOramOwnerPrestageRequestV2>(value)
+            {
+                prop_assert!(
+                    validate_private_oram_owner_prestage_request_signature_v2(
+                        &coordinator_public_key,
+                        &mutated,
+                        package,
+                        &request_signature,
+                    )
+                    .is_err(),
+                    "request mutation at {} was accepted",
+                    path
+                );
+            }
+
+            let receipt = br#"{"receipt":"opaque"}"#;
+            let response =
+                private_oram_owner_prestage_response_v2(&request, receipt, fixed_digest(8)).unwrap();
+            let owner_public_key =
+                crate::private_oram_peer_recovery_public_key_v1(&owner, 1).unwrap();
+            let response_signature = sign_private_oram_owner_prestage_response_v2(
+                &owner, 1, &request, &response, receipt,
+            )
+            .unwrap();
+            let mut value = serde_json::to_value(&response).unwrap();
+            let path = mutate_json_leaf(&mut value, index, salt);
+            if let Ok(mutated) =
+                serde_json::from_value::<PrivateOramOwnerPrestageResponseV2>(value)
+            {
+                prop_assert!(
+                    validate_private_oram_owner_prestage_response_signature_v2(
+                        &owner_public_key,
+                        &request,
+                        &mutated,
+                        receipt,
+                        &response_signature,
+                    )
+                    .is_err(),
+                    "response mutation at {} was accepted",
+                    path
+                );
+            }
+
+            let statement =
+                private_oram_owner_prestage_attestation_statement_v2(&request, &response, receipt)
+                    .unwrap();
+            let attestation =
+                sign_private_oram_owner_prestage_attestation_v2(&owner, 1, &statement).unwrap();
+            let mut value = serde_json::to_value(&attestation).unwrap();
+            let path = mutate_json_leaf(&mut value, index, salt);
+            if let Ok(mutated) =
+                serde_json::from_value::<PrivateOramOwnerPrestageAttestationV2>(value)
+            {
+                prop_assert!(
+                    validate_private_oram_owner_prestage_attestation_for_signer_v2(
+                        &mutated,
+                        &owner_public_key,
+                    )
+                    .is_err(),
+                    "attestation mutation at {} was accepted",
+                    path
+                );
+            }
+        }
+    }
+}

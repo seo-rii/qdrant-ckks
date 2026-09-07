@@ -1684,4 +1684,124 @@ mod tests {
             assert!(!rendered.contains(sentinel));
         }
     }
+
+    mod field_mutation_fuzz {
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::json_mutation::mutate_json_leaf;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(192))]
+
+            /// Every scalar field of a recovery request, its terminal, the response signature
+            /// and an adoption request is covered by the signature: changing any one of them is
+            /// rejected.
+            #[test]
+            fn every_field_mutation_is_rejected(index in any::<usize>(), salt in any::<u8>()) {
+                let key_pair = deterministic_key_pair(29);
+                let request = request();
+                let terminal = terminal(&request);
+                let public_key = private_oram_peer_recovery_public_key_v1(&key_pair, 1).unwrap();
+                let signature =
+                    sign_private_oram_peer_recovery_response_v2(&key_pair, 1, &request, &terminal)
+                        .unwrap();
+
+                let mut value = serde_json::to_value(&request).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) = serde_json::from_value::<PrivateOramPeerRecoveryRequestV2>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_peer_recovery_response_signature_v2(
+                            &public_key,
+                            &mutated,
+                            &terminal,
+                            &signature,
+                        )
+                        .is_err(),
+                        "request mutation at {} was accepted",
+                        path
+                    );
+                }
+                let mut value = serde_json::to_value(&terminal).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramPeerRecoveryTerminalV2>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_peer_recovery_response_signature_v2(
+                            &public_key,
+                            &request,
+                            &mutated,
+                            &signature,
+                        )
+                        .is_err(),
+                        "terminal mutation at {} was accepted",
+                        path
+                    );
+                }
+                let mut value = serde_json::to_value(&signature).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramPeerRecoverySignatureV2>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_peer_recovery_response_signature_v2(
+                            &public_key,
+                            &request,
+                            &terminal,
+                            &mutated,
+                        )
+                        .is_err(),
+                        "signature mutation at {} was accepted",
+                        path
+                    );
+                }
+
+                let coordinator = deterministic_key_pair(31);
+                let coordinator_public =
+                    private_oram_peer_recovery_public_key_v1(&coordinator, 1).unwrap();
+                let adoption = PrivateOramOwnerAdoptionRequestV1 {
+                    version: PRIVATE_ORAM_OWNER_ADOPTION_PROTOCOL_VERSION_V1,
+                    challenge_nonce: BASE64URL_NOPAD
+                        .encode(&[7; PRIVATE_ORAM_PEER_RECOVERY_CHALLENGE_BYTES]),
+                    collection_name: "docs".to_string(),
+                    collection_id: "collection-a".to_string(),
+                    mutation_id: digest(1),
+                    mutation_digest: digest(2),
+                    transition_digest: digest(3),
+                    lease_generation: 7,
+                    writer_fence: 7,
+                    coordinator_peer_id: 11,
+                    owner_peer_id: 12,
+                    vector_name: "text".to_string(),
+                    owner_signing_key_id: "owner-key".to_string(),
+                    intent_key: "intent-key".to_string(),
+                    package_sha256: digest(4),
+                    parent_descriptor_digest: digest(5),
+                    parent_lease_acquired_record_digest: digest(6),
+                    parent_canonical_sha256: digest(7),
+                    parent_canonical_len: 512,
+                };
+                let adoption_signature =
+                    sign_private_oram_owner_adoption_request_v1(&coordinator, 1, &adoption).unwrap();
+                let mut value = serde_json::to_value(&adoption).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramOwnerAdoptionRequestV1>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_owner_adoption_request_signature_v1(
+                            &coordinator_public,
+                            &mutated,
+                            &adoption_signature,
+                        )
+                        .is_err(),
+                        "adoption request mutation at {} was accepted",
+                        path
+                    );
+                }
+            }
+        }
+    }
 }

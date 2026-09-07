@@ -782,4 +782,59 @@ mod tests {
             assert!(!error.contains("algorithm-sentinel"), "{error}");
         }
     }
+
+    mod field_mutation_fuzz {
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::json_mutation::mutate_json_leaf;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(192))]
+
+            /// Every scalar field of a signed recovery checkpoint is covered by the signature:
+            /// changing any one of them is rejected even when the verifier expects the mutated
+            /// checkpoint's own values, so only the signature can catch the change.
+            #[test]
+            fn every_field_mutation_is_rejected(index in any::<usize>(), salt in any::<u8>()) {
+                let key_pair = deterministic_key_pair();
+                let bundle = package_private_oram_external_recovery_checkpoint(
+                    &key_pair,
+                    fixture_checkpoint(),
+                )
+                .unwrap();
+                let public_key = key_pair.public_key().as_ref().to_vec();
+                let mut value = serde_json::to_value(&bundle.checkpoint).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramExternalRecoveryCheckpoint>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_external_recovery_checkpoint(
+                            &mutated,
+                            Some(&bundle.signature),
+                            fixture_validation_context(&mutated, &public_key),
+                        )
+                        .is_err(),
+                        "checkpoint mutation at {} was accepted",
+                        path
+                    );
+                }
+                let mut value = serde_json::to_value(&bundle.signature).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) = serde_json::from_value::<PrivateOramRecoverySignature>(value) {
+                    prop_assert!(
+                        validate_private_oram_external_recovery_checkpoint(
+                            &bundle.checkpoint,
+                            Some(&mutated),
+                            fixture_validation_context(&bundle.checkpoint, &public_key),
+                        )
+                        .is_err(),
+                        "signature mutation at {} was accepted",
+                        path
+                    );
+                }
+            }
+        }
+    }
 }
