@@ -596,6 +596,7 @@ pub use private_result_oram::{
     PrivateResultOramBucketValidationContext, PrivateResultOramClientCommitBucketRef,
     PrivateResultOramClientConfig, PrivateResultOramClientKeys, PrivateResultOramClientState,
     PrivateResultOramClientStateAeadContext, PrivateResultOramClientStateSnapshot,
+    PrivateResultOramClientStateSnapshotPadding,
     PrivateResultOramCommitBucketRef, PrivateResultOramCommitPlan,
     PrivateResultOramCommitSignatureContext, PrivateResultOramCommitSignatureInput,
     PrivateResultOramEncryptedBucketBatch, PrivateResultOramEncryptedClientStateSnapshot,

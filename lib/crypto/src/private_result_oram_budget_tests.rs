@@ -69,9 +69,13 @@ fn client_state_seals_stop_at_the_invocation_budget() {
         index_epoch: 1,
         root_hash: &root,
     };
-    seal_private_result_oram_client_state_snapshot(&keys, context, &snapshot).unwrap();
+    let padding = PrivateResultOramClientStateSnapshotPadding {
+        block_size_bytes: 128,
+        stash_capacity: 1,
+    };
+    seal_private_result_oram_client_state_snapshot(&keys, context, &snapshot, padding).unwrap();
     assert!(matches!(
-        seal_private_result_oram_client_state_snapshot(&keys, context, &snapshot),
+        seal_private_result_oram_client_state_snapshot(&keys, context, &snapshot, padding),
         Err(PrivateResultOramError::Encryption(
             EncryptionError::KeyUsageExhausted
         ))

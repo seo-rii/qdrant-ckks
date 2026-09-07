@@ -938,7 +938,13 @@ proptest! {
             index_epoch: 5,
             root_hash: &root_hash,
         };
-        let sealed = seal_private_result_oram_client_state_snapshot(&keys, context, &snapshot).unwrap();
+        let padding = PrivateResultOramClientStateSnapshotPadding {
+            block_size_bytes: config.block_size_bytes,
+            stash_capacity: blocks.len(),
+        };
+        let sealed =
+            seal_private_result_oram_client_state_snapshot(&keys, context, &snapshot, padding)
+                .unwrap();
         prop_assert_eq!(
             open_private_result_oram_client_state_snapshot(&keys, context, &sealed).unwrap(),
             snapshot
@@ -1413,6 +1419,7 @@ proptest! {
         tree_height in 2u32..5,
         bucket_size in 2usize..5,
         block_count in 1usize..24,
+        initial_leaves in proptest::collection::vec(any::<u64>(), 24),
         ops in proptest::collection::vec((any::<u8>(), any::<u64>(), any::<u64>()), 1..80),
     ) {
         let config = result_config(tree_height, bucket_size, 96);
@@ -1433,7 +1440,9 @@ proptest! {
                 deleted: false,
                 generation: i as u64,
             };
-            let leaf = ops[i % ops.len()].1 % leaf_count;
+            // Independent initial leaves: drawing them from a one-element `ops` put every block
+            // on one path, whose capacity no eviction schedule can exceed.
+            let leaf = initial_leaves[i] % leaf_count;
             state.insert_new_stash_block(block.clone(), leaf, config).unwrap();
             expected.insert(block.payload_fetch_token, block);
             let eviction = evict_private_result_oram_path(&mut state, config, leaf, &server.path(leaf)).unwrap();

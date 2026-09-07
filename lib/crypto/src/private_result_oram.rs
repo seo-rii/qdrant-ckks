@@ -8,6 +8,7 @@ use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::aead::{AeadInvocationBudget, EncryptionError, SecretKey, validate_resource_key_id};
 use crate::control_plane::{PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING};
@@ -338,6 +339,13 @@ pub fn private_result_oram_bucket_ciphertext_bytes(
         .map_err(|_| PrivateResultOramError::InvalidManifestField("oram.bucket_size"))?;
     let block_size_bytes = usize::try_from(oram.block_size_bytes)
         .map_err(|_| PrivateResultOramError::InvalidManifestField("oram.block_size_bytes"))?;
+    private_result_oram_bucket_ciphertext_bytes_for_geometry(bucket_size, block_size_bytes)
+}
+
+fn private_result_oram_bucket_ciphertext_bytes_for_geometry(
+    bucket_size: usize,
+    block_size_bytes: usize,
+) -> Result<usize, PrivateResultOramError> {
     let slot_bytes = 1usize.checked_add(block_size_bytes).ok_or(
         PrivateResultOramError::InvalidManifestField("oram.block_size_bytes"),
     )?;
@@ -825,15 +833,88 @@ impl<'a> PrivateResultOramBucketAeadBaseContext<'a> {
     }
 }
 
+/// The fixed shape a sealed client-state snapshot is padded to. `block_size_bytes` bounds every
+/// stash block's payload and `stash_capacity` bounds the stash block count, so the ciphertext
+/// length is a function of the position-map size alone (the signed state already publishes that
+/// as its logical count) and never of which blocks the stash holds or how large they are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateResultOramClientStateSnapshotPadding {
+    pub block_size_bytes: usize,
+    pub stash_capacity: usize,
+}
+
+fn pad_private_result_oram_client_state_snapshot(
+    snapshot: &PrivateResultOramClientStateSnapshot,
+    padding: PrivateResultOramClientStateSnapshotPadding,
+) -> Result<Vec<u8>, PrivateResultOramError> {
+    if snapshot.stash.len() > padding.stash_capacity
+        || snapshot
+            .stash
+            .iter()
+            .any(|block| block.payload.len() > padding.block_size_bytes)
+    {
+        return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+    }
+    // The widest JSON one stash block can serialize to: every number at its maximum digit count,
+    // `false` rather than `true`, and a payload of `block_size_bytes` three-digit bytes.
+    let widest_block = PrivateResultOramPayloadBlockPlaintext {
+        version: u16::MAX,
+        payload_fetch_token: [u8::MAX; 32],
+        point_token: [u8::MAX; 32],
+        payload: vec![u8::MAX; padding.block_size_bytes],
+        deleted: false,
+        generation: u64::MAX,
+    };
+    let widest_block_len = serde_json::to_vec(&widest_block)
+        .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?
+        .len();
+    // Position entries are fixed-width base64 labels (`from_snapshot` has validated them), so
+    // the stash-less length depends on the position count only.
+    let stashless_len = serde_json::to_vec(&PrivateResultOramClientStateSnapshot {
+        version: snapshot.version,
+        tree_height: snapshot.tree_height,
+        positions: snapshot.positions.clone(),
+        stash: Vec::new(),
+    })
+    .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?
+    .len();
+    let max_plaintext_len = PRIVATE_RESULT_ORAM_CLIENT_STATE_CIPHERTEXT_MAX_BYTES
+        - 2
+        - PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN
+        - PRIVATE_RESULT_ORAM_BUCKET_AEAD_TAG_LEN;
+    // `stash_capacity` blocks plus one separator each always fit, whatever the stash holds.
+    let padded_len = widest_block_len
+        .checked_add(1)
+        .and_then(|block_len| block_len.checked_mul(padding.stash_capacity))
+        .and_then(|stash_len| stash_len.checked_add(stashless_len))
+        .filter(|padded_len| *padded_len <= max_plaintext_len)
+        .ok_or(PrivateResultOramError::InvalidClientStateSnapshot)?;
+    let mut plaintext = Zeroizing::new(
+        serde_json::to_vec(snapshot)
+            .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?,
+    );
+    // JSON never carries a raw NUL (serde_json escapes control characters), so zero padding is
+    // unambiguous to strip on open.
+    if plaintext.len() > padded_len || plaintext.contains(&0) {
+        return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+    }
+    let mut padded = Vec::with_capacity(padded_len);
+    padded.extend_from_slice(&plaintext[..]);
+    padded.resize(padded_len, 0);
+    Ok(padded)
+}
+
 pub fn seal_private_result_oram_client_state_snapshot(
     keys: &PrivateResultOramClientKeys,
     context: PrivateResultOramClientStateAeadContext<'_>,
     snapshot: &PrivateResultOramClientStateSnapshot,
+    padding: PrivateResultOramClientStateSnapshotPadding,
 ) -> Result<PrivateResultOramEncryptedClientStateSnapshot, PrivateResultOramError> {
     validate_private_result_client_state_context(context)?;
     PrivateResultOramClientState::from_snapshot(snapshot)?;
-    let plaintext = serde_json::to_vec(snapshot)
-        .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?;
+    let plaintext = Zeroizing::new(pad_private_result_oram_client_state_snapshot(
+        snapshot, padding,
+    )?);
     keys.client_state_seals
         .reserve("private result ORAM client state key")?;
 
@@ -849,15 +930,16 @@ pub fn seal_private_result_oram_client_state_snapshot(
     let aad = private_result_oram_client_state_aead(context)?;
     let mut in_out = plaintext;
     let tag = key
-        .seal_in_place_separate_tag(nonce, Aad::from(aad.as_slice()), &mut in_out)
+        .seal_in_place_separate_tag(nonce, Aad::from(aad.as_slice()), &mut in_out[..])
         .map_err(|_| EncryptionError::SealFailed)?;
-    in_out.extend_from_slice(tag.as_ref());
 
-    let mut raw_ciphertext =
-        Vec::with_capacity(2 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN + in_out.len());
+    let mut raw_ciphertext = Vec::with_capacity(
+        2 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN + in_out.len() + tag.as_ref().len(),
+    );
     raw_ciphertext.extend_from_slice(&PRIVATE_RESULT_ORAM_CLIENT_STATE_AEAD_VERSION.to_be_bytes());
     raw_ciphertext.extend_from_slice(&nonce_bytes);
-    raw_ciphertext.extend_from_slice(&in_out);
+    raw_ciphertext.extend_from_slice(&in_out[..]);
+    raw_ciphertext.extend_from_slice(tag.as_ref());
 
     Ok(PrivateResultOramEncryptedClientStateSnapshot {
         version: PRIVATE_RESULT_ORAM_CLIENT_STATE_AEAD_VERSION,
@@ -914,16 +996,23 @@ pub fn open_private_result_oram_client_state_snapshot(
         .try_into()
         .map_err(|_| PrivateResultOramError::InvalidClientStateCiphertextEncoding)?;
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
-    let mut ciphertext = raw_ciphertext[2 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN..].to_vec();
+    let mut ciphertext =
+        Zeroizing::new(raw_ciphertext[2 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN..].to_vec());
     let unbound_key = UnboundKey::new(&AES_256_GCM, keys.client_state_key().as_bytes())
         .map_err(|_| EncryptionError::OpenFailed)?;
     let key = LessSafeKey::new(unbound_key);
     let aad = private_result_oram_client_state_aead(context)?;
     let plaintext = key
-        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
+        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext[..])
         .map_err(|_| PrivateResultOramError::ClientStateOpenFailed)?;
-    let snapshot = serde_json::from_slice::<PrivateResultOramClientStateSnapshot>(plaintext)
-        .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?;
+    // The plaintext is zero-padded to a shape-only length; JSON never contains a raw NUL.
+    let json_len = plaintext
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .map_or(0, |last| last + 1);
+    let snapshot =
+        serde_json::from_slice::<PrivateResultOramClientStateSnapshot>(&plaintext[..json_len])
+            .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?;
     PrivateResultOramClientState::from_snapshot(&snapshot)?;
     Ok(snapshot)
 }
@@ -2428,14 +2517,15 @@ pub fn open_private_result_oram_bucket(
         .try_into()
         .map_err(|_| PrivateResultOramError::InvalidBucketCiphertextEncoding)?;
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
-    let mut ciphertext = raw_ciphertext[1 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN..].to_vec();
+    let mut ciphertext =
+        Zeroizing::new(raw_ciphertext[1 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN..].to_vec());
 
     let unbound_key = UnboundKey::new(&AES_256_GCM, keys.bucket_aead_key().as_bytes())
         .map_err(|_| EncryptionError::OpenFailed)?;
     let key = LessSafeKey::new(unbound_key);
     let aad = private_result_oram_bucket_aead(context)?;
     let plaintext = key
-        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
+        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext[..])
         .map_err(|_| PrivateResultOramError::BucketOpenFailed)?;
     Ok(plaintext.to_vec())
 }
@@ -2564,6 +2654,16 @@ where
         }
     }
 
+    // Every bucket a verified fetch opens has the fixed ciphertext size the geometry implies.
+    // Checking the encoded length before the Merkle proof decodes the ciphertexts keeps a hostile
+    // server from making the client allocate an arbitrarily large buffer per bucket.
+    let expected_ciphertext_encoded_len =
+        max_base64url_nopad_encoded_len(private_result_oram_bucket_ciphertext_bytes_for_geometry(
+            config.bucket_size,
+            config.block_size_bytes,
+        )?)
+        .ok_or(PrivateResultOramError::InvalidBucketField("ciphertext"))?;
+
     let mut working_state = state.clone();
     let mut accesses = Vec::with_capacity(payload_fetch_tokens.len());
     let mut fetched_point_tokens = BTreeSet::new();
@@ -2645,6 +2745,14 @@ where
             .collect::<Vec<_>>();
         if actual_bucket_ids != batch_plan.bucket_ids {
             return Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"));
+        }
+
+        if encrypted_batch
+            .buckets
+            .iter()
+            .any(|bucket| bucket.ciphertext.len() != expected_ciphertext_encoded_len)
+        {
+            return Err(PrivateResultOramError::InvalidBucketField("ciphertext"));
         }
 
         let mut plaintext_by_bucket = open_private_result_oram_verified_bucket_batch(
@@ -4920,6 +5028,13 @@ mod tests {
             rk_epoch: 7,
             index_epoch: 42,
             root_hash,
+        }
+    }
+
+    fn result_snapshot_padding() -> PrivateResultOramClientStateSnapshotPadding {
+        PrivateResultOramClientStateSnapshotPadding {
+            block_size_bytes: 128,
+            stash_capacity: 4,
         }
     }
 
@@ -7353,6 +7468,60 @@ mod tests {
     }
 
     #[test]
+    fn client_state_snapshot_ciphertext_length_hides_stash_occupancy_and_block_sizes() {
+        let keys = result_test_keys();
+        let config = result_client_config();
+        let root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        let context = result_client_state_context(&root_hash);
+        let blocks = [payload_block(10), payload_block(11), payload_block(12)];
+        let sealed = |stash_count: usize,
+                      payload_len: usize,
+                      padding: PrivateResultOramClientStateSnapshotPadding| {
+            let mut state = PrivateResultOramClientState::with_position_map(
+                blocks
+                    .iter()
+                    .enumerate()
+                    .map(|(leaf, block)| (block.payload_fetch_token, leaf as u64))
+                    .collect::<Vec<_>>(),
+                config.tree_height,
+            )
+            .unwrap();
+            for block in blocks.iter().take(stash_count) {
+                let mut block = block.clone();
+                block.payload = vec![7; payload_len];
+                state.stash.insert(block.payload_fetch_token, block);
+            }
+            let snapshot = state.to_snapshot(config.tree_height).unwrap();
+            let encrypted =
+                seal_private_result_oram_client_state_snapshot(&keys, context, &snapshot, padding)?;
+            assert_eq!(
+                open_private_result_oram_client_state_snapshot(&keys, context, &encrypted).unwrap(),
+                snapshot
+            );
+            Ok::<usize, PrivateResultOramError>(encrypted.ciphertext.len())
+        };
+        let padding = result_snapshot_padding();
+
+        let empty_stash_len = sealed(0, 0, padding).unwrap();
+        assert_eq!(sealed(1, 3, padding).unwrap(), empty_stash_len);
+        assert_eq!(sealed(3, 128, padding).unwrap(), empty_stash_len);
+
+        assert_eq!(
+            sealed(1, 129, padding),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
+        let two_blocks = PrivateResultOramClientStateSnapshotPadding {
+            stash_capacity: 2,
+            ..padding
+        };
+        assert_eq!(
+            sealed(3, 3, two_blocks),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
+        assert_ne!(sealed(2, 3, two_blocks).unwrap(), empty_stash_len);
+    }
+
+    #[test]
     fn client_state_snapshot_seal_open_binds_epoch_and_root_context() {
         let keys = result_test_keys();
         let config = result_client_config();
@@ -7371,8 +7540,13 @@ mod tests {
         let root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
         let context = result_client_state_context(&root_hash);
 
-        let encrypted =
-            seal_private_result_oram_client_state_snapshot(&keys, context, &snapshot).unwrap();
+        let encrypted = seal_private_result_oram_client_state_snapshot(
+            &keys,
+            context,
+            &snapshot,
+            result_snapshot_padding(),
+        )
+        .unwrap();
         assert_eq!(encrypted.version, 1);
         assert_eq!(encrypted.index_epoch, 42);
         assert_eq!(encrypted.root_hash, root_hash);
@@ -7426,7 +7600,12 @@ mod tests {
             ..context
         };
         assert_eq!(
-            seal_private_result_oram_client_state_snapshot(&keys, malformed_context, &snapshot),
+            seal_private_result_oram_client_state_snapshot(
+                &keys,
+                malformed_context,
+                &snapshot,
+                result_snapshot_padding(),
+            ),
             Err(PrivateResultOramError::InvalidClientStateContext(
                 "collection_id"
             ))
@@ -7489,7 +7668,12 @@ mod tests {
         let mut malformed_snapshot = snapshot;
         malformed_snapshot.stash.push(payload_block(99));
         assert_eq!(
-            seal_private_result_oram_client_state_snapshot(&keys, context, &malformed_snapshot),
+            seal_private_result_oram_client_state_snapshot(
+                &keys,
+                context,
+                &malformed_snapshot,
+                result_snapshot_padding(),
+            ),
             Err(PrivateResultOramError::InvalidClientStateSnapshot)
         );
     }
@@ -7536,8 +7720,13 @@ mod tests {
             assert!(plaintext_json.contains(&position.leaf_label));
         }
 
-        let encrypted =
-            seal_private_result_oram_client_state_snapshot(&keys, context, &snapshot).unwrap();
+        let encrypted = seal_private_result_oram_client_state_snapshot(
+            &keys,
+            context,
+            &snapshot,
+            result_snapshot_padding(),
+        )
+        .unwrap();
         let encrypted_json = serde_json::to_string(&encrypted).unwrap();
         let raw_ciphertext = BASE64URL_NOPAD
             .decode(encrypted.ciphertext.as_bytes())
