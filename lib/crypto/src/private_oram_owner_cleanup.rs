@@ -5,6 +5,7 @@
 //! authorization only when its pinned lifecycle state exactly matches the expected predecessor,
 //! publishes the terminal marker durably, and then signs the derived receipt.
 
+use std::collections::BTreeSet;
 use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
@@ -1032,7 +1033,8 @@ pub fn validate_private_oram_all_owner_cleanup_certificate_v1(
     ] {
         validate_digest(digest, "certificate")?;
     }
-    let mut previous = None;
+    let mut previous_owner_index = None;
+    let mut owner_peer_ids = BTreeSet::new();
     for entry in &certificate.entries {
         validate_self_consistent_signed_private_oram_owner_cleanup_authorization_v1(
             &entry.authorization,
@@ -1043,11 +1045,10 @@ pub fn validate_private_oram_all_owner_cleanup_certificate_v1(
             &entry.authorization.authorization,
         )?;
         let authorization = &entry.authorization.authorization;
-        let key = (
-            authorization.target.owner_index,
-            authorization.target.owner_peer_id,
-        );
-        if previous.is_some_and(|previous| previous >= key)
+        // Entries are strictly ordered by owner index and name distinct peers: one owner cannot
+        // appear under two indexes and two owners cannot share one index.
+        if previous_owner_index.is_some_and(|previous| previous >= authorization.target.owner_index)
+            || !owner_peer_ids.insert(authorization.target.owner_peer_id)
             || authorization.authority.consensus_history_id_digest
                 != certificate.consensus_history_id_digest
             || authorization.authority.raft_group_id_digest != certificate.raft_group_id_digest
@@ -1066,7 +1067,7 @@ pub fn validate_private_oram_all_owner_cleanup_certificate_v1(
         {
             return Err(PrivateOramOwnerCleanupError::IncompleteCertificate);
         }
-        previous = Some(key);
+        previous_owner_index = Some(authorization.target.owner_index);
     }
     if certificate.certificate_digest != all_owner_cleanup_certificate_digest_v1(certificate)? {
         return Err(PrivateOramOwnerCleanupError::NonCanonicalEncoding);
@@ -1212,8 +1213,12 @@ fn validate_private_oram_owner_cleanup_authorization_v1(
     }
     validate_locator(&authorization.attempt.reservation_applied)?;
     validate_locator(&authorization.outcome.outcome_applied)?;
+    // The outcome settles the reservation, so it is applied later: a higher index and no
+    // earlier term.
     if authorization.outcome.outcome_applied.index
         <= authorization.attempt.reservation_applied.index
+        || authorization.outcome.outcome_applied.term
+            < authorization.attempt.reservation_applied.term
     {
         return Err(PrivateOramOwnerCleanupError::InvalidTransition);
     }
@@ -1914,6 +1919,79 @@ mod tests {
             ),
             Err(PrivateOramOwnerCleanupError::InvalidTransition)
         ));
+    }
+
+    #[test]
+    fn authorization_rejects_outcome_applied_in_an_earlier_term() {
+        let authority_key = key(1);
+        let owner_key = key(2);
+        let (authority_signer, signed_authorization) = authorization(
+            &authority_key,
+            &owner_key,
+            0,
+            11,
+            PrivateOramOwnerCleanupNegativeOutcomeKindV1::AdmissionRejected,
+        );
+        let mut earlier_term = signed_authorization.authorization.clone();
+        earlier_term.outcome.outcome_applied =
+            PrivateOramCleanupRaftLocatorV1 { term: 1, index: 21 };
+        assert!(matches!(
+            private_oram_owner_cleanup_authorization_verification_context_v1(
+                earlier_term,
+                authority_signer,
+                signed_authorization
+                    .authorization
+                    .target
+                    .owner_signer
+                    .clone(),
+                signed_authorization
+                    .authorization
+                    .target
+                    .expected_lifecycle_state
+                    .clone(),
+                digest(200),
+                digest(201),
+                digest(202),
+            ),
+            Err(PrivateOramOwnerCleanupError::InvalidTransition)
+        ));
+    }
+
+    #[test]
+    fn all_owner_certificate_rejects_repeated_peers_and_shared_indexes() {
+        let authority_key = key(5);
+        let certificate = |owners: [(u32, u64); 2]| {
+            let mut entries = Vec::new();
+            let mut authority_signer = None;
+            for (owner_index, owner_peer_id) in owners {
+                let owner_key = key(6 + u8::try_from(owner_index).unwrap());
+                let (signer, signed_authorization) = authorization(
+                    &authority_key,
+                    &owner_key,
+                    owner_index,
+                    owner_peer_id,
+                    PrivateOramOwnerCleanupNegativeOutcomeKindV1::PrestageAborted,
+                );
+                authority_signer = Some(signer.clone());
+                let verified = verified_authorization(&signed_authorization, &signer);
+                let receipt = private_oram_owner_cleanup_receipt_v1(
+                    &verified,
+                    PrivateOramOwnerCleanupObservedPrestateV1::Absent,
+                )
+                .unwrap();
+                let signed_receipt =
+                    sign_private_oram_owner_cleanup_receipt_v1(&owner_key, 9, &receipt).unwrap();
+                entries.push(PrivateOramAllOwnerCleanupCertificateEntryV1 {
+                    authorization: signed_authorization,
+                    receipt: signed_receipt,
+                });
+            }
+            private_oram_all_owner_cleanup_certificate_v1(&authority_signer.unwrap(), entries)
+        };
+        certificate([(0, 11), (1, 12)]).unwrap();
+        // The same peer under two indexes, and two peers under one index.
+        assert!(certificate([(0, 11), (1, 11)]).is_err());
+        assert!(certificate([(0, 11), (0, 12)]).is_err());
     }
 
     #[test]
