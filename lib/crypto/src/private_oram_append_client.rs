@@ -7,6 +7,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::aead::{EncryptionError, SecretKey};
 use crate::private_hnsw_client::{
@@ -1327,8 +1328,11 @@ pub fn seal_private_oram_append_client_checkpoint_v2(
     checkpoint: &PrivateOramAppendClientCheckpointV2,
 ) -> Result<PrivateOramSealedAppendClientCheckpointV2, PrivateOramAppendClientError> {
     validate_private_oram_append_client_checkpoint_v2_shape(checkpoint)?;
-    let plaintext = serde_json::to_vec(checkpoint)
-        .map_err(|_| PrivateOramAppendClientError::InvalidCheckpointField("checkpoint"))?;
+    // The checkpoint carries the position maps and stashes; the working buffer is zeroized.
+    let plaintext = Zeroizing::new(
+        serde_json::to_vec(checkpoint)
+            .map_err(|_| PrivateOramAppendClientError::InvalidCheckpointField("checkpoint"))?,
+    );
     if plaintext.len() > PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_MAX_BYTES {
         return Err(PrivateOramAppendClientError::InvalidCheckpointField(
             "checkpoint_size",
@@ -1357,7 +1361,7 @@ pub fn seal_private_oram_append_client_checkpoint_v2(
     )?;
     let mut ciphertext = plaintext;
     let tag = key
-        .seal_in_place_separate_tag(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
+        .seal_in_place_separate_tag(nonce, Aad::from(aad.as_slice()), &mut ciphertext[..])
         .map_err(|_| EncryptionError::SealFailed)?;
 
     let mut encoded = Vec::with_capacity(
@@ -1367,7 +1371,7 @@ pub fn seal_private_oram_append_client_checkpoint_v2(
     );
     encoded.push(PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_AEAD_VERSION);
     encoded.extend_from_slice(&nonce_bytes);
-    encoded.extend_from_slice(&ciphertext);
+    encoded.extend_from_slice(&ciphertext[..]);
     encoded.extend_from_slice(tag.as_ref());
     let ciphertext_sha256 = base64url_sha256(&encoded);
 
@@ -1468,7 +1472,8 @@ pub fn open_private_oram_append_client_checkpoint_v2(
         [1..1 + PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_NONCE_LEN]
         .try_into()
         .map_err(|_| PrivateOramAppendClientError::InvalidCheckpointCiphertext)?;
-    let mut ciphertext = raw[1 + PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_NONCE_LEN..].to_vec();
+    let mut ciphertext =
+        Zeroizing::new(raw[1 + PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_NONCE_LEN..].to_vec());
     let key = derive_checkpoint_key(
         checkpoint_key,
         &encrypted.sealed.collection_id,
@@ -1486,7 +1491,7 @@ pub fn open_private_oram_append_client_checkpoint_v2(
         encrypted.sealed.state_sequence,
     )?;
     let plaintext = key
-        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
+        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext[..])
         .map_err(|_| PrivateOramAppendClientError::CheckpointOpenFailed)?;
     let checkpoint: PrivateOramAppendClientCheckpointV2 = serde_json::from_slice(plaintext)
         .map_err(|_| PrivateOramAppendClientError::InvalidCheckpointCiphertext)?;
