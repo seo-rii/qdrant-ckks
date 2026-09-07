@@ -1155,12 +1155,13 @@ pub fn validate_client_payload_value_after_runtime_verification(
     let validated = validate_client_payload_value_inner(value, context)?;
     // The proof was minted from a verified signature; an equal key below therefore proves that
     // this envelope carries exactly those signature bytes, so no re-verification is needed.
-    let envelope_key = client_payload_envelope_key_from_validated(validated, false).ok_or_else(
-        || PayloadEncryptionError::ExpectedEncryptedEnvelope {
-            field: context.field_path.to_string(),
-            found: json_type_name(value),
-        },
-    )?;
+    let envelope_key =
+        client_payload_envelope_key_from_validated(validated, false).ok_or_else(|| {
+            PayloadEncryptionError::ExpectedEncryptedEnvelope {
+                field: context.field_path.to_string(),
+                found: json_type_name(value),
+            }
+        })?;
     if verified_envelope_key.envelope_key() != &envelope_key {
         return Err(PayloadEncryptionError::RuntimeEnvelopeProofMismatch);
     }
@@ -1298,12 +1299,13 @@ pub fn validate_client_payload_value_for_runtime(
         return Err(PayloadEncryptionError::InvalidClientSignature);
     }
     let validated = validate_client_payload_value_inner(value, context)?;
-    let envelope_key = client_payload_envelope_key_from_validated(validated, true).ok_or_else(
-        || PayloadEncryptionError::ExpectedEncryptedEnvelope {
-            field: context.field_path.to_string(),
-            found: json_type_name(value),
-        },
-    )?;
+    let envelope_key =
+        client_payload_envelope_key_from_validated(validated, true).ok_or_else(|| {
+            PayloadEncryptionError::ExpectedEncryptedEnvelope {
+                field: context.field_path.to_string(),
+                found: json_type_name(value),
+            }
+        })?;
     let blind_indexes = client_payload_blind_index_token_keys(value, context.field_path)?;
 
     Ok(ClientPayloadVerifiedEnvelopeKey {

@@ -42,7 +42,8 @@ use qdrant_sec::private_oram_owner_lifecycle::{
     decode_private_oram_owner_lifecycle_status_attestation_v1,
 };
 use qdrant_sec::private_oram_owner_prestage::{
-    decode_private_oram_owner_prestage_attestation_v2, decode_private_oram_owner_prestage_package_v2,
+    decode_private_oram_owner_prestage_attestation_v2,
+    decode_private_oram_owner_prestage_package_v2,
 };
 use qdrant_sec::private_oram_owner_reservation_prepare::decode_private_oram_owner_reservation_prepare_v1;
 use qdrant_sec::private_oram_owner_reservation_resolution::decode_private_oram_owner_reservation_resolution_receipt_v1;
@@ -135,7 +136,11 @@ fn hnsw_base_context() -> PrivateHnswBucketAeadBaseContext<'static> {
     }
 }
 
-fn result_config(tree_height: u32, bucket_size: usize, block_size_bytes: usize) -> PrivateResultOramClientConfig {
+fn result_config(
+    tree_height: u32,
+    bucket_size: usize,
+    block_size_bytes: usize,
+) -> PrivateResultOramClientConfig {
     PrivateResultOramClientConfig {
         tree_height,
         bucket_size,
@@ -311,7 +316,9 @@ fn token() -> impl Strategy<Value = [u8; 32]> {
     any::<[u8; 32]>()
 }
 
-fn result_block(max_payload: usize) -> impl Strategy<Value = PrivateResultOramPayloadBlockPlaintext> {
+fn result_block(
+    max_payload: usize,
+) -> impl Strategy<Value = PrivateResultOramPayloadBlockPlaintext> {
     (
         token(),
         token(),
@@ -334,7 +341,10 @@ fn result_block(max_payload: usize) -> impl Strategy<Value = PrivateResultOramPa
 }
 
 /// A valid node block for `fixed_neighbor_slots` slots and `dim` f32 values.
-fn hnsw_block(fixed_neighbor_slots: usize, dim: usize) -> impl Strategy<Value = PrivateHnswNodeBlockPlaintext> {
+fn hnsw_block(
+    fixed_neighbor_slots: usize,
+    dim: usize,
+) -> impl Strategy<Value = PrivateHnswNodeBlockPlaintext> {
     (
         token(),
         token(),
@@ -346,9 +356,22 @@ fn hnsw_block(fixed_neighbor_slots: usize, dim: usize) -> impl Strategy<Value = 
         proptest::option::of(token()),
     )
         .prop_map(
-            |(node_id, point_token, top_level, vector, raw_neighbors, deleted, generation, payload_fetch_token)| {
+            |(
+                node_id,
+                point_token,
+                top_level,
+                vector,
+                raw_neighbors,
+                deleted,
+                generation,
+                payload_fetch_token,
+            )| {
                 // Level mask is contiguous from level 0 up to `top_level`.
-                let level_mask = if top_level >= 63 { u64::MAX } else { (1u64 << (top_level + 1)) - 1 };
+                let level_mask = if top_level >= 63 {
+                    u64::MAX
+                } else {
+                    (1u64 << (top_level + 1)) - 1
+                };
                 let mut seen = BTreeSet::new();
                 let mut neighbors = Vec::new();
                 let mut neighbor_levels = Vec::new();
@@ -366,7 +389,10 @@ fn hnsw_block(fixed_neighbor_slots: usize, dim: usize) -> impl Strategy<Value = 
                     point_token,
                     level_mask,
                     vector_encoding: PrivateHnswVectorEncoding::F32Le,
-                    vector: vector.iter().flat_map(|value| value.to_le_bytes()).collect(),
+                    vector: vector
+                        .iter()
+                        .flat_map(|value| value.to_le_bytes())
+                        .collect(),
                     neighbors,
                     neighbor_levels,
                     deleted,
@@ -382,15 +408,16 @@ fn json_value() -> impl Strategy<Value = Value> {
         Just(Value::Null),
         any::<bool>().prop_map(Value::Bool),
         any::<i64>().prop_map(|v| json!(v)),
-        any::<f64>().prop_filter("finite", |v| v.is_finite()).prop_map(|v| json!(v)),
+        any::<f64>()
+            .prop_filter("finite", |v| v.is_finite())
+            .prop_map(|v| json!(v)),
         "\\PC{0,24}".prop_map(Value::String),
     ];
     leaf.prop_recursive(4, 32, 6, |inner| {
         prop_oneof![
             proptest::collection::vec(inner.clone(), 0..6).prop_map(Value::Array),
-            proptest::collection::btree_map("[a-z$_]{1,12}", inner, 0..6).prop_map(|map| {
-                Value::Object(map.into_iter().collect())
-            }),
+            proptest::collection::btree_map("[a-z$_]{1,12}", inner, 0..6)
+                .prop_map(|map| { Value::Object(map.into_iter().collect()) }),
         ]
     })
 }
@@ -1393,7 +1420,11 @@ impl ResultOramServer {
 
     fn write_back(&mut self, buckets: &[PrivateResultOramPlaintextBucket]) {
         for bucket in buckets {
-            assert_eq!(bucket.blocks.len(), self.config.bucket_size, "write-back keeps bucket shape");
+            assert_eq!(
+                bucket.blocks.len(),
+                self.config.bucket_size,
+                "write-back keeps bucket shape"
+            );
             self.buckets[bucket.bucket_id as usize] = bucket.clone();
         }
     }
@@ -1403,7 +1434,8 @@ impl ResultOramServer {
         let mut stored = BTreeMap::new();
         for bucket in &self.buckets {
             for block in bucket.blocks.iter().flatten() {
-                let previous = stored.insert(block.payload_fetch_token, (bucket.bucket_id, block.clone()));
+                let previous =
+                    stored.insert(block.payload_fetch_token, (bucket.bucket_id, block.clone()));
                 assert!(previous.is_none(), "a block is stored in two buckets");
             }
         }
@@ -1620,7 +1652,11 @@ impl HnswOramServer {
         let mut stored = BTreeMap::new();
         for bucket in &self.buckets {
             for block in bucket.blocks.iter().flatten() {
-                assert!(stored.insert(block.node_id, (bucket.bucket_id, block.clone())).is_none());
+                assert!(
+                    stored
+                        .insert(block.node_id, (bucket.bucket_id, block.clone()))
+                        .is_none()
+                );
             }
         }
         stored
@@ -2148,7 +2184,10 @@ fn hnsw_upload_bundle() -> PrivateHnswOramUploadBundle {
             .unwrap()
         })
         .collect();
-    let commitments: Vec<String> = buckets.iter().map(|b| b.bucket_commitment.clone()).collect();
+    let commitments: Vec<String> = buckets
+        .iter()
+        .map(|b| b.bucket_commitment.clone())
+        .collect();
     manifest.root_hash = private_hnsw_oram_merkle_root_for_commitments(&commitments).unwrap();
     PrivateHnswOramUploadBundle {
         manifest,
@@ -2177,7 +2216,10 @@ fn result_upload_bundle() -> PrivateResultOramUploadBundle {
             .unwrap()
         })
         .collect();
-    let commitments: Vec<String> = buckets.iter().map(|b| b.bucket_commitment.clone()).collect();
+    let commitments: Vec<String> = buckets
+        .iter()
+        .map(|b| b.bucket_commitment.clone())
+        .collect();
     manifest.root_hash = private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
     PrivateResultOramUploadBundle {
         manifest,

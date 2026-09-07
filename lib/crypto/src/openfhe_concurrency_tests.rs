@@ -77,7 +77,8 @@ fn idle_program() -> CommandOpenFheBackend {
 
 fn encrypt_once(backend: &CommandOpenFheBackend, point_id: &str) -> Result<Vec<u8>, CkksError> {
     let parameters = CkksParameters::default();
-    let public_material = CkksPublicMaterial::new(b"crypto-context".to_vec(), b"public-key".to_vec()).unwrap();
+    let public_material =
+        CkksPublicMaterial::new(b"crypto-context".to_vec(), b"public-key".to_vec()).unwrap();
     backend.encrypt(CkksEncryptionInput {
         parameters: &parameters,
         public_material: &public_material,
@@ -150,11 +151,25 @@ fn worker_pool_never_exceeds_pool_size_under_contention() {
         handle.join().unwrap();
     }
 
-    assert_eq!(failures.load(Ordering::SeqCst), 0, "no caller should see an exhausted pool");
-    assert!(max_live.load(Ordering::SeqCst) <= POOL, "more reservations than workers");
-    assert!(live_worker_count(&backend) <= POOL, "pool grew past its size");
+    assert_eq!(
+        failures.load(Ordering::SeqCst),
+        0,
+        "no caller should see an exhausted pool"
+    );
+    assert!(
+        max_live.load(Ordering::SeqCst) <= POOL,
+        "more reservations than workers"
+    );
+    assert!(
+        live_worker_count(&backend) <= POOL,
+        "pool grew past its size"
+    );
     assert_eq!(reserved_worker_count(&backend), 0, "a reservation leaked");
-    assert_eq!(backend.spawning.load(Ordering::SeqCst), 0, "spawn slot leaked");
+    assert_eq!(
+        backend.spawning.load(Ordering::SeqCst),
+        0,
+        "spawn slot leaked"
+    );
     assert!(backend.worker_process().is_ok());
 }
 
@@ -180,7 +195,11 @@ fn concurrent_requests_share_a_bounded_pool_and_all_succeed() {
                     let point_id = format!("{thread_index}-{request}");
                     let ciphertext = encrypt_once(&backend, &point_id)
                         .unwrap_or_else(|err| panic!("request {point_id} failed: {err}"));
-                    assert_eq!(ciphertext, vec![1], "bridge answer must be decoded verbatim");
+                    assert_eq!(
+                        ciphertext,
+                        vec![1],
+                        "bridge answer must be decoded verbatim"
+                    );
                 }
             })
         })
@@ -190,13 +209,19 @@ fn concurrent_requests_share_a_bounded_pool_and_all_succeed() {
     }
 
     assert!(live_worker_count(&backend) <= POOL);
-    assert!(live_worker_count(&backend) >= 1, "at least one worker served the requests");
+    assert!(
+        live_worker_count(&backend) >= 1,
+        "at least one worker served the requests"
+    );
     assert_eq!(reserved_worker_count(&backend), 0);
     assert_eq!(backend.spawning.load(Ordering::SeqCst), 0);
     // Every surviving worker has the context registered and is reused, not respawned.
     for worker in backend.workers.lock().unwrap().iter() {
         assert_eq!(worker.registered_contexts.lock().unwrap().len(), 1);
-        assert!(worker.try_wait().unwrap().is_none(), "worker exited unexpectedly");
+        assert!(
+            worker.try_wait().unwrap().is_none(),
+            "worker exited unexpectedly"
+        );
     }
 }
 
@@ -239,7 +264,10 @@ fn stalled_bridge_times_out_and_is_replaced_for_every_caller() {
     }
     let elapsed = started.elapsed();
     // Each caller needs at most one timeout plus the bounded reservation wait; nothing hangs.
-    assert!(elapsed >= timeout, "a caller returned before its timeout: {elapsed:?}");
+    assert!(
+        elapsed >= timeout,
+        "a caller returned before its timeout: {elapsed:?}"
+    );
     assert!(
         elapsed < timeout * (THREADS as u32 + 1) + WORKER_RESERVATION_WAIT * THREADS as u32,
         "callers serialized far beyond the bounded waits: {elapsed:?}"
@@ -275,8 +303,12 @@ fn garbage_bridge_output_fails_requests_without_hanging_or_leaking_workers() {
                 barrier.wait();
                 for request in 0..REQUESTS {
                     let point_id = format!("garbage-{thread_index}-{request}");
-                    let err = encrypt_once(&backend, &point_id).expect_err("garbage must not decode");
-                    assert!(!err.to_string().contains("not json"), "bridge output leaked into the error");
+                    let err =
+                        encrypt_once(&backend, &point_id).expect_err("garbage must not decode");
+                    assert!(
+                        !err.to_string().contains("not json"),
+                        "bridge output leaked into the error"
+                    );
                 }
             })
         })

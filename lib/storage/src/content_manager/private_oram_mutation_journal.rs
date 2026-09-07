@@ -8383,7 +8383,7 @@ mod tests {
     fn activation_locator_for_capsule_test(
         marker: u8,
     ) -> crate::content_manager::consensus::private_oram_activation_authority::PrivateOramActivationAuthorityLocatorV1
-    {
+{
         crate::content_manager::consensus::private_oram_activation_authority::PrivateOramActivationAuthorityLocatorV1::from_parts_for_test(
             u64::from(marker).saturating_add(1),
             digest(marker),

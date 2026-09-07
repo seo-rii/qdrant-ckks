@@ -1863,7 +1863,11 @@ pub fn plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
         // Canonical leaf order: listing the real paths first and the padding paths last would
         // tell the server which paths pad a leaf collision, and therefore that two of the
         // fetched payloads share a path.
-        let mut ordered_leaves: Vec<u64> = batch_leaves.iter().chain(&padding_leaves).copied().collect();
+        let mut ordered_leaves: Vec<u64> = batch_leaves
+            .iter()
+            .chain(&padding_leaves)
+            .copied()
+            .collect();
         ordered_leaves.sort_unstable();
         let mut bucket_ids = Vec::new();
         for leaf in &ordered_leaves {

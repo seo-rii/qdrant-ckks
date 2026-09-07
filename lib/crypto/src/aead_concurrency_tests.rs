@@ -84,7 +84,10 @@ fn invocation_budget_is_exact_under_contention() {
     let envelopes = envelopes.lock().unwrap();
     let mut nonces = std::collections::BTreeSet::new();
     for (point_id, envelope) in envelopes.iter() {
-        assert!(nonces.insert(envelope.nonce.clone()), "nonce reuse under contention");
+        assert!(
+            nonces.insert(envelope.nonce.clone()),
+            "nonce reuse under contention"
+        );
         assert_eq!(
             cipher.decrypt(envelope, context(point_id)).unwrap(),
             point_id.as_bytes()
