@@ -4661,8 +4661,73 @@ link counts) and its digest coverage are sound; AEAD, wrapped-key and sidecar
 envelopes bind their full context; session leases and lease renewals use the
 server clock only.
 
+### Fifth pass: owner lifecycle, mutation and result ORAM audits
+
+This pass re-read the owner cleanup, reservation-resolution and pre-stage
+modules, the mutation validator and the result ORAM client end to end and
+traced their callers in the collection crate and the server. Fixed:
+
+- The owner-side pre-stage handler parsed the pre-stage package (up to
+  480 MiB: a full JSON parse, mutation digest recomputation, read-transcript
+  reconstruction and a second canonical re-encode) before checking the
+  coordinator's signer pin and signature; the size cap was the only pre-check.
+  The package is now decoded after the request signature, which already
+  commits to the package length and hash, has been verified.
+- The pre-stage attestation statement copied `receipt_digest` and
+  `receipt_sha256` from the owner's response unchecked, and the coordinator
+  compared only the statement's `receipt_digest` with the receipt. The
+  statement constructor now takes the receipt bytes and runs the response
+  validator (receipt hash and length), and the coordinator also requires the
+  response's `receipt_digest` and the statement's `receipt_sha256` to match
+  the receipt it decoded.
+- The mutation validator accepted an observed read transcript's
+  `transcript_digest` as declared, so a transcript deserialized from storage
+  could carry any digest and make the later comparison with
+  `writeback.read_transcript_digest` tautological. The digest is now
+  recomputed from the ordered leaf labels and the declared window geometry.
+  The transcript digest builder also refuses a window that repeats a path,
+  matching the transaction and server-side read validators.
+- The verified result ORAM fetch base64-decoded every server-returned bucket
+  inside the Merkle proof check before any size bound (the 64 MiB cap sat in
+  the bucket opener, which runs afterwards). Every bucket's encoded length is
+  now compared with the fixed size the geometry implies before the proof is
+  touched, as the append-result transaction already did.
+- The sealed result ORAM client-state snapshot was the plain JSON of the
+  position map and stash, so its ciphertext length revealed stash occupancy
+  and the sizes of the stashed blocks to whoever stores it. The plaintext is
+  now zero-padded to a length derived from the position count, a
+  caller-supplied stash capacity and the block size (the widest JSON a block
+  can serialize to), the seal refuses a stash over that capacity, and a test
+  checks that the ciphertext length does not change with the stash. The AEAD
+  working buffers of the bucket and snapshot openers are zeroized on drop.
+- The cleanup authorization ordered the outcome locator after the reservation
+  locator by Raft index only; an earlier term now also fails, as it does for
+  the resolution receipt. The all-owner cleanup certificate required only a
+  lexicographic order of (owner index, peer id), which let one peer appear
+  under two indexes or two peers share one index; indexes must now strictly
+  increase and peer ids be distinct.
+- The pre-stage package, request, roster digest and attestation statement
+  accepted peer id 0 (Raft's "no peer" sentinel) where the cleanup, resolution
+  and recovery validators refuse it.
+Checked and left as is: every signature and digest message in the audited
+modules commits to the fields a receiver later trusts (version, alg, key
+epoch, key id, collection, attempt and locator fields, receipt hash and
+length) and tags every optional field; the cleanup receipt is re-derived from
+the authority-signed target rather than trusted; every self-consistent
+validator is followed by signer pinning in production; the result ORAM Merkle
+binding, AEAD contexts, fixed read shape and full write-back of padding paths;
+the mutation protocol's sequence, epoch and count transitions.
+
 Known remaining limitations:
 
+- The result ORAM bucket key derivation, AEAD and commitment contexts bind
+  the resource key epoch but not the layout generation or manifest nonce, so
+  a rebuilt ORAM under the same epoch produces ciphertexts that authenticate
+  for the same bucket id and index epoch of the previous layout. The verified
+  fetch path is protected by the signed-state root; binding the generation
+  would change the stored format.
+- Decoded result ORAM buckets and payload blocks are ordinary vectors that
+  are not zeroized when dropped; only the openers' working buffers are.
 - The collection-side paired owner journal
   (`<hnsw store>/temp/private-oram-owner-v2/active`) is never archived or
   removed once its terminal record is written; the storage-level mutation
@@ -4685,7 +4750,9 @@ Known remaining limitations:
 - The owner store adapter maps every owner journal error, including
   `Indeterminate` raised after a terminal rename succeeded, to `bad_request`.
 - The all-owner cleanup certificate cannot check its own completeness
-  (`owner_count` is self-declared); callers must compare it with the roster.
+  (`owner_count` is self-declared and its digest is unkeyed); callers must
+  compare it with the roster. The cleanup-authorization flow has no
+  production producer yet.
 - HNSW append graph planning fails after the candidate windows, poisoning the
   attempt, when a selected neighbor has a level-0 neighbor outside the
   candidate set; the checkpoint carries no adjacency, so SDKs must pass a
