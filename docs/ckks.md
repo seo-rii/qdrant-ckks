@@ -4709,6 +4709,9 @@ traced their callers in the collection crate and the server. Fixed:
 - The pre-stage package, request, roster digest and attestation statement
   accepted peer id 0 (Raft's "no peer" sentinel) where the cleanup, resolution
   and recovery validators refuse it.
+- The append client checkpoint (position maps and stashes of every index)
+  left its plaintext in the AEAD working buffers after sealing and opening;
+  they are zeroized on drop now, like the result ORAM buffers above.
 Checked and left as is: every signature and digest message in the audited
 modules commits to the fields a receiver later trusts (version, alg, key
 epoch, key id, collection, attempt and locator fields, receipt hash and
@@ -4717,6 +4720,22 @@ the authority-signed target rather than trusted; every self-consistent
 validator is followed by signer pinning in production; the result ORAM Merkle
 binding, AEAD contexts, fixed read shape and full write-back of padding paths;
 the mutation protocol's sequence, epoch and count transitions.
+
+Tests added in this pass. A JSON leaf-mutation fuzzer
+(`lib/crypto/src/json_mutation.rs`) serializes a signed message, changes one
+scalar field (a digest character, a decimal id, a flag, a number, the
+signature or the embedded signer) and requires the validator to reject the
+result; it runs, in the module test suites, over the cleanup authorization
+and receipt, the resolution receipt, the reservation-prepare record, the
+enrollment genesis commitment and status attestation, the peer recovery
+response and adoption request, the capsule install request, response and
+attestation, the external recovery checkpoint, the pre-stage request,
+response and attestation, and (in `tests/private_oram_mutation.rs`) the
+signed append mutation bundle. No uncovered field was found. Deterministic
+4,000-step load tests for the result and HNSW Path ORAM clients
+(`lib/crypto/tests/stress_oram.rs`) mix accesses with random remaps and
+evictions on a height-6 tree at 40% load and require the stash to stay under
+32 blocks while every block remains on its position path or in the stash.
 
 Known remaining limitations:
 
