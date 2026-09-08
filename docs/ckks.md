@@ -4737,8 +4737,69 @@ signed append mutation bundle. No uncovered field was found. Deterministic
 evictions on a height-6 tree at 40% load and require the stash to stay under
 32 blocks while every block remains on its position path or in the stash.
 
+### Sixth pass: activation, recovery and append pipeline audits
+
+This pass re-read the activation authority, peer activation, mixed-version
+activation, peer recovery, external recovery and capsule transport modules and
+the whole append pipeline (both transactions, checkpoints, owner prepare,
+finalizer, client, point staging), traced their callers, and reproduced the
+crypto crate's CI job on Linux. Fixed:
+
+- The OpenFHE bridge asked for `PR_SET_PDEATHSIG`, which Linux delivers when
+  the *thread* that spawned the child exits, not the process. Workers were
+  spawned on whichever request thread first needed one, and request threads
+  come from pools that recycle idle threads, so a live worker was killed
+  mid-flight for every other caller as soon as that thread was reaped (the
+  crypto crate's Linux CI job failed on exactly this: the second request of
+  a busy-pool test hit a worker whose spawning thread had just finished).
+  Bridge children are now spawned from one dedicated, process-lifetime
+  spawner thread, so the parent-death signal again means "the bridge dies
+  with Qdrant". A test spawns a worker from a short-lived thread and checks
+  it survives; the busy-pool test now holds the worker past the reservation
+  wait it exercises.
+- The peer recovery request was the only owner-side RPC without a
+  coordinator signature: anyone who could reach an owner's internal endpoint
+  could make it take its lifecycle locks, read its journal and sign a fresh
+  terminal for a chosen nonce (not an authority bypass, the terminal comes
+  from the consensus snapshot and responses are nonce-bound). The coordinator
+  now mints the nonce and signs the request with its peer identity, the wire
+  message carries the key and signature, and the owner verifies both against
+  its authority pin before any recovery work.
+- The capsule transport validators accepted resource ids of up to 1024 bytes
+  of almost any character; they now use the charset and length the peer
+  recovery and external checkpoint validators enforce.
+- The peer recovery and external checkpoint base64 decoders re-encode and
+  compare like their siblings, so a decoder change cannot reintroduce
+  malleable digests.
+- The result ORAM append transaction now refuses a plan whose insert eviction
+  leaf equals the point's position (the documented invariant was only tested,
+  never enforced), its output validator checks the same marker digests as
+  the HNSW one, and both transactions' progress reports redact stash
+  occupancy and overlay size.
+
+Checked and left as is: every manifest, challenge, ack, proof, recovery,
+adoption and install message binds the fields a receiver later trusts and
+every production verifier pins the signer from the activation registry;
+successor and transition logic is consecutive and append-only; fixed-shape
+windows, server response pinning, Merkle sibling consistency, recovery
+markers, checkpoint sealing and the live owner-prepare and point-staging
+validators hold up.
+
 Known remaining limitations:
 
+- The capsule install stream is buffered up to 128 MiB before the coordinator
+  signature is verified (the crypto crate verifies before hashing, the
+  transport does not); the semaphore, timeouts and TLS bound the exposure.
+  Carrying the signed request in the first chunk would remove it.
+- `validate_private_oram_owner_capsule_install_attestation_v2` verifies
+  against the key embedded in the attestation; every authority-bearing caller
+  uses the pinned `_for_signer_v2` form, but the unpinned form stays public.
+- HNSW append substitute padding can run out under many collisions and then
+  aborts the attempt, which is a slightly secret-correlated abort; a poisoned
+  attempt after a rolled-back window costs a fresh plan even for pure
+  response errors. Neither path has a production caller yet.
+- Decoded HNSW blocks, plaintext buckets and checkpoint structs are ordinary
+  heap values that are not zeroized on drop; only the AEAD buffers are.
 - The result ORAM bucket key derivation, AEAD and commitment contexts bind
   the resource key epoch but not the layout generation or manifest nonce, so
   a rebuilt ORAM under the same epoch produces ciphertexts that authenticate
