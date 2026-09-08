@@ -90,10 +90,12 @@ fn mutated_scalar(value: &Value, salt: u8) -> Value {
 fn mutated_string(text: &str, salt: u8) -> String {
     // Decimal strings (`decimal_u64` fields) stay decimal, so the value changes rather than the
     // encoding and the message reaches the signature check.
-    if !text.is_empty() && text.len() <= 20 && text.bytes().all(|byte| byte.is_ascii_digit()) {
-        if let Ok(number) = text.parse::<u64>() {
-            return (number ^ (1u64 << (salt % 64))).to_string();
-        }
+    if !text.is_empty()
+        && text.len() <= 20
+        && text.bytes().all(|byte| byte.is_ascii_digit())
+        && let Ok(number) = text.parse::<u64>()
+    {
+        return (number ^ (1u64 << (salt % 64))).to_string();
     }
     let mut chars: Vec<char> = text.chars().collect();
     match salt % 4 {
@@ -135,7 +137,7 @@ mod tests {
                 let mut mutated = document.clone();
                 let path = mutate_json_leaf(&mut mutated, index, salt);
                 assert_ne!(mutated, document, "{path} with salt {salt}");
-                assert_eq!(mutated.pointer(&path).is_some(), true, "{path}");
+                assert!(mutated.pointer(&path).is_some(), "{path}");
             }
         }
         let mut decimal = json!("11");

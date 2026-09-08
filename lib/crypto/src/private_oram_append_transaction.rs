@@ -441,13 +441,29 @@ impl Debug for PrivateOramAppendHnswTransactionOutputV2 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateOramAppendHnswTransactionProgressV2 {
     pub accepted_read_path_count: u32,
     pub accepted_window_count: u32,
     pub prepared_write_bucket_count: usize,
     pub plaintext_overlay_bucket_count: usize,
     pub client_stash_block_count: usize,
+}
+
+impl Debug for PrivateOramAppendHnswTransactionProgressV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Stash occupancy and overlay size follow the secret positions; keep them out of logs.
+        f.debug_struct("PrivateOramAppendHnswTransactionProgressV2")
+            .field("accepted_read_path_count", &self.accepted_read_path_count)
+            .field("accepted_window_count", &self.accepted_window_count)
+            .field(
+                "prepared_write_bucket_count",
+                &self.prepared_write_bucket_count,
+            )
+            .field("plaintext_overlay_bucket_count", &"[redacted]")
+            .field("client_stash_block_count", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone)]

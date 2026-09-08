@@ -35,7 +35,7 @@ const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const MAX_COLLECTION_NAME_BYTES: usize = 255;
 const MAX_VECTOR_NAME_BYTES: usize = 255;
-const MAX_RESOURCE_ID_BYTES: usize = 1_024;
+const MAX_RESOURCE_ID_BYTES: usize = 256;
 
 #[derive(Error, PartialEq, Eq)]
 pub enum PrivateOramOwnerCapsuleTransportError {
@@ -1010,10 +1010,12 @@ fn validate_resource_id(
     value: &str,
     field: &'static str,
 ) -> Result<(), PrivateOramOwnerCapsuleTransportError> {
+    // The same charset and length as the peer recovery and external checkpoint validators, so an
+    // id those refuse cannot arrive through the install path either.
     if value.is_empty()
         || value.len() > MAX_RESOURCE_ID_BYTES
-        || value.chars().any(|character| {
-            character.is_control() || character == '/' || character == '\\' || character == '\0'
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'/' | b'@' | b'-')
         })
     {
         return Err(PrivateOramOwnerCapsuleTransportError::InvalidField(field));

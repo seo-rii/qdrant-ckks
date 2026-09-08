@@ -241,13 +241,29 @@ impl Debug for PrivateOramAppendResultTransactionOutputV2 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateOramAppendResultTransactionProgressV2 {
     pub accepted_read_path_count: u32,
     pub accepted_window_count: u32,
     pub prepared_write_bucket_count: usize,
     pub plaintext_overlay_bucket_count: usize,
     pub client_stash_block_count: usize,
+}
+
+impl Debug for PrivateOramAppendResultTransactionProgressV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Stash occupancy and overlay size follow the secret positions; keep them out of logs.
+        f.debug_struct("PrivateOramAppendResultTransactionProgressV2")
+            .field("accepted_read_path_count", &self.accepted_read_path_count)
+            .field("accepted_window_count", &self.accepted_window_count)
+            .field(
+                "prepared_write_bucket_count",
+                &self.prepared_write_bucket_count,
+            )
+            .field("plaintext_overlay_bucket_count", &"[redacted]")
+            .field("client_stash_block_count", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -498,6 +514,14 @@ impl PrivateOramAppendResultTransactionV2 {
         }) {
             return Err(PrivateOramAppendTransactionError::InvalidInput(
                 "duplicate_window_path",
+            ));
+        }
+        // The new block enters the stash under `initial_leaf`; evicting along that very path
+        // would write it straight to its position and tie this mutation's write set to the
+        // first fetch of the point.
+        if plan.insert_eviction_leaf == point.initial_leaf {
+            return Err(PrivateOramAppendTransactionError::InvalidInput(
+                "insert_eviction_leaf",
             ));
         }
         if point.payload_fetch_token == [0; 32] || point.point_token == [0; 32] {
@@ -1317,7 +1341,10 @@ pub fn validate_private_oram_append_result_transaction_output_v2(
             "prepared_output",
         ));
     }
+    validate_base64url_32(&marker.mutation_id, "mutation_id")?;
+    validate_base64url_32(&marker.old_state_digest, "old_state_digest")?;
     validate_base64url_32(&marker.attempt_digest, "attempt_digest")?;
+    validate_base64url_32(&marker.writer_lease_digest, "writer_lease_digest")?;
     validate_base64url_32(&output.source_checkpoint_digest, "source_checkpoint_digest")?;
     validate_base64url_32(&output.old_root_hash, "old_root_hash")?;
     validate_base64url_32(&output.new_root_hash, "new_root_hash")?;

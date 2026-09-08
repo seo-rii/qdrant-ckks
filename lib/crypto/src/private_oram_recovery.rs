@@ -425,6 +425,9 @@ fn decode_base64url_32(
     let decoded = BASE64URL_NOPAD
         .decode(value.as_bytes())
         .map_err(|_| PrivateOramRecoveryError::InvalidCheckpointField(field))?;
+    if BASE64URL_NOPAD.encode(&decoded) != value {
+        return Err(PrivateOramRecoveryError::InvalidCheckpointField(field));
+    }
     decoded
         .try_into()
         .map_err(|_| PrivateOramRecoveryError::InvalidCheckpointField(field))
@@ -451,6 +454,9 @@ fn decode_base64url_64(value: &str) -> Result<[u8; 64], PrivateOramRecoveryError
     let decoded = BASE64URL_NOPAD
         .decode(value.as_bytes())
         .map_err(|_| PrivateOramRecoveryError::MalformedSignature)?;
+    if BASE64URL_NOPAD.encode(&decoded) != value {
+        return Err(PrivateOramRecoveryError::MalformedSignature);
+    }
     decoded
         .try_into()
         .map_err(|_| PrivateOramRecoveryError::MalformedSignature)

@@ -889,7 +889,7 @@ fn pad_private_result_oram_client_state_snapshot(
         .and_then(|stash_len| stash_len.checked_add(stashless_len))
         .filter(|padded_len| *padded_len <= max_plaintext_len)
         .ok_or(PrivateResultOramError::InvalidClientStateSnapshot)?;
-    let mut plaintext = Zeroizing::new(
+    let plaintext = Zeroizing::new(
         serde_json::to_vec(snapshot)
             .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?,
     );

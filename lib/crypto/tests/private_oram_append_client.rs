@@ -2690,11 +2690,14 @@ fn result_append_transaction_rolls_back_after_a_later_path_operation_fails() {
     }
     state.indexes[1].root_hash = root_hash;
 
+    // The position (leaf 0) differs from the insert eviction path (leaf 1), as `begin` requires;
+    // the conflicting block sits on the padding path read second, so the first path operation
+    // succeeds and the second fails.
     let point = PrivateOramAppendResultPointV2 {
         payload_fetch_token: [7; 32],
         point_token: [6; 32],
         payload: b"new private payload".to_vec(),
-        initial_leaf: 1,
+        initial_leaf: 0,
     };
     let plan = PrivateOramAppendResultTransactionPlanV2 {
         index_name: "private-payload".to_string(),
@@ -4850,6 +4853,26 @@ fn paired_mutation_finalizer_debug_output_redacts_signed_and_encrypted_artifacts
         assert!(!debug.contains(&finalized.encrypted_checkpoint.sealed.ciphertext));
         assert!(!debug.contains(&finalized.mutation_bundle.signature.sig));
     }
+}
+
+#[test]
+fn result_append_transaction_rejects_an_eviction_leaf_equal_to_the_position() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(1);
+    let mut plan = result_append_transaction_plan(1);
+    let point = result_append_transaction_point();
+    plan.insert_eviction_leaf = point.initial_leaf;
+    assert!(matches!(
+        PrivateOramAppendResultTransactionV2::begin(
+            &fixture.manifest,
+            &fixture.state,
+            &fixture.checkpoint,
+            point,
+            plan,
+        ),
+        Err(PrivateOramAppendTransactionError::InvalidInput(
+            "insert_eviction_leaf"
+        ))
+    ));
 }
 
 #[test]
