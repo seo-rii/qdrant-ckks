@@ -6,7 +6,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -1341,8 +1341,7 @@ impl CommandOpenFheBackend {
         }
         configure_bridge_command_sandbox(&mut command, self.checked_program, self.sandbox);
 
-        let mut child = command
-            .spawn()
+        let mut child = spawn_bridge_child(command)
             .map_err(|err| CkksError::Backend(format!("failed to start OpenFHE bridge: {err}")))?;
         let stdin = child
             .stdin
@@ -1472,6 +1471,42 @@ enum BridgeWriteError {
 /// Writes one request line to the bridge from a helper thread and waits at most `timeout` for
 /// the write to complete. On timeout the caller kills the worker, which closes the pipe and
 /// unblocks the helper; the request bytes stay zeroized on every path.
+/// Spawns a bridge child from a thread that lives as long as the process.
+///
+/// The child asks for `PR_SET_PDEATHSIG`, and Linux delivers that signal when the *thread* that
+/// spawned the child exits, not when the process does. Request threads come from pools that
+/// recycle idle threads, so a worker spawned on one of them was killed mid-flight for every other
+/// caller as soon as that thread was reaped. One dedicated spawner thread keeps the parent-death
+/// signal meaning what it was meant to mean: the bridge dies with Qdrant.
+fn spawn_bridge_child(command: Command) -> io::Result<Child> {
+    type SpawnJob = (Command, mpsc::Sender<io::Result<Child>>);
+    static SPAWNER: OnceLock<Option<Mutex<mpsc::Sender<SpawnJob>>>> = OnceLock::new();
+    let spawner = SPAWNER
+        .get_or_init(|| {
+            let (job_tx, job_rx) = mpsc::channel::<SpawnJob>();
+            thread::Builder::new()
+                .name("openfhe-bridge-spawner".to_string())
+                .spawn(move || {
+                    for (mut command, reply) in job_rx {
+                        let _ = reply.send(command.spawn());
+                    }
+                })
+                .ok()
+                .map(|_| Mutex::new(job_tx))
+        })
+        .as_ref()
+        .ok_or_else(|| io::Error::other("failed to start the OpenFHE bridge spawner thread"))?;
+    let (reply_tx, reply_rx) = mpsc::channel();
+    spawner
+        .lock()
+        .map_err(|_| io::Error::other("OpenFHE bridge spawner mutex was poisoned"))?
+        .send((command, reply_tx))
+        .map_err(|_| io::Error::other("OpenFHE bridge spawner thread is gone"))?;
+    reply_rx
+        .recv()
+        .map_err(|_| io::Error::other("OpenFHE bridge spawner thread dropped the request"))?
+}
+
 fn write_bridge_request_with_deadline(
     worker_process: &Arc<WorkerProcess>,
     request_bytes: Zeroizing<Vec<u8>>,
@@ -2502,6 +2537,28 @@ done
         let third = backend.worker_process().unwrap();
 
         assert!(Arc::ptr_eq(third.worker(), &first_worker));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bridge_worker_survives_the_exit_of_the_thread_that_spawned_it() {
+        let backend = CommandOpenFheBackend::new_unchecked("cat")
+            .with_pool_size(NonZeroUsize::new(1).unwrap());
+        let spawner = backend.clone();
+        let worker = std::thread::spawn(move || {
+            let reservation = spawner.worker_process().unwrap();
+            Arc::clone(reservation.worker())
+        })
+        .join()
+        .unwrap();
+        // PR_SET_PDEATHSIG fires when the spawning *thread* exits; give the kernel a moment.
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            worker.try_wait().unwrap().is_none(),
+            "bridge worker died with the thread that spawned it"
+        );
+        let reservation = backend.worker_process().unwrap();
+        assert!(Arc::ptr_eq(reservation.worker(), &worker));
     }
 
     #[cfg(unix)]

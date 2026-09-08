@@ -3288,6 +3288,8 @@ fn command_openfhe_backend_fails_fast_when_pool_is_busy() {
     let count_fifo = dir.path().join("busy-pool-counts.fifo");
     create_test_fifo(&count_fifo);
     let (count_lines, count_reader) = collect_fifo_lines(count_fifo.clone());
+    // The bridge holds the only worker longer than the reservation wait, so the second request
+    // must give up with the pool-exhausted error instead of queueing behind it.
     fs::write(
         &script_path,
         format!(
@@ -3298,7 +3300,7 @@ exec 3>"$count_fifo"
 printf 'start\n' >&3
 while IFS= read -r _request; do
   printf 'request\n' >&3
-  sleep 2
+  sleep 7
   printf '{{"version":1,"security_profile":"ckks-128-n16384-d4-scale50","ciphertext":"b3BlbmZoZS1jaXBoZXI"}}\n'
 done
 "#,
@@ -3344,7 +3346,7 @@ done
 
     let err = encryptor
         .encrypt("docs", "point-2", &public_material(), &[2.0])
-        .expect_err("a busy full OpenFHE pool must fail fast");
+        .expect_err("a busy full OpenFHE pool must fail once the reservation wait elapses");
     assert!(
         matches!(err, CkksError::Backend(ref message) if message.contains("worker pool is exhausted")),
         "unexpected busy pool error: {err:?}",
