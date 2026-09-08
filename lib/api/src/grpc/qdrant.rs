@@ -15891,6 +15891,12 @@ pub struct RecoverPrivateOramMutationOwnerRequest {
     /// Canonical JSON encoding of qdrant_sec::PrivateOramPeerRecoveryRequestV2.
     #[prost(bytes = "vec", tag = "1")]
     pub request_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    /// Coordinator peer identity and signature over the request, so an owner starts recovery work
+    /// only for its pinned coordinator.
+    #[prost(bytes = "vec", tag = "2")]
+    pub coordinator_public_key_canonical_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub coordinator_signature_canonical_json: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

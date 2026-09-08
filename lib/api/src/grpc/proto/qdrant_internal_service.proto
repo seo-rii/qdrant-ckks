@@ -212,6 +212,10 @@ enum PrivateOramMutationOwnerTerminalKind {
 message RecoverPrivateOramMutationOwnerRequest {
   // Canonical JSON encoding of qdrant_sec::PrivateOramPeerRecoveryRequestV2.
   bytes request_canonical_json = 1;
+  // Coordinator peer identity and signature over the request, so an owner starts recovery work
+  // only for its pinned coordinator.
+  bytes coordinator_public_key_canonical_json = 2;
+  bytes coordinator_signature_canonical_json = 3;
 }
 
 message RecoverPrivateOramMutationOwnerResponse {

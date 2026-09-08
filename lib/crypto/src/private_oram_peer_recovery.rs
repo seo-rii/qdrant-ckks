@@ -24,6 +24,8 @@ pub const PRIVATE_ORAM_OWNER_ADOPTION_REQUEST_SIGNATURE_DOMAIN_V1: &str =
 pub const PRIVATE_ORAM_OWNER_ADOPTION_RESPONSE_SIGNATURE_DOMAIN_V1: &str =
     "qdrant-sec/private-oram-owner-adoption-response-signature/v1";
 pub const PRIVATE_ORAM_OWNER_ADOPTION_PROTOCOL_VERSION_V1: u16 = 1;
+pub const PRIVATE_ORAM_PEER_RECOVERY_REQUEST_SIGNATURE_DOMAIN_V2: &str =
+    "qdrant-sec/private-oram-peer-recovery-request-signature/v2";
 
 const PRIVATE_ORAM_PEER_RECOVERY_CHALLENGE_BYTES: usize = 16;
 const PRIVATE_ORAM_PEER_RECOVERY_REQUIRED_INDEXES: usize = 2;
@@ -933,6 +935,58 @@ pub fn try_private_oram_peer_recovery_response_signature_message_v2(
     Ok(message)
 }
 
+fn private_oram_peer_recovery_request_signature_message_v2(
+    request: &PrivateOramPeerRecoveryRequestV2,
+    public_key: &PrivateOramPeerRecoveryPublicKeyV1,
+) -> Result<Vec<u8>, PrivateOramPeerRecoveryError> {
+    validate_private_oram_peer_recovery_request_v2_shape(request)?;
+    validate_private_oram_peer_recovery_public_key_v1(public_key)?;
+    let mut message = Vec::new();
+    try_push_domain(
+        &mut message,
+        PRIVATE_ORAM_PEER_RECOVERY_REQUEST_SIGNATURE_DOMAIN_V2.as_bytes(),
+    )?;
+    push_u16(&mut message, request.protocol_version);
+    try_push_str(&mut message, &request.challenge_nonce)?;
+    try_push_str(&mut message, &request.collection_name)?;
+    try_push_str(&mut message, &request.collection_id)?;
+    try_push_str(&mut message, &request.mutation_id)?;
+    try_push_str(&mut message, &request.parent_descriptor_digest)?;
+    try_push_str(&mut message, &request.decision_record_digest)?;
+    push_u64(&mut message, request.coordinator_peer_id);
+    push_u64(&mut message, request.owner_peer_id);
+    try_push_str(&mut message, &request.vector_name)?;
+    try_push_str(&mut message, &request.owner_signing_key_id)?;
+    push_peer_public_key(&mut message, public_key)?;
+    Ok(message)
+}
+
+/// Signs a peer recovery request as the coordinator. An owner verifies this against its pinned
+/// coordinator identity before it takes lifecycle locks, reads its journal and signs a fresh
+/// terminal for the caller's nonce, so reaching the internal endpoint is not enough to make an
+/// owner do that work.
+pub fn sign_private_oram_peer_recovery_request_v2(
+    key_pair: &Ed25519KeyPair,
+    key_epoch: u64,
+    request: &PrivateOramPeerRecoveryRequestV2,
+) -> Result<PrivateOramPeerRecoverySignatureV2, PrivateOramPeerRecoveryError> {
+    let public_key = private_oram_peer_recovery_public_key_v1(key_pair, key_epoch)?;
+    let message = private_oram_peer_recovery_request_signature_message_v2(request, &public_key)?;
+    Ok(peer_signature(key_pair, public_key, &message))
+}
+
+pub fn validate_private_oram_peer_recovery_request_signature_v2(
+    public_key: &PrivateOramPeerRecoveryPublicKeyV1,
+    request: &PrivateOramPeerRecoveryRequestV2,
+    signature: &PrivateOramPeerRecoverySignatureV2,
+) -> Result<(), PrivateOramPeerRecoveryError> {
+    let public_key_bytes = validate_private_oram_peer_recovery_public_key_v1(public_key)?;
+    validate_private_oram_peer_recovery_signature_v2_shape(signature)?;
+    validate_signature_matches_public_key(signature, public_key)?;
+    let message = private_oram_peer_recovery_request_signature_message_v2(request, public_key)?;
+    verify_peer_signature(public_key_bytes, signature, &message)
+}
+
 pub fn sign_private_oram_peer_recovery_response_v2(
     key_pair: &Ed25519KeyPair,
     key_epoch: u64,
@@ -1053,6 +1107,9 @@ fn decode_base64url_exact<const N: usize>(
     let decoded = BASE64URL_NOPAD
         .decode(value.as_bytes())
         .map_err(|_| PrivateOramPeerRecoveryError::InvalidField(field))?;
+    if BASE64URL_NOPAD.encode(&decoded) != value {
+        return Err(PrivateOramPeerRecoveryError::InvalidField(field));
+    }
     decoded
         .try_into()
         .map_err(|_| PrivateOramPeerRecoveryError::InvalidField(field))
@@ -1588,6 +1645,44 @@ mod tests {
     }
 
     #[test]
+    fn peer_recovery_request_signature_round_trips_and_binds_the_coordinator_key() {
+        let coordinator = deterministic_key_pair(33);
+        let request = request();
+        let public_key = private_oram_peer_recovery_public_key_v1(&coordinator, 1).unwrap();
+        let signature =
+            sign_private_oram_peer_recovery_request_v2(&coordinator, 1, &request).unwrap();
+        validate_private_oram_peer_recovery_request_signature_v2(&public_key, &request, &signature)
+            .unwrap();
+
+        let other =
+            private_oram_peer_recovery_public_key_v1(&deterministic_key_pair(34), 1).unwrap();
+        assert!(
+            validate_private_oram_peer_recovery_request_signature_v2(&other, &request, &signature)
+                .is_err()
+        );
+        let mut replayed = request.clone();
+        replayed.challenge_nonce = BASE64URL_NOPAD.encode(&[9; 16]);
+        assert!(
+            validate_private_oram_peer_recovery_request_signature_v2(
+                &public_key,
+                &replayed,
+                &signature
+            )
+            .is_err()
+        );
+        let mut other_owner = request.clone();
+        other_owner.owner_peer_id += 1;
+        assert!(
+            validate_private_oram_peer_recovery_request_signature_v2(
+                &public_key,
+                &other_owner,
+                &signature
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn owner_adoption_signatures_bind_parent_and_evidence() {
         let coordinator = deterministic_key_pair(31);
         let owner = deterministic_key_pair(32);
@@ -1798,6 +1893,25 @@ mod tests {
                         )
                         .is_err(),
                         "adoption request mutation at {} was accepted",
+                        path
+                    );
+                }
+
+                let request_signature =
+                    sign_private_oram_peer_recovery_request_v2(&coordinator, 1, &request).unwrap();
+                let mut value = serde_json::to_value(&request).unwrap();
+                let path = mutate_json_leaf(&mut value, index, salt);
+                if let Ok(mutated) =
+                    serde_json::from_value::<PrivateOramPeerRecoveryRequestV2>(value)
+                {
+                    prop_assert!(
+                        validate_private_oram_peer_recovery_request_signature_v2(
+                            &coordinator_public,
+                            &mutated,
+                            &request_signature,
+                        )
+                        .is_err(),
+                        "recovery request mutation at {} was accepted",
                         path
                     );
                 }

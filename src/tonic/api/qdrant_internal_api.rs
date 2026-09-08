@@ -85,6 +85,7 @@ use qdrant_sec::{
     validate_private_oram_owner_adoption_request_signature_v1,
     validate_private_oram_owner_capsule_install_request_signature_v2,
     validate_private_oram_owner_prestage_request_signature_v2,
+    validate_private_oram_peer_recovery_request_signature_v2,
     validate_private_oram_peer_recovery_request_v2_shape,
 };
 use serde::Serialize;
@@ -3537,9 +3538,27 @@ impl QdrantInternal for QdrantInternalService {
         let identity = self.private_oram_peer_identity.as_ref().ok_or_else(|| {
             Status::failed_precondition("private ORAM mutation V2 is not configured")
         })?;
+        let wire = request.into_inner();
+        for encoded in [
+            &wire.request_canonical_json,
+            &wire.coordinator_public_key_canonical_json,
+            &wire.coordinator_signature_canonical_json,
+        ] {
+            if encoded.is_empty() || encoded.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_JSON_BYTES {
+                return Err(Status::resource_exhausted(
+                    "private ORAM owner recovery request is oversized",
+                ));
+            }
+        }
         let request: PrivateOramPeerRecoveryRequestV2 =
+            decode_canonical_private_oram_owner_recovery_json(&wire.request_canonical_json)?;
+        let coordinator_public_key: PrivateOramPeerRecoveryPublicKeyV1 =
             decode_canonical_private_oram_owner_recovery_json(
-                &request.into_inner().request_canonical_json,
+                &wire.coordinator_public_key_canonical_json,
+            )?;
+        let coordinator_signature: PrivateOramPeerRecoverySignatureV2 =
+            decode_canonical_private_oram_owner_recovery_json(
+                &wire.coordinator_signature_canonical_json,
             )?;
         validate_private_oram_peer_recovery_request_v2_shape(&request).map_err(|_| {
             Status::invalid_argument("private ORAM owner recovery request shape is invalid")
@@ -3560,6 +3579,7 @@ impl QdrantInternal for QdrantInternalService {
             )
             .map_err(Status::from)?;
         if identity.public_key() != signer_pair.owner().signer()
+            || &coordinator_public_key != signer_pair.coordinator().signer()
             || signer_pair.owner().registry_generation()
                 != signer_pair.coordinator().registry_generation()
             || signer_pair.owner().manifest_digest() != signer_pair.coordinator().manifest_digest()
@@ -3568,6 +3588,16 @@ impl QdrantInternal for QdrantInternalService {
                 "private ORAM owner recovery peer identity does not match authority pin",
             ));
         }
+        // Only the pinned coordinator may make this owner take its lifecycle locks, read its
+        // journal and sign a terminal for the caller's nonce.
+        validate_private_oram_peer_recovery_request_signature_v2(
+            &coordinator_public_key,
+            &request,
+            &coordinator_signature,
+        )
+        .map_err(|_| {
+            Status::invalid_argument("private ORAM owner recovery authentication failed")
+        })?;
         let terminal = private_oram_recovery::do_recover_private_oram_mutation_owner_v2(
             &self.toc,
             &self.settings,

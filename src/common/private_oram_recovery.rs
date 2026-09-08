@@ -19,8 +19,8 @@ use qdrant_sec::{
     PrivateOramExternalRecoveryCheckpointBundle, PrivateOramOwnerCapsuleInstallRequestV2,
     PrivateOramPeerRecoveryPublicKeyV1, PrivateOramPeerRecoveryRequestV2,
     PrivateOramPeerRecoveryTerminalV2, PrivateOramRecoveryValidationContext,
-    PrivateOramSignatureVerification, validate_private_hnsw_oram_manifest,
-    validate_private_hnsw_oram_manifest_signature_shape,
+    PrivateOramSignatureVerification, new_private_oram_peer_recovery_challenge_nonce_v2,
+    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_oram_external_recovery_checkpoint, validate_private_result_oram_manifest,
     validate_private_result_oram_manifest_signature_shape,
 };
@@ -541,9 +541,10 @@ fn invalid_owner_recovery_state() -> StorageError {
 pub(crate) async fn do_fetch_authenticated_private_oram_owner_terminal_v2(
     toc: &TableOfContent,
     consensus_state: &ConsensusStateRef,
-    request: PrivateOramPeerRecoveryRequestV2,
-    coordinator_identity: &PrivateOramPeerRecoveryPublicKeyV1,
+    mut request: PrivateOramPeerRecoveryRequestV2,
+    identity: &PrivateOramPeerRecoveryIdentity,
 ) -> StorageResult<PrivateOramAuthenticatedOwnerRecoveryResponse> {
+    let coordinator_identity = identity.public_key();
     if request.coordinator_peer_id != toc.this_peer_id
         || request.owner_peer_id == request.coordinator_peer_id
     {
@@ -556,12 +557,21 @@ pub(crate) async fn do_fetch_authenticated_private_oram_owner_terminal_v2(
     if before.coordinator().signer() != coordinator_identity {
         return Err(invalid_owner_recovery_state());
     }
+    // A fresh nonce per attempt, signed by this coordinator: the owner refuses recovery work
+    // for anyone else and the response is bound to exactly this nonce.
+    request.challenge_nonce = new_private_oram_peer_recovery_challenge_nonce_v2()
+        .map_err(|_| invalid_owner_recovery_request())?;
+    let coordinator_signature = identity
+        .sign_owner_recovery_request(&request)
+        .map_err(|_| invalid_owner_recovery_state())?;
     let expected_request = request.clone();
     let response = toc
         .get_channel_service()
         .recover_private_oram_mutation_owner(
             request.owner_peer_id,
             request,
+            coordinator_identity.clone(),
+            coordinator_signature,
             before.owner().signer(),
         )
         .await
@@ -573,10 +583,7 @@ pub(crate) async fn do_fetch_authenticated_private_oram_owner_terminal_v2(
     if after != before || after.coordinator().signer() != coordinator_identity {
         return Err(invalid_owner_recovery_state());
     }
-    let actual_request = response.verified().request();
-    let mut rebound_expected = expected_request;
-    rebound_expected.challenge_nonce = actual_request.challenge_nonce.clone();
-    if actual_request != &rebound_expected {
+    if response.verified().request() != &expected_request {
         return Err(invalid_owner_recovery_state());
     }
     Ok(response)
@@ -681,10 +688,7 @@ pub(crate) async fn resume_private_oram_mutation_terminal_once_v2(
             for request in requests {
                 responses.push(
                     do_fetch_authenticated_private_oram_owner_terminal_v2(
-                        toc,
-                        consensus,
-                        request,
-                        identity.public_key(),
+                        toc, consensus, request, identity,
                     )
                     .await?,
                 );

@@ -42,7 +42,6 @@ use qdrant_sec::{
     decode_private_oram_owner_prestage_attestation_v2,
     decode_private_oram_owner_reservation_prepare_v1,
     decode_signed_private_oram_owner_reservation_resolution_receipt_v1,
-    new_private_oram_peer_recovery_challenge_nonce_v2,
     private_oram_owner_cleanup_signer_from_peer_key_v1,
     validate_private_oram_owner_adoption_request_signature_v1,
     validate_private_oram_owner_adoption_response_signature_v1,
@@ -54,6 +53,7 @@ use qdrant_sec::{
     validate_private_oram_owner_prestage_response_signature_v2,
     validate_private_oram_owner_reservation_prepare_challenge_v1,
     validate_private_oram_owner_reservation_prepare_v1,
+    validate_private_oram_peer_recovery_request_signature_v2,
     validate_private_oram_peer_recovery_request_v2_shape,
     validate_private_oram_peer_recovery_response_signature_v2,
     validate_self_consistent_signed_private_oram_owner_reservation_resolution_receipt_v1,
@@ -482,18 +482,17 @@ impl ChannelService {
             .await
     }
 
+    /// `request` carries the coordinator's fresh challenge nonce and `coordinator_signature`
+    /// is the coordinator identity's signature over it; the owner verifies that signature
+    /// against its authority pin before it starts any recovery work.
     pub async fn recover_private_oram_mutation_owner(
         &self,
         peer_id: PeerId,
-        mut request: PrivateOramPeerRecoveryRequestV2,
+        request: PrivateOramPeerRecoveryRequestV2,
+        coordinator_public_key: PrivateOramPeerRecoveryPublicKeyV1,
+        coordinator_signature: PrivateOramPeerRecoverySignatureV2,
         expected_signer: &PrivateOramPeerRecoveryPublicKeyV1,
     ) -> CollectionResult<PrivateOramAuthenticatedOwnerRecoveryResponse> {
-        request.challenge_nonce =
-            new_private_oram_peer_recovery_challenge_nonce_v2().map_err(|_| {
-                CollectionError::service_error(
-                    "private ORAM owner recovery challenge generation failed",
-                )
-            })?;
         validate_private_oram_peer_recovery_request_v2_shape(&request).map_err(|_| {
             CollectionError::service_error("private ORAM owner recovery request is invalid")
         })?;
@@ -502,16 +501,41 @@ impl ChannelService {
                 "private ORAM owner recovery target does not match peer",
             ));
         }
+        validate_private_oram_peer_recovery_request_signature_v2(
+            &coordinator_public_key,
+            &request,
+            &coordinator_signature,
+        )
+        .map_err(|_| {
+            CollectionError::service_error(
+                "private ORAM owner recovery request authentication failed",
+            )
+        })?;
         let request_canonical_json = serde_json::to_vec(&request).map_err(|_| {
             CollectionError::service_error("private ORAM owner recovery request is invalid")
         })?;
-        if request_canonical_json.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_ENCODED_BYTES {
+        let coordinator_public_key_canonical_json = serde_json::to_vec(&coordinator_public_key)
+            .map_err(|_| {
+                CollectionError::service_error("private ORAM owner recovery request is invalid")
+            })?;
+        let coordinator_signature_canonical_json = serde_json::to_vec(&coordinator_signature)
+            .map_err(|_| {
+                CollectionError::service_error("private ORAM owner recovery request is invalid")
+            })?;
+        if request_canonical_json.len() > PRIVATE_ORAM_OWNER_RECOVERY_MAX_ENCODED_BYTES
+            || coordinator_public_key_canonical_json.len()
+                > PRIVATE_ORAM_OWNER_RECOVERY_MAX_ENCODED_BYTES
+            || coordinator_signature_canonical_json.len()
+                > PRIVATE_ORAM_OWNER_RECOVERY_MAX_ENCODED_BYTES
+        {
             return Err(CollectionError::service_error(
                 "private ORAM owner recovery request is invalid",
             ));
         }
         let wire_request = RecoverPrivateOramMutationOwnerRequest {
             request_canonical_json,
+            coordinator_public_key_canonical_json,
+            coordinator_signature_canonical_json,
         };
         let address = self
             .id_to_address
@@ -1898,7 +1922,7 @@ mod tests {
         PrivateOramPeerRecoveryTerminalIndexV2, PrivateOramPeerRecoveryTerminalKindV2,
         private_oram_owner_cleanup_signer_v1, private_oram_owner_lifecycle_genesis_state_v1,
         private_oram_peer_recovery_public_key_v1, sign_private_oram_owner_reservation_prepare_v1,
-        sign_private_oram_peer_recovery_response_v2,
+        sign_private_oram_peer_recovery_request_v2, sign_private_oram_peer_recovery_response_v2,
         try_private_oram_peer_recovery_terminal_evidence_digest_v2,
     };
     use ring::rand::SystemRandom;
@@ -2037,9 +2061,21 @@ mod tests {
             .write()
             .insert(7, Uri::from_static("http://peer.example.test:6335"));
         let (request, signer, _) = recovery_fixture();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        let coordinator = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let coordinator_public_key =
+            private_oram_peer_recovery_public_key_v1(&coordinator, 1).unwrap();
+        let coordinator_signature =
+            sign_private_oram_peer_recovery_request_v2(&coordinator, 1, &request).unwrap();
 
         let error = service
-            .recover_private_oram_mutation_owner(7, request, &signer)
+            .recover_private_oram_mutation_owner(
+                7,
+                request,
+                coordinator_public_key,
+                coordinator_signature,
+                &signer,
+            )
             .await
             .unwrap_err();
         let rendered = error.to_string();

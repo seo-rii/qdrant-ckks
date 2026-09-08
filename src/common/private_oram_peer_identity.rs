@@ -45,8 +45,8 @@ use qdrant_sec::{
     sign_private_oram_owner_prestage_attestation_v2, sign_private_oram_owner_prestage_request_v2,
     sign_private_oram_owner_prestage_response_v2, sign_private_oram_owner_reservation_prepare_v1,
     sign_private_oram_owner_reservation_resolution_receipt_v1,
-    sign_private_oram_peer_activation_ack_v1, sign_private_oram_peer_recovery_response_v2,
-    validate_private_oram_peer_recovery_public_key_v1,
+    sign_private_oram_peer_activation_ack_v1, sign_private_oram_peer_recovery_request_v2,
+    sign_private_oram_peer_recovery_response_v2, validate_private_oram_peer_recovery_public_key_v1,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::Ed25519KeyPair;
@@ -354,6 +354,21 @@ impl PrivateOramPeerRecoveryIdentity {
             self.public_key.key_epoch,
             request,
             terminal,
+        )
+        .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
+    }
+
+    pub(crate) fn sign_owner_recovery_request(
+        &self,
+        request: &PrivateOramPeerRecoveryRequestV2,
+    ) -> Result<PrivateOramPeerRecoverySignatureV2, PrivateOramPeerIdentityError> {
+        if request.coordinator_peer_id != self.peer_id || request.owner_peer_id == self.peer_id {
+            return Err(PrivateOramPeerIdentityError::PeerIdMismatch);
+        }
+        sign_private_oram_peer_recovery_request_v2(
+            &self.key_pair,
+            self.public_key.key_epoch,
+            request,
         )
         .map_err(|_| PrivateOramPeerIdentityError::CryptographicValidationFailed)
     }
