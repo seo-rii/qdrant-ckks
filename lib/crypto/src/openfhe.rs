@@ -36,7 +36,7 @@ const MIN_OPENFHE_SECURITY_LEVEL_BITS: u16 = 128;
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const MAX_BRIDGE_PROGRAM_SHA256_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BRIDGE_CIPHERTEXT_BYTES: usize = 16 * 1024 * 1024;
-const MAX_BRIDGE_CIPHERTEXT_B64_LEN: usize = (MAX_BRIDGE_CIPHERTEXT_BYTES + 2) / 3 * 4;
+const MAX_BRIDGE_CIPHERTEXT_B64_LEN: usize = MAX_BRIDGE_CIPHERTEXT_BYTES.div_ceil(3) * 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BridgeSandbox {
@@ -150,6 +150,18 @@ impl WorkerProcess {
             let mut child = self.child.lock().map_err(|_| {
                 CkksError::Backend("OpenFHE bridge child mutex was poisoned".to_string())
             })?;
+            #[cfg(target_os = "linux")]
+            {
+                // The bridge runs in its own session (`setsid` in `pre_exec`), so its process
+                // group is exactly the bridge plus whatever it forked. Kill all of it, or a
+                // grandchild keeps the pipes and the last plaintext request alive.
+                if let Ok(pgid) = nix::libc::pid_t::try_from(child.id()) {
+                    // SAFETY: plain syscall on a pid this process created and still owns.
+                    unsafe {
+                        nix::libc::kill(-pgid, nix::libc::SIGKILL);
+                    }
+                }
+            }
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -184,6 +196,14 @@ impl WorkerProcess {
             CkksError::Backend("OpenFHE bridge reader thread mutex was poisoned".to_string())
         })?;
         Ok(std::mem::take(&mut *reader_threads))
+    }
+}
+
+impl Drop for WorkerProcess {
+    fn drop(&mut self) {
+        // Whichever path dropped the last reference (pool reset, concurrent backend drops), the
+        // bridge must not outlive its pool unkilled or unreaped.
+        let _ = self.shutdown(false);
     }
 }
 
@@ -315,6 +335,10 @@ impl CommandOpenFheBackend {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "signature shared with the non-Linux variant"
+)]
 fn ensure_checked_bridge_spawn_supported() -> Result<(), CkksError> {
     Ok(())
 }
@@ -333,7 +357,7 @@ fn validate_checked_bridge_program(path: &Path) -> Result<(), CkksError> {
         ));
     }
 
-    let link_metadata = std::fs::symlink_metadata(path).map_err(|err| {
+    let link_metadata = fs_err::symlink_metadata(path).map_err(|err| {
         CkksError::Backend(format!("failed to inspect OpenFHE bridge program: {err}"))
     })?;
     if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
@@ -342,7 +366,7 @@ fn validate_checked_bridge_program(path: &Path) -> Result<(), CkksError> {
         ));
     }
 
-    let metadata = std::fs::metadata(path).map_err(|err| {
+    let metadata = fs_err::metadata(path).map_err(|err| {
         CkksError::Backend(format!("failed to inspect OpenFHE bridge program: {err}"))
     })?;
     if !metadata.is_file() {
@@ -378,7 +402,7 @@ fn validate_checked_bridge_program(path: &Path) -> Result<(), CkksError> {
 
         let mut parent = path.parent();
         while let Some(directory) = parent {
-            let directory_metadata = std::fs::symlink_metadata(directory).map_err(|err| {
+            let directory_metadata = fs_err::symlink_metadata(directory).map_err(|err| {
                 CkksError::Backend(format!(
                     "failed to inspect OpenFHE bridge parent directory: {err}"
                 ))
@@ -451,12 +475,31 @@ fn validate_bridge_sha256_digest(
 
 struct BridgeSpawnProgram {
     path: PathBuf,
-    _fd: Option<std::fs::File>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fd: Option<fs_err::File>,
+    /// Shebang scripts are re-read through `/proc/self/fd/<fd>` by their interpreter after
+    /// exec, so that descriptor must survive exec; binaries are executed directly and keep it
+    /// close-on-exec.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    inherit_fd_after_exec: bool,
 }
 
 impl BridgeSpawnProgram {
     fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The validated program descriptor; `pre_exec` keeps it open because the exec path names it.
+    #[cfg(target_os = "linux")]
+    fn keep_fd(&self) -> Option<i32> {
+        use std::os::fd::AsRawFd;
+        self.fd.as_ref().map(|file| file.as_raw_fd())
+    }
+
+    /// The descriptor the bridge may keep after exec, if any.
+    #[cfg(target_os = "linux")]
+    fn inherit_fd(&self) -> Option<i32> {
+        self.inherit_fd_after_exec.then(|| self.keep_fd()).flatten()
     }
 }
 
@@ -468,7 +511,8 @@ fn bridge_spawn_program(
     if !checked_program {
         return Ok(BridgeSpawnProgram {
             path: program.to_path_buf(),
-            _fd: None,
+            fd: None,
+            inherit_fd_after_exec: false,
         });
     }
 
@@ -480,9 +524,10 @@ fn checked_bridge_spawn_program(
     program: &Path,
     expected_sha256_b64: Option<&str>,
 ) -> Result<BridgeSpawnProgram, CkksError> {
-    use std::fs::OpenOptions;
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::OpenOptionsExt;
+
+    use fs_err::OpenOptions;
+    use fs_err::os::unix::fs::OpenOptionsExt;
 
     validate_checked_bridge_program(program)?;
 
@@ -520,33 +565,14 @@ fn checked_bridge_spawn_program(
         let actual = hash_bridge_program_reader(program, &mut file, &prefix[..prefix_len])?;
         validate_bridge_sha256_digest(program, &expected, &actual)?;
     }
-    if is_shebang_script {
-        // Shebang interpreters reopen /proc/self/fd/<fd> after exec. Keep the
-        // script fd inherited only for scripts; production bridge binaries keep
-        // FD_CLOEXEC and do not inherit the checked executable fd.
-        let flags = unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETFD) };
-        if flags < 0 {
-            return Err(CkksError::Backend(
-                "failed to inspect OpenFHE bridge executable fd for checked spawn".to_string(),
-            ));
-        }
-        let result = unsafe {
-            nix::libc::fcntl(
-                file.as_raw_fd(),
-                nix::libc::F_SETFD,
-                flags & !nix::libc::FD_CLOEXEC,
-            )
-        };
-        if result < 0 {
-            return Err(CkksError::Backend(
-                "failed to prepare OpenFHE bridge script fd for checked spawn".to_string(),
-            ));
-        }
-    }
-
+    // Shebang interpreters reopen /proc/self/fd/<fd> after exec, so the script fd must be
+    // inherited; production bridge binaries keep FD_CLOEXEC and do not inherit it. The flag is
+    // cleared inside `pre_exec`, in the child only: clearing it here would let every other
+    // process spawned in the meantime inherit the descriptor.
     Ok(BridgeSpawnProgram {
         path: PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd())),
-        _fd: Some(file),
+        fd: Some(file),
+        inherit_fd_after_exec: is_shebang_script,
     })
 }
 
@@ -566,8 +592,8 @@ fn checked_bridge_spawn_program(
 
 #[cfg(unix)]
 fn hash_bridge_program_for_sha256(path: &Path) -> Result<[u8; 32], CkksError> {
-    use std::fs::OpenOptions;
-    use std::os::unix::fs::OpenOptionsExt;
+    use fs_err::OpenOptions;
+    use fs_err::os::unix::fs::OpenOptionsExt;
 
     let mut file = OpenOptions::new()
         .read(true)
@@ -596,7 +622,7 @@ fn hash_bridge_program_for_sha256(path: &Path) -> Result<[u8; 32], CkksError> {
 
 #[cfg(not(unix))]
 fn hash_bridge_program_for_sha256(path: &Path) -> Result<[u8; 32], CkksError> {
-    let mut file = std::fs::File::open(path).map_err(|err| {
+    let mut file = fs_err::File::open(path).map_err(|err| {
         CkksError::Backend(format!(
             "failed to read OpenFHE bridge program for sha256 pinning: {err}"
         ))
@@ -1076,9 +1102,53 @@ impl CommandOpenFheBackend {
             let mut request_bytes = Zeroizing::new(selected_request.to_vec());
             request_bytes.push(b'\n');
 
+            // A bridge that speaks unasked has left the protocol: its stale line would otherwise
+            // be taken as the answer to this request.
+            let unsolicited = worker_process
+                .stdout_rx
+                .lock()
+                .map_err(|_| {
+                    CkksError::Backend(
+                        "OpenFHE bridge stdout receiver mutex was poisoned".to_string(),
+                    )
+                })?
+                .try_recv();
+            match unsolicited {
+                Ok(BridgeStdoutEvent::Response { .. }) => {
+                    self.discard_worker(&worker_process, false)?;
+                    return Err(CkksError::Backend(
+                        "OpenFHE bridge produced output without a request".to_string(),
+                    ));
+                }
+                Ok(BridgeStdoutEvent::StderrExceeded) => {
+                    self.discard_worker(&worker_process, false)?;
+                    return Err(CkksError::Backend(format!(
+                        "OpenFHE bridge stderr exceeded {} bytes",
+                        self.max_output_bytes,
+                    )));
+                }
+                Ok(BridgeStdoutEvent::Eof | BridgeStdoutEvent::Error(_)) => {
+                    // The worker died between requests; a fresh one serves this request.
+                    self.discard_worker(&worker_process, false)?;
+                    if attempt == 0 {
+                        continue;
+                    }
+                    return Err(CkksError::Backend(
+                        "OpenFHE bridge exited before the request".to_string(),
+                    ));
+                }
+                Err(_) => {}
+            }
+
             let timeout = self.timeout;
             match write_bridge_request_with_deadline(&worker_process, request_bytes, timeout) {
                 Ok(()) => {}
+                Err(BridgeWriteError::Spawn(err)) => {
+                    // Thread pressure on this side, not a bridge fault: keep the worker.
+                    return Err(CkksError::Backend(format!(
+                        "failed to start the OpenFHE bridge writer thread: {err}"
+                    )));
+                }
                 Err(BridgeWriteError::Timeout) => {
                     // A bridge that stopped draining stdin would otherwise park this thread and
                     // its worker reservation forever once the request exceeded the pipe buffer.
@@ -1213,18 +1283,13 @@ impl CommandOpenFheBackend {
                     self.max_output_bytes,
                 )));
             }
-            let bridge_status = worker_process.try_wait()?;
-            match bridge_status {
-                Some(status) => {
-                    self.discard_worker(&worker_process, false)?;
-                    if !status.success() {
-                        return Err(CkksError::Backend(format!(
-                            "OpenFHE bridge exited with status {}",
-                            status,
-                        )));
-                    }
+            if let Some(status) = worker_process.try_wait()? {
+                self.discard_worker(&worker_process, false)?;
+                if !status.success() {
+                    return Err(CkksError::Backend(format!(
+                        "OpenFHE bridge exited with status {status}",
+                    )));
                 }
-                None => {}
             }
 
             return match decode_response(&response_bytes) {
@@ -1339,7 +1404,17 @@ impl CommandOpenFheBackend {
         for name in &self.sensitive_env_names {
             command.env_remove(name);
         }
-        configure_bridge_command_sandbox(&mut command, self.checked_program, self.sandbox);
+        #[cfg(target_os = "linux")]
+        let (keep_fd, inherit_fd) = (spawn_program.keep_fd(), spawn_program.inherit_fd());
+        #[cfg(not(target_os = "linux"))]
+        let (keep_fd, inherit_fd) = (None, None);
+        configure_bridge_command_sandbox(
+            &mut command,
+            self.checked_program,
+            self.sandbox,
+            keep_fd,
+            inherit_fd,
+        );
 
         let mut child = spawn_bridge_child(command)
             .map_err(|err| CkksError::Backend(format!("failed to start OpenFHE bridge: {err}")))?;
@@ -1356,7 +1431,9 @@ impl CommandOpenFheBackend {
             .take()
             .ok_or_else(|| CkksError::Backend("failed to open bridge stderr".to_string()))?;
 
-        let (stdout_tx, stdout_rx) = mpsc::channel();
+        // One pending line is all a well-behaved bridge ever produces. A bounded channel turns
+        // any further output into back-pressure on the bridge's pipe instead of server memory.
+        let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
         let stderr_tx = stdout_tx.clone();
         let max_output_bytes = self.max_output_bytes;
         let stdout_thread = thread::spawn(move || {
@@ -1466,6 +1543,8 @@ impl CommandOpenFheBackend {
 enum BridgeWriteError {
     Timeout,
     Io(io::Error),
+    /// No writer thread could be started; the worker itself is untouched.
+    Spawn(io::Error),
 }
 
 /// Writes one request line to the bridge from a helper thread and waits at most `timeout` for
@@ -1507,6 +1586,22 @@ fn spawn_bridge_child(command: Command) -> io::Result<Child> {
         .map_err(|_| io::Error::other("OpenFHE bridge spawner thread dropped the request"))?
 }
 
+/// Parse failures never quote the offending bytes: a bridge that returns garbage could
+/// otherwise place its own text, or an echo of the plaintext request, into the error.
+fn bridge_response_parse_error(what: &str, err: &serde_json::Error) -> CkksError {
+    let kind = match err.classify() {
+        serde_json::error::Category::Io => "io",
+        serde_json::error::Category::Syntax => "syntax",
+        serde_json::error::Category::Data => "data",
+        serde_json::error::Category::Eof => "eof",
+    };
+    CkksError::Backend(format!(
+        "{what} ({kind} error at line {}, column {})",
+        err.line(),
+        err.column()
+    ))
+}
+
 fn write_bridge_request_with_deadline(
     worker_process: &Arc<WorkerProcess>,
     request_bytes: Zeroizing<Vec<u8>>,
@@ -1526,7 +1621,7 @@ fn write_bridge_request_with_deadline(
             let _ = result_tx.send(result);
         });
     if let Err(err) = spawned {
-        return Err(BridgeWriteError::Io(err));
+        return Err(BridgeWriteError::Spawn(err));
     }
     match result_rx.recv_timeout(timeout) {
         Ok(result) => result.map_err(BridgeWriteError::Io),
@@ -1703,11 +1798,61 @@ fn bridge_sandbox_uses_network_namespace(sandbox: BridgeSandbox) -> bool {
     )
 }
 
+/// Marks every descriptor above stdio close-on-exec except `keep`, so nothing Qdrant happens to
+/// hold open (sockets, storage files, another worker's script fd) reaches the bridge. Runs in
+/// the forked child, so it allocates nothing.
+#[cfg(target_os = "linux")]
+fn close_inherited_descriptors(keep: Option<i32>) -> io::Result<()> {
+    const CLOSE_RANGE_CLOEXEC: nix::libc::c_uint = 1 << 2;
+    let mark_range = |first: u32, last: u32| -> io::Result<()> {
+        if first > last {
+            return Ok(());
+        }
+        // SAFETY: `close_range` only touches this process's descriptor table.
+        let result = unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_close_range,
+                first as nix::libc::c_uint,
+                last as nix::libc::c_uint,
+                CLOSE_RANGE_CLOEXEC,
+            )
+        };
+        if result == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            // Kernels before 5.11 have no CLOSE_RANGE_CLOEXEC (or no close_range at all):
+            // close the descriptors a service realistically holds instead.
+            Some(nix::libc::ENOSYS) | Some(nix::libc::EINVAL) => {
+                for fd in first..=last.min(4096) {
+                    // SAFETY: closing a descriptor number; EBADF for unused ones is ignored.
+                    unsafe {
+                        nix::libc::close(fd as i32);
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(err),
+        }
+    };
+    match keep {
+        Some(fd) if fd >= 3 => {
+            let fd = fd as u32;
+            mark_range(3, fd - 1)?;
+            mark_range(fd + 1, u32::MAX)
+        }
+        _ => mark_range(3, u32::MAX),
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn configure_bridge_command_sandbox(
     command: &mut Command,
     checked_program: bool,
     sandbox: BridgeSandbox,
+    keep_fd: Option<i32>,
+    inherit_fd: Option<i32>,
 ) {
     // This is not a full sandbox, but it prevents the bridge process from
     // gaining privileges through setuid binaries or file capabilities after
@@ -1732,6 +1877,20 @@ fn configure_bridge_command_sandbox(
             let result = nix::libc::prctl(nix::libc::PR_SET_PDEATHSIG, nix::libc::SIGKILL, 0, 0, 0);
             if result != 0 {
                 return Err(io::Error::last_os_error());
+            }
+            // Own session and process group, so shutdown can kill the bridge together with
+            // anything it forked.
+            if nix::libc::setsid() < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            close_inherited_descriptors(keep_fd)?;
+            if let Some(fd) = inherit_fd {
+                let flags = nix::libc::fcntl(fd, nix::libc::F_GETFD);
+                if flags < 0
+                    || nix::libc::fcntl(fd, nix::libc::F_SETFD, flags & !nix::libc::FD_CLOEXEC) < 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
             }
             let zero_limit = nix::libc::rlimit {
                 rlim_cur: 0,
@@ -1761,6 +1920,8 @@ fn configure_bridge_command_sandbox(
     _command: &mut Command,
     _checked_program: bool,
     _sandbox: BridgeSandbox,
+    _keep_fd: Option<i32>,
+    _inherit_fd: Option<i32>,
 ) {
 }
 
@@ -1993,7 +2154,7 @@ fn decode_single_bridge_response(
 ) -> Result<Vec<u8>, CkksError> {
     let response: CommandOpenFheResponse =
         serde_json::from_slice(response_bytes).map_err(|err| {
-            CkksError::Backend(format!("failed to parse OpenFHE bridge response: {err}"))
+            bridge_response_parse_error("failed to parse OpenFHE bridge response", &err)
         })?;
     if response.version != 1 {
         return Err(CkksError::Backend(format!(
@@ -2016,9 +2177,7 @@ fn decode_score_bridge_response(
 ) -> Result<f64, CkksError> {
     let response: CommandOpenFheScoreResponse =
         serde_json::from_slice(response_bytes).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to parse OpenFHE bridge score response: {err}"
-            ))
+            bridge_response_parse_error("failed to parse OpenFHE bridge score response", &err)
         })?;
     if response.version != 1 {
         return Err(CkksError::Backend(format!(
@@ -2047,9 +2206,7 @@ fn decode_score_batch_bridge_response(
 ) -> Result<Vec<f64>, CkksError> {
     let response: CommandOpenFheScoreBatchResponse = serde_json::from_slice(response_bytes)
         .map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to parse OpenFHE bridge score batch response: {err}"
-            ))
+            bridge_response_parse_error("failed to parse OpenFHE bridge score batch response", &err)
         })?;
     if response.version != 1 {
         return Err(CkksError::Backend(format!(
@@ -2084,9 +2241,7 @@ fn decode_batch_bridge_response(
 ) -> Result<Vec<Vec<u8>>, CkksError> {
     let response: CommandOpenFheBatchResponse =
         serde_json::from_slice(response_bytes).map_err(|err| {
-            CkksError::Backend(format!(
-                "failed to parse OpenFHE bridge batch response: {err}"
-            ))
+            bridge_response_parse_error("failed to parse OpenFHE bridge batch response", &err)
         })?;
     if response.version != 1 {
         return Err(CkksError::Backend(format!(
@@ -2154,7 +2309,7 @@ fn validate_bridge_security_profile(
 
     if reported != expected {
         return Err(CkksError::Backend(format!(
-            "OpenFHE bridge security profile {reported} does not match expected {expected}",
+            "OpenFHE bridge security profile does not match expected {expected}",
         )));
     }
 
@@ -2312,13 +2467,13 @@ while IFS= read -r _line; do
 done
 "#
         );
-        std::fs::write(&script, script_body).unwrap();
-        let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        fs_err::write(&script, script_body).unwrap();
+        let mut dir_permissions = fs_err::metadata(dir.path()).unwrap().permissions();
         dir_permissions.set_mode(0o700);
-        std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
-        let mut script_permissions = std::fs::metadata(&script).unwrap().permissions();
+        fs_err::set_permissions(dir.path(), dir_permissions).unwrap();
+        let mut script_permissions = fs_err::metadata(&script).unwrap().permissions();
         script_permissions.set_mode(0o700);
-        std::fs::set_permissions(&script, script_permissions).unwrap();
+        fs_err::set_permissions(&script, script_permissions).unwrap();
 
         unsafe {
             std::env::set_var("QDRANT", "qdrant-root-secret");
@@ -2563,6 +2718,24 @@ done
 
     #[cfg(unix)]
     #[test]
+    fn unsolicited_bridge_output_discards_the_worker_before_a_request_is_sent() {
+        let backend = CommandOpenFheBackend::new_unchecked("sh")
+            .with_args(["-c".to_string(), "printf 'hello\\n'; exec cat".to_string()])
+            .with_pool_size(NonZeroUsize::new(1).unwrap());
+        let worker = Arc::clone(backend.worker_process().unwrap().worker());
+        std::thread::sleep(Duration::from_millis(300));
+        let err = backend
+            .send_bridge_request_impl(None, br#"{"ping":1}"#, None, |bytes| Ok(bytes.to_vec()))
+            .unwrap_err();
+        assert!(
+            matches!(err, CkksError::Backend(ref message) if message.contains("without a request")),
+            "{err:?}"
+        );
+        assert!(worker.terminated.load(Ordering::SeqCst));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn cloned_backend_worker_process_fails_fast_when_shared_pool_is_busy() {
         let backend = CommandOpenFheBackend::new_unchecked("cat")
             .with_pool_size(NonZeroUsize::new(1).unwrap());
@@ -2621,13 +2794,13 @@ done
 "#,
             marker = marker.display(),
         );
-        std::fs::write(&script, script_body).unwrap();
-        let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        fs_err::write(&script, script_body).unwrap();
+        let mut dir_permissions = fs_err::metadata(dir.path()).unwrap().permissions();
         dir_permissions.set_mode(0o700);
-        std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
-        let mut script_permissions = std::fs::metadata(&script).unwrap().permissions();
+        fs_err::set_permissions(dir.path(), dir_permissions).unwrap();
+        let mut script_permissions = fs_err::metadata(&script).unwrap().permissions();
         script_permissions.set_mode(0o700);
-        std::fs::set_permissions(&script, script_permissions).unwrap();
+        fs_err::set_permissions(&script, script_permissions).unwrap();
 
         let backend = CommandOpenFheBackend::new_unchecked(&script)
             .with_timeout(Duration::from_secs(2))
@@ -2675,13 +2848,13 @@ done
 "#,
             marker = marker.display(),
         );
-        std::fs::write(&script, script_body).unwrap();
-        let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        fs_err::write(&script, script_body).unwrap();
+        let mut dir_permissions = fs_err::metadata(dir.path()).unwrap().permissions();
         dir_permissions.set_mode(0o700);
-        std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
-        let mut script_permissions = std::fs::metadata(&script).unwrap().permissions();
+        fs_err::set_permissions(dir.path(), dir_permissions).unwrap();
+        let mut script_permissions = fs_err::metadata(&script).unwrap().permissions();
         script_permissions.set_mode(0o700);
-        std::fs::set_permissions(&script, script_permissions).unwrap();
+        fs_err::set_permissions(&script, script_permissions).unwrap();
 
         let backend = CommandOpenFheBackend::new_unchecked(&script)
             .with_timeout(Duration::from_secs(2))
@@ -2718,16 +2891,20 @@ done
 
     #[cfg(target_os = "linux")]
     #[test]
+    #[allow(
+        clippy::used_underscore_binding,
+        reason = "the fd is kept only for its lifetime"
+    )]
     fn checked_bridge_spawn_program_uses_validated_proc_fd_path() {
         let program = std::env::current_exe().unwrap();
         let expected_sha256_b64 =
-            BASE64URL_NOPAD.encode(&Sha256::digest(std::fs::read(&program).unwrap()));
+            BASE64URL_NOPAD.encode(&Sha256::digest(fs_err::read(&program).unwrap()));
 
         let spawn_program =
             checked_bridge_spawn_program(&program, Some(&expected_sha256_b64)).unwrap();
 
         assert!(spawn_program.path().starts_with("/proc/self/fd"));
-        assert!(spawn_program._fd.is_some());
+        assert!(spawn_program.fd.is_some());
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -2735,7 +2912,7 @@ done
     fn checked_bridge_spawn_is_linux_only() {
         let program = std::env::current_exe().unwrap();
         let expected_sha256_b64 =
-            BASE64URL_NOPAD.encode(&Sha256::digest(std::fs::read(&program).unwrap()));
+            BASE64URL_NOPAD.encode(&Sha256::digest(fs_err::read(&program).unwrap()));
 
         let err = CommandOpenFheBackend::new_checked_with_sha256_b64(&program, expected_sha256_b64)
             .expect_err("non-Linux checked bridge spawn must fail closed");
@@ -2789,20 +2966,20 @@ done
             .unwrap();
         #[cfg(unix)]
         {
-            let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+            let mut dir_permissions = fs_err::metadata(dir.path()).unwrap().permissions();
             dir_permissions.set_mode(0o700);
-            std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+            fs_err::set_permissions(dir.path(), dir_permissions).unwrap();
         }
 
         let program = dir.path().join("openfhe-bridge");
-        let file = std::fs::File::create(&program).unwrap();
+        let file = fs_err::File::create(&program).unwrap();
         file.set_len(MAX_BRIDGE_PROGRAM_SHA256_BYTES + 1).unwrap();
         drop(file);
         #[cfg(unix)]
         {
-            let mut permissions = std::fs::metadata(&program).unwrap().permissions();
+            let mut permissions = fs_err::metadata(&program).unwrap().permissions();
             permissions.set_mode(0o700);
-            std::fs::set_permissions(&program, permissions).unwrap();
+            fs_err::set_permissions(&program, permissions).unwrap();
         }
 
         let err = CommandOpenFheBackend::new_checked_with_sha256_b64(

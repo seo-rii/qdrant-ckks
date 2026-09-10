@@ -1,13 +1,23 @@
-use std::fs;
+#[cfg(unix)]
 use std::io::BufRead;
+#[cfg(unix)]
 use std::num::NonZeroUsize;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+#[cfg(unix)]
 use std::thread::JoinHandle;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use data_encoding::BASE64URL_NOPAD;
+#[cfg(unix)]
+use fs_err as fs;
+#[cfg(unix)]
+use qdrant_sec::CommandOpenFheBackend;
 use qdrant_sec::vector::CkksPlaintextQueryScoreBatchItem;
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
@@ -17,8 +27,8 @@ use qdrant_sec::{
     CkksPlaintextQueryScoreBatchInput, CkksPlaintextQueryScoreInput, CkksPublicMaterial,
     CkksQueryEncryptionInput, CkksVectorBackend, CkksVectorBatchItem, CkksVectorEncryptor,
     CkksVectorSidecarDeleteTarget, ClientCkksVectorSignatureVerification,
-    ClientCkksVectorValidationContext, CommandOpenFheBackend, ENCRYPTED_CKKS_VECTOR_MARKER,
-    EncryptedCkksVector, EncryptionContext, EncryptionError, SecretKey, VerifiedCkksVector,
+    ClientCkksVectorValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, EncryptedCkksVector,
+    EncryptionContext, EncryptionError, SecretKey, VerifiedCkksVector,
     ckks_vector_sidecar_envelope_key, ckks_vector_verified_sidecar_delete_key,
     client_ckks_vector_signature_message, validate_client_ckks_vector_payload_value_for_runtime,
 };
@@ -1909,8 +1919,9 @@ printf '{"version":1,"security_profile":"ckks-unsafe-test-profile","ciphertext":
     assert!(matches!(
         err,
         CkksError::Backend(message)
-            if message.contains("security profile ckks-unsafe-test-profile")
+            if message.contains("security profile does not match expected")
                 && message.contains(CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50)
+                && !message.contains("ckks-unsafe-test-profile")
     ));
 }
 
@@ -2489,7 +2500,8 @@ done
     assert!(matches!(
         err,
         CkksError::Backend(message)
-            if message.contains("security profile ckks-unsafe-test-profile")
+            if message.contains("security profile does not match expected")
+                && !message.contains("ckks-unsafe-test-profile")
     ));
 }
 
@@ -2809,11 +2821,11 @@ fn command_openfhe_backend_times_out_and_kills_hung_bridge() {
     let script_path = dir.path().join("hung-openfhe-bridge.sh");
     fs::write(
         &script_path,
-        r#"#!/usr/bin/env bash
+        r"#!/usr/bin/env bash
 set -euo pipefail
 IFS= read -r _request
 sleep 10
-"#,
+",
     )
     .unwrap();
     let mut permissions = fs::metadata(&script_path).unwrap().permissions();
@@ -2848,12 +2860,12 @@ fn command_openfhe_backend_timeout_does_not_wait_for_stdout_holder() {
     let script_path = dir.path().join("stdout-held-openfhe-bridge.sh");
     fs::write(
         &script_path,
-        r#"#!/usr/bin/env bash
+        r"#!/usr/bin/env bash
 set -euo pipefail
 IFS= read -r _request
 (sleep 2) &
 sleep 10
-"#,
+",
     )
     .unwrap();
     let mut permissions = fs::metadata(&script_path).unwrap().permissions();
@@ -2890,11 +2902,11 @@ fn command_openfhe_backend_rejects_bridge_exit_after_request() {
     let script_path = dir.path().join("exit-after-request-openfhe-bridge.sh");
     fs::write(
         &script_path,
-        r#"#!/usr/bin/env bash
+        r"#!/usr/bin/env bash
 set -euo pipefail
 IFS= read -r _request
 exit 0
-"#,
+",
     )
     .unwrap();
     let mut permissions = fs::metadata(&script_path).unwrap().permissions();
@@ -2930,13 +2942,13 @@ fn command_openfhe_backend_rejects_oversized_bridge_output() {
     let script_path = dir.path().join("noisy-openfhe-bridge.sh");
     fs::write(
         &script_path,
-        r#"#!/usr/bin/env bash
+        r"#!/usr/bin/env bash
 set -euo pipefail
 IFS= read -r _request
 for _ in {1..128}; do
   printf x
 done
-"#,
+",
     )
     .unwrap();
     let mut permissions = fs::metadata(&script_path).unwrap().permissions();
@@ -2971,12 +2983,12 @@ fn command_openfhe_backend_rejects_invalid_json_response() {
     let script_path = dir.path().join("invalid-json-openfhe-bridge.sh");
     fs::write(
         &script_path,
-        r#"#!/usr/bin/env bash
+        r"#!/usr/bin/env bash
 set -euo pipefail
 IFS= read -r _request
 printf 'plaintext-embedding-secret-should-not-leak\n' >&2
 printf '{not-json}\n'
-"#,
+",
     )
     .unwrap();
     let mut permissions = fs::metadata(&script_path).unwrap().permissions();
@@ -3099,13 +3111,13 @@ fn command_openfhe_backend_stderr_cap_fails_before_timeout() {
     let script_path = dir.path().join("stderr-infinite-openfhe-bridge.sh");
     fs::write(
         &script_path,
-        r#"#!/usr/bin/env bash
+        r"#!/usr/bin/env bash
 set -uo pipefail
 IFS= read -r _request
 while true; do
   printf x >&2 || exit 0
 done
-"#,
+",
     )
     .unwrap();
     let mut permissions = fs::metadata(&script_path).unwrap().permissions();
