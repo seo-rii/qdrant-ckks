@@ -4785,8 +4785,74 @@ windows, server response pinning, Merkle sibling consistency, recovery
 markers, checkpoint sealing and the live owner-prepare and point-staging
 validators hold up.
 
+### Seventh pass: bridge process and HNSW client audits
+
+This pass re-read the OpenFHE bridge module (process validation, sandbox,
+request protocol, worker pool) and the HNSW client module end to end, and
+cleared the crypto crate's clippy findings on Linux and Windows. Fixed:
+
+- The bridge's stdout reader fed an unbounded channel that nothing drained
+  between requests, so a bridge that kept printing grew Qdrant's memory at
+  pipe throughput until the process died. The channel now holds one line and
+  further output blocks the bridge; before each request the worker is checked
+  for unsolicited output and discarded if it spoke unasked, since that stale
+  line would have been taken as the answer.
+- The bridge now runs in its own session and shutdown kills its whole
+  process group, so a forked grandchild cannot keep the pipes and the last
+  plaintext request alive past a discard. Every descriptor above stdio is
+  marked close-on-exec in the child (except the validated program fd), and
+  the script fd's close-on-exec flag is cleared inside `pre_exec` rather than
+  in the parent, so concurrent spawns no longer inherit it. A worker also
+  shuts its child down on drop, a failed writer-thread spawn no longer
+  discards a healthy worker, and parse errors report the serde category and
+  position instead of quoting bridge output.
+- The unverified HNSW searches (`search_private_hnsw_oram_encrypted` and its
+  cached form, benchmark and recall tools) opened whatever the server
+  returned under the bucket's own id and epoch, so a replayed older bucket
+  could resurrect blocks and make the search abort on a stash collision the
+  server can observe. Served buckets must now match the requested path in
+  order and carry an epoch below the write-back epoch.
+- HNSW Merkle proofs pin every leaf's sibling count to the padded tree depth
+  and cap each ciphertext's encoded length before decoding it; a padding
+  node without a position, or a node cache without a padding node, is
+  rejected before the first read instead of at a query-dependent step; the
+  BFS-rank leaf planner is renamed as a benchmark tool and documented as
+  revealing the traversal on first access; client-state snapshot and bucket
+  AEAD buffers are zeroized.
+- The client-side upload bundle validator sized its bucket table from the
+  manifest's tree height before comparing it with the bundle's bucket count;
+  the count is checked first now, as the server-side validator already did.
+
+Checked and left as is: the checked-bridge path validation (absolute path,
+regular non-symlink file, owner and mode along every ancestor, pin hashed
+from the opened descriptor, fd-backed exec), the fail-closed `pre_exec`
+steps, environment clearing, stderr bounding, reservation and spawn-slot
+release on every path, lock ordering, response decoding, one-shot retry
+semantics, request zeroization; on the HNSW side the fixed read shape and
+full write-back, uniform leaf sampling, atomic path loads, the verified
+Merkle chain, decoder bounds, snapshot AEAD binding and Debug redaction.
+
 Known remaining limitations:
 
+- The Landlock sandbox kinds deny writes only: a compromised bridge running
+  as the Qdrant user can still read the storage directory, configuration
+  and TLS keys and execute anything on the fixed PATH, and the non-namespace
+  kind keeps network egress. Handling the read and execute access bits with
+  allow rules for the interpreter, libraries and the program fd is the
+  missing step.
+- Padding and deleted steps of an HNSW search skip the distance and
+  candidate bookkeeping, so per-step latency differs slightly from real
+  steps; computing the distance regardless would make the work
+  shape-constant.
+- A grandchild that calls `setsid` itself escapes the process-group kill;
+  only a PID namespace or cgroup would contain it.
+- The HNSW client key derivation binds collection, vector name, resource key
+  id and epoch but not the key id (the AEAD contexts do), and the manifest
+  signature omits `owner_signing_key_id`, `created_at_unix` and the signature
+  algorithm and key id; both are pinned by the store and server config, so a
+  change needs a versioned domain rather than an in-place fix. The bare
+  commit planners skip the fixed-size and commitment-context checks their
+  `_for_manifest` wrappers perform and have no production caller.
 - The capsule install stream is buffered up to 128 MiB before the coordinator
   signature is verified (the crypto crate verifies before hashing, the
   transport does not); the semaphore, timeouts and TLS bound the exposure.
