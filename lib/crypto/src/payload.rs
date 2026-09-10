@@ -1204,10 +1204,10 @@ fn validate_client_payload_value_inner(
     if let Some(key_id) = envelope.key_id.as_deref() {
         validate_resource_key_id(key_id)?;
     }
-    if let Some(expected_key_id) = context.expected_key_id {
-        if envelope.key_id.as_deref() != Some(expected_key_id) {
-            return Err(PayloadEncryptionError::ClientKeyIdMismatch);
-        }
+    if let Some(expected_key_id) = context.expected_key_id
+        && envelope.key_id.as_deref() != Some(expected_key_id)
+    {
+        return Err(PayloadEncryptionError::ClientKeyIdMismatch);
     }
     let rk_id = envelope
         .rk_id
@@ -1938,10 +1938,9 @@ fn stored_envelope_value(
 
 fn payload_metadata_aad(kind: &str, schema_version: u16, encryption_epoch: u64) -> Vec<u8> {
     let mut aad = Vec::new();
-    for value in [kind.as_bytes()] {
-        aad.extend_from_slice(&(value.len() as u32).to_be_bytes());
-        aad.extend_from_slice(value);
-    }
+    let kind = kind.as_bytes();
+    aad.extend_from_slice(&(kind.len() as u32).to_be_bytes());
+    aad.extend_from_slice(kind);
     aad.extend_from_slice(&schema_version.to_be_bytes());
     aad.extend_from_slice(&encryption_epoch.to_be_bytes());
     aad

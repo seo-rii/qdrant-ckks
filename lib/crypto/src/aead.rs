@@ -788,10 +788,10 @@ impl AeadCipher {
                 return Ok(false);
             }
         }
-        if let Some(rk_epoch) = envelope.rk_epoch {
-            if self.rk_epoch != Some(rk_epoch) {
-                return Ok(false);
-            }
+        if let Some(rk_epoch) = envelope.rk_epoch
+            && self.rk_epoch != Some(rk_epoch)
+        {
+            return Ok(false);
         }
         Ok(true)
     }
@@ -897,10 +897,10 @@ impl AeadCipher {
                 return Err(EncryptionError::KeyMismatch);
             }
         }
-        if let Some(rk_epoch) = envelope.rk_epoch {
-            if self.rk_epoch != Some(rk_epoch) {
-                return Err(EncryptionError::KeyMismatch);
-            }
+        if let Some(rk_epoch) = envelope.rk_epoch
+            && self.rk_epoch != Some(rk_epoch)
+        {
+            return Err(EncryptionError::KeyMismatch);
         }
 
         let nonce_bytes = BASE64URL_NOPAD

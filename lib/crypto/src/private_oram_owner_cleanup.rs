@@ -1253,17 +1253,18 @@ fn validate_private_oram_owner_cleanup_authorization_v1(
     ] {
         validate_digest(digest, "authorization")?;
     }
-    for optional in [
+    for digest in [
         authorization.target.prestage_receipt_digest.as_deref(),
         authorization.target.intent_marker_digest.as_deref(),
         authorization
             .target
             .owner_journal_descriptor_digest
             .as_deref(),
-    ] {
-        if let Some(digest) = optional {
-            validate_digest(digest, "authorization")?;
-        }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        validate_digest(digest, "authorization")?;
     }
     let prestage_bound = authorization.target.prestage_receipt_digest.is_some()
         && authorization.target.intent_marker_digest.is_some()

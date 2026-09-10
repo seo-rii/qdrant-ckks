@@ -1463,7 +1463,7 @@ proptest! {
         let mut expected: BTreeMap<[u8; 32], PrivateResultOramPayloadBlockPlaintext> = BTreeMap::new();
 
         // Insert every block through the stash and evict it onto its leaf path.
-        for i in 0..block_count {
+        for (i, initial_leaf) in initial_leaves.iter().enumerate().take(block_count) {
             let block = PrivateResultOramPayloadBlockPlaintext {
                 version: PRIVATE_RESULT_ORAM_PAYLOAD_BLOCK_VERSION,
                 payload_fetch_token: [i as u8; 32],
@@ -1474,7 +1474,7 @@ proptest! {
             };
             // Independent initial leaves: drawing them from a one-element `ops` put every block
             // on one path, whose capacity no eviction schedule can exceed.
-            let leaf = initial_leaves[i] % leaf_count;
+            let leaf = initial_leaf % leaf_count;
             state.insert_new_stash_block(block.clone(), leaf, config).unwrap();
             expected.insert(block.payload_fetch_token, block);
             let eviction = evict_private_result_oram_path(&mut state, config, leaf, &server.path(leaf)).unwrap();

@@ -67,7 +67,9 @@ fn merkle_levels(commitments: &[String]) -> Vec<Vec<[u8; 32]>> {
         let next = levels
             .last()
             .unwrap()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 let mut hasher = Sha256::new();
                 hasher.update([1]);

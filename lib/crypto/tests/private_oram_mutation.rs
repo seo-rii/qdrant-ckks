@@ -775,7 +775,7 @@ fn v2_contract_json_test_vector_matches_known_answers() {
             .join("../../docs/qdrant-sec-private-oram-mutation-signature-test-vector.json");
         let mut encoded = serde_json::to_vec_pretty(&generated).unwrap();
         encoded.push(b'\n');
-        std::fs::write(path, encoded).unwrap();
+        fs_err::write(path, encoded).unwrap();
         return;
     }
     let (_key_pair, manifest, mutation) = fixture(true);

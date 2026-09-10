@@ -154,7 +154,7 @@ fn result_path_oram_stash_stays_bounded_under_sustained_random_access() {
     let mut max_stash = state.stash_len();
     for step in 0..STEPS {
         let draw = rng.next();
-        if draw % 5 == 0 {
+        if draw.is_multiple_of(5) {
             let leaf = (draw >> 8) % leaf_count;
             let eviction =
                 evict_private_result_oram_path(&mut state, config, leaf, &server.path(leaf))
@@ -321,7 +321,7 @@ fn hnsw_path_oram_stash_stays_bounded_under_sustained_random_access() {
     let mut max_stash = state.stash_len();
     for step in 0..STEPS {
         let draw = rng.next();
-        if draw % 5 == 0 {
+        if draw.is_multiple_of(5) {
             let leaf = (draw >> 8) % leaf_count;
             let eviction =
                 evict_private_hnsw_oram_path(&mut state, config, leaf, &server.path(leaf)).unwrap();

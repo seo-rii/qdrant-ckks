@@ -26,7 +26,7 @@ const DEFAULT_ENCRYPTION_EPOCH: u64 = 0;
 const MAX_VECTOR_NAME_LEN: usize = 255;
 const SHA256_B64_LEN: usize = 43;
 const CKKS_VECTOR_CIPHERTEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
-const CKKS_VECTOR_CIPHERTEXT_MAX_B64_LEN: usize = (CKKS_VECTOR_CIPHERTEXT_MAX_BYTES + 2) / 3 * 4;
+const CKKS_VECTOR_CIPHERTEXT_MAX_B64_LEN: usize = CKKS_VECTOR_CIPHERTEXT_MAX_BYTES.div_ceil(3) * 4;
 const CLIENT_CKKS_VECTOR_SIGNATURE_DOMAIN: &str = "qdrant-sec/client-ckks-vector-signature/v1";
 const CLIENT_CKKS_VECTOR_SIGNATURE_ALGORITHM: &str = "ed25519";
 
@@ -800,8 +800,7 @@ fn validate_delete_target(target: &CkksVectorSidecarDeleteTarget) -> Result<(), 
     if BASE64URL_NOPAD
         .decode(digest_b64.as_bytes())
         .ok()
-        .filter(|digest| digest.len() == 32)
-        .is_none()
+        .is_none_or(|digest| digest.len() != 32)
     {
         return Err(CkksError::InvalidDeleteTarget);
     }
@@ -1367,6 +1366,7 @@ where
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_from_resource_key_with_metadata(
         key_id: impl Into<String>,
         vector_name: impl Into<String>,
@@ -1403,6 +1403,7 @@ where
         Ok(vector_name)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn new_with_metadata_cipher(
         vector_name: String,
         parameters: CkksParameters,

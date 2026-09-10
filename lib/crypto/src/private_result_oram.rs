@@ -1810,7 +1810,7 @@ pub fn plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
             "path_batch_size",
         ));
     }
-    if payload_fetch_tokens.len() % path_batch_size != 0 {
+    if !payload_fetch_tokens.len().is_multiple_of(path_batch_size) {
         return Err(PrivateResultOramError::InvalidFetchPlanField(
             "payload_fetch_tokens",
         ));
@@ -1914,7 +1914,7 @@ pub fn plan_private_result_oram_ordered_read_bucket_batches_for_fetch_tokens(
             "path_batch_size",
         ));
     }
-    if payload_fetch_tokens.len() % path_batch_size != 0 {
+    if !payload_fetch_tokens.len().is_multiple_of(path_batch_size) {
         return Err(PrivateResultOramError::InvalidFetchPlanField(
             "payload_fetch_tokens",
         ));
@@ -2563,6 +2563,7 @@ pub fn open_private_result_oram_plaintext_bucket(
     decode_private_result_oram_bucket_plaintext(bucket.bucket_id, &plaintext, config)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn open_private_result_oram_verified_bucket_batch(
     keys: &PrivateResultOramClientKeys,
     base_context: PrivateResultOramBucketAeadBaseContext<'_>,
@@ -2586,6 +2587,7 @@ pub fn open_private_result_oram_verified_bucket_batch(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn fetch_private_result_oram_tokens_encrypted_verified<NextLeaf>(
     keys: &PrivateResultOramClientKeys,
     base_context: PrivateResultOramBucketAeadBaseContext<'_>,
@@ -2628,7 +2630,10 @@ where
             "path_batch_size",
         ));
     }
-    if payload_fetch_tokens.len() % read_plan.path_batch_size != 0 {
+    if !payload_fetch_tokens
+        .len()
+        .is_multiple_of(read_plan.path_batch_size)
+    {
         return Err(PrivateResultOramError::InvalidFetchPlanField(
             "payload_fetch_tokens",
         ));
@@ -3196,7 +3201,7 @@ fn validate_private_result_oram_read_bucket_sequence_shape(
         .ok_or(PrivateResultOramError::InvalidReadBucketsSignature)?;
     if bucket_ids.is_empty()
         || u32::try_from(bucket_ids.len()).is_err()
-        || bucket_ids.len() % path_len != 0
+        || !bucket_ids.len().is_multiple_of(path_len)
         || bucket_ids
             .iter()
             .any(|bucket_id| *bucket_id >= bucket_count)
@@ -3706,10 +3711,10 @@ pub fn verify_private_result_oram_merkle_proof(
             return Err(PrivateResultOramError::InvalidBucketCiphertextHash);
         }
         decode_bucket_commitment(&bucket.bucket_commitment)?;
-        if let Some(existing) = buckets_by_id.insert(bucket.bucket_id, bucket) {
-            if existing != bucket {
-                return Err(PrivateResultOramError::InvalidMerkleProof);
-            }
+        if let Some(existing) = buckets_by_id.insert(bucket.bucket_id, bucket)
+            && existing != bucket
+        {
+            return Err(PrivateResultOramError::InvalidMerkleProof);
         }
     }
 
@@ -4128,8 +4133,8 @@ fn private_result_oram_merkle_levels(
             return Err(PrivateResultOramError::InvalidMerkleProof);
         };
         let mut next = Vec::with_capacity(previous.len() / 2);
-        for pair in previous.chunks_exact(2) {
-            next.push(private_result_oram_merkle_parent_hash(&pair[0], &pair[1]));
+        for [left, right] in previous.as_chunks::<2>().0 {
+            next.push(private_result_oram_merkle_parent_hash(left, right));
         }
         levels.push(next);
     }
@@ -5070,8 +5075,12 @@ mod tests {
                     .enumerate()
                     .take(levels.len().saturating_sub(1))
                     .map(|(level, level_hashes)| {
-                        let sibling_index = if index % 2 == 0 { index + 1 } else { index - 1 };
-                        let position = if index % 2 == 0 {
+                        let sibling_index = if index.is_multiple_of(2) {
+                            index + 1
+                        } else {
+                            index - 1
+                        };
+                        let position = if index.is_multiple_of(2) {
                             PrivateResultOramMerkleSiblingPosition::Right
                         } else {
                             PrivateResultOramMerkleSiblingPosition::Left

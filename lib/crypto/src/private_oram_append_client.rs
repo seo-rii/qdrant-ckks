@@ -1614,7 +1614,7 @@ fn plan_private_oram_append_reverse_edge(
     replacement.neighbor_levels = upper_neighbors
         .iter()
         .map(|(_, level)| *level)
-        .chain(std::iter::repeat(0).take(selected_level0.len()))
+        .chain(std::iter::repeat_n(0, selected_level0.len()))
         .collect();
     replacement.generation = replacement.generation.checked_add(1).ok_or(
         PrivateOramAppendClientError::InvalidAppendInput("generation"),

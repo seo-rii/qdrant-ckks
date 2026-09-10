@@ -1786,8 +1786,8 @@ fn private_hnsw_oram_merkle_levels(
     while levels.last().is_some_and(|level| level.len() > 1) {
         let current = levels.last().expect("level must exist");
         let mut next = Vec::with_capacity(current.len() / 2);
-        for pair in current.chunks_exact(2) {
-            next.push(private_hnsw_oram_merkle_parent_hash(&pair[0], &pair[1]));
+        for [left, right] in current.as_chunks::<2>().0 {
+            next.push(private_hnsw_oram_merkle_parent_hash(left, right));
         }
         levels.push(next);
     }

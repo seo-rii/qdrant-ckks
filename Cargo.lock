@@ -5935,6 +5935,7 @@ dependencies = [
  "constant_time_eq 0.4.2",
  "criterion",
  "data-encoding",
+ "fs-err",
  "log",
  "nix 0.31.2",
  "proptest",
