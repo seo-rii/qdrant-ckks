@@ -12,11 +12,11 @@ use qdrant_sec::{
     build_private_hnsw_oram_plaintext_index_from_layered_f32_points,
     plan_private_hnsw_oram_directional_neighbor_filter,
     plan_private_hnsw_oram_graph_traversal_path_batch_with_stats,
-    plan_private_hnsw_oram_neighbor_clustered_leaves, plan_private_hnsw_oram_speculative_prefetch,
-    private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_leaf_count,
-    sample_private_hnsw_oram_leaf, seal_private_hnsw_oram_plaintext_index,
-    search_private_hnsw_oram_encrypted, search_private_hnsw_oram_plaintext,
-    search_private_hnsw_oram_plaintext_with_cache,
+    plan_private_hnsw_oram_neighbor_clustered_leaves_for_benchmarks,
+    plan_private_hnsw_oram_speculative_prefetch, private_hnsw_oram_bucket_ids_for_leaf,
+    private_hnsw_oram_leaf_count, sample_private_hnsw_oram_leaf,
+    seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted,
+    search_private_hnsw_oram_plaintext, search_private_hnsw_oram_plaintext_with_cache,
 };
 
 const POINT_COUNT: usize = 64;
@@ -475,7 +475,7 @@ fn private_hnsw_oram_bench(c: &mut Criterion) {
     group.bench_function("plan-neighbor-clustered-leaves-64", |b| {
         b.iter(|| {
             black_box(
-                plan_private_hnsw_oram_neighbor_clustered_leaves(
+                plan_private_hnsw_oram_neighbor_clustered_leaves_for_benchmarks(
                     black_box(planning_fixture.config),
                     black_box(planning_fixture.blocks.as_slice()),
                     black_box(planning_fixture.entry_node_id),

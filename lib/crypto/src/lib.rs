@@ -105,12 +105,13 @@ pub use private_hnsw_client::{
     plan_private_hnsw_oram_directional_neighbor_filter,
     plan_private_hnsw_oram_graph_traversal_path_batch,
     plan_private_hnsw_oram_graph_traversal_path_batch_with_stats,
-    plan_private_hnsw_oram_neighbor_clustered_leaves, plan_private_hnsw_oram_speculative_prefetch,
-    plan_private_hnsw_private_result_fetch_tokens, private_hnsw_bucket_commitment,
-    private_hnsw_f32_distance, private_hnsw_level_from_node_id, private_hnsw_node_reaches_level,
-    private_hnsw_oram_bucket_count, private_hnsw_oram_bucket_ids_for_leaf,
-    private_hnsw_oram_bucket_ids_for_leaf_labels, private_hnsw_oram_fixed_writeback_bucket_budget,
-    private_hnsw_oram_leaf_count, private_hnsw_oram_merkle_root_for_commitments,
+    plan_private_hnsw_oram_neighbor_clustered_leaves_for_benchmarks,
+    plan_private_hnsw_oram_speculative_prefetch, plan_private_hnsw_private_result_fetch_tokens,
+    private_hnsw_bucket_commitment, private_hnsw_f32_distance, private_hnsw_level_from_node_id,
+    private_hnsw_node_reaches_level, private_hnsw_oram_bucket_count,
+    private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_bucket_ids_for_leaf_labels,
+    private_hnsw_oram_fixed_writeback_bucket_budget, private_hnsw_oram_leaf_count,
+    private_hnsw_oram_merkle_root_for_commitments,
     private_hnsw_oram_session_writeback_bucket_budget,
     refresh_private_hnsw_oram_manifest_for_commit, sample_private_hnsw_oram_leaf,
     seal_private_hnsw_oram_bucket, seal_private_hnsw_oram_client_state_snapshot,
@@ -674,6 +675,7 @@ mod crate_root_reexport_tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::type_complexity)]
     fn private_hnsw_root_exports_separate_client_and_server_helper_surfaces() {
         let _client_upload_validator: fn(
             &PrivateHnswOramUploadBundle,

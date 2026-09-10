@@ -9,6 +9,7 @@ use ring::signature::Ed25519KeyPair;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::aead::{AeadInvocationBudget, EncryptionError, SecretKey, validate_resource_key_id};
 use crate::control_plane::{PRIVATE_HNSW_ORAM_BINDING, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER};
@@ -1663,10 +1664,10 @@ impl PrivateHnswOramClientState {
             if !stash_point_tokens.insert(block.point_token) {
                 return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
             }
-            if let Some(payload_fetch_token) = block.payload_fetch_token {
-                if !stash_payload_fetch_tokens.insert(payload_fetch_token) {
-                    return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
-                }
+            if let Some(payload_fetch_token) = block.payload_fetch_token
+                && !stash_payload_fetch_tokens.insert(payload_fetch_token)
+            {
+                return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
             }
             if stash.insert(block.node_id, block.clone()).is_some() {
                 return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
@@ -1712,8 +1713,10 @@ pub fn seal_private_hnsw_oram_client_state_snapshot(
 ) -> Result<PrivateHnswEncryptedClientStateSnapshot, PrivateHnswClientError> {
     validate_client_state_context(context)?;
     PrivateHnswOramClientState::from_snapshot(snapshot)?;
-    let plaintext = serde_json::to_vec(snapshot)
-        .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?;
+    let plaintext = Zeroizing::new(
+        serde_json::to_vec(snapshot)
+            .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?,
+    );
     keys.client_state_seals
         .reserve("private HNSW ORAM client state key")?;
 
@@ -1729,14 +1732,15 @@ pub fn seal_private_hnsw_oram_client_state_snapshot(
     let aad = private_hnsw_client_state_aead(context)?;
     let mut in_out = plaintext;
     let tag = key
-        .seal_in_place_separate_tag(nonce, Aad::from(aad.as_slice()), &mut in_out)
+        .seal_in_place_separate_tag(nonce, Aad::from(aad.as_slice()), &mut in_out[..])
         .map_err(|_| EncryptionError::SealFailed)?;
-    in_out.extend_from_slice(tag.as_ref());
 
-    let mut raw_ciphertext = Vec::with_capacity(2 + BUCKET_AEAD_NONCE_LEN + in_out.len());
+    let mut raw_ciphertext =
+        Vec::with_capacity(2 + BUCKET_AEAD_NONCE_LEN + in_out.len() + tag.as_ref().len());
     raw_ciphertext.extend_from_slice(&CLIENT_STATE_AEAD_VERSION.to_be_bytes());
     raw_ciphertext.extend_from_slice(&nonce_bytes);
-    raw_ciphertext.extend_from_slice(&in_out);
+    raw_ciphertext.extend_from_slice(&in_out[..]);
+    raw_ciphertext.extend_from_slice(tag.as_ref());
 
     Ok(PrivateHnswEncryptedClientStateSnapshot {
         version: CLIENT_STATE_AEAD_VERSION,
@@ -1790,13 +1794,13 @@ pub fn open_private_hnsw_oram_client_state_snapshot(
         .try_into()
         .map_err(|_| PrivateHnswClientError::InvalidClientStateCiphertextEncoding)?;
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
-    let mut ciphertext = raw_ciphertext[2 + BUCKET_AEAD_NONCE_LEN..].to_vec();
+    let mut ciphertext = Zeroizing::new(raw_ciphertext[2 + BUCKET_AEAD_NONCE_LEN..].to_vec());
     let unbound_key = UnboundKey::new(&AES_256_GCM, keys.position_map_key().as_bytes())
         .map_err(|_| EncryptionError::OpenFailed)?;
     let key = LessSafeKey::new(unbound_key);
     let aad = private_hnsw_client_state_aead(context)?;
     let plaintext = key
-        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
+        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext[..])
         .map_err(|_| PrivateHnswClientError::ClientStateOpenFailed)?;
     let snapshot = serde_json::from_slice::<PrivateHnswOramClientStateSnapshot>(plaintext)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?;
@@ -2003,12 +2007,12 @@ pub fn build_private_hnsw_oram_plaintext_index_from_blocks(
         if !seen_point_tokens.insert(block.point_token) {
             return Err(PrivateHnswClientError::InvalidBuildConfig("point_token"));
         }
-        if let Some(payload_fetch_token) = block.payload_fetch_token {
-            if !seen_payload_fetch_tokens.insert(payload_fetch_token) {
-                return Err(PrivateHnswClientError::InvalidBuildConfig(
-                    "payload_fetch_token",
-                ));
-            }
+        if let Some(payload_fetch_token) = block.payload_fetch_token
+            && !seen_payload_fetch_tokens.insert(payload_fetch_token)
+        {
+            return Err(PrivateHnswClientError::InvalidBuildConfig(
+                "payload_fetch_token",
+            ));
         }
         validate_private_hnsw_oram_leaf(*leaf, config.tree_height)?;
         encode_private_hnsw_node_block(
@@ -2163,7 +2167,14 @@ fn private_hnsw_level_mask(point_level: u8) -> Result<u64, PrivateHnswClientErro
     Ok((1u64 << (u32::from(point_level) + 1)) - 1)
 }
 
-pub fn plan_private_hnsw_oram_neighbor_clustered_leaves(
+/// Assigns leaves by BFS rank from the entry node, which places neighbors on adjacent paths.
+///
+/// That is a benchmark convenience only: Path ORAM's access-pattern guarantee needs uniformly
+/// random, independent initial positions, and a tree built from these leaves reveals each
+/// node's BFS rank (hence the traversal) on its first access. Production builds draw leaves
+/// with [`sample_private_hnsw_oram_leaf`].
+#[doc(hidden)]
+pub fn plan_private_hnsw_oram_neighbor_clustered_leaves_for_benchmarks(
     config: PrivateHnswOramClientConfig,
     blocks: &[PrivateHnswNodeBlockPlaintext],
     entry_node_id: [u8; 32],
@@ -2209,8 +2220,8 @@ pub fn plan_private_hnsw_oram_neighbor_clustered_leaves(
         }
     }
 
-    for index in 0..blocks.len() {
-        if !visited.contains(&blocks[index].node_id) {
+    for (index, block) in blocks.iter().enumerate() {
+        if !visited.contains(&block.node_id) {
             clustered_indexes.push(index);
         }
     }
@@ -2294,6 +2305,7 @@ pub fn plan_private_hnsw_oram_directional_neighbor_filter(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn plan_private_hnsw_oram_graph_traversal_path_batch(
     state: &PrivateHnswOramClientState,
     config: PrivateHnswOramClientConfig,
@@ -2320,6 +2332,7 @@ pub fn plan_private_hnsw_oram_graph_traversal_path_batch(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
     state: &PrivateHnswOramClientState,
     config: PrivateHnswOramClientConfig,
@@ -2641,10 +2654,10 @@ fn validate_private_hnsw_plaintext_bucket_tokens(
         if !point_tokens.insert(block.point_token) {
             return Err(PrivateHnswClientError::DuplicatePointToken);
         }
-        if let Some(payload_fetch_token) = block.payload_fetch_token {
-            if !payload_fetch_tokens.insert(payload_fetch_token) {
-                return Err(PrivateHnswClientError::DuplicatePayloadFetchToken);
-            }
+        if let Some(payload_fetch_token) = block.payload_fetch_token
+            && !payload_fetch_tokens.insert(payload_fetch_token)
+        {
+            return Err(PrivateHnswClientError::DuplicatePayloadFetchToken);
         }
     }
     Ok(())
@@ -2664,6 +2677,7 @@ pub fn open_private_hnsw_oram_plaintext_bucket(
     decode_private_hnsw_oram_bucket_plaintext(bucket.bucket_id, &plaintext, config)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn open_private_hnsw_oram_verified_path_batch(
     keys: &PrivateHnswClientKeys,
     base_context: PrivateHnswBucketAeadBaseContext<'_>,
@@ -2822,6 +2836,11 @@ pub fn validate_private_hnsw_oram_upload_bundle(
     }
     let bucket_count = usize::try_from(manifest.bucket_count)
         .map_err(|_| PrivateHnswClientError::BucketCountMismatch)?;
+    // The bundle must carry exactly one bucket per tree slot before anything is sized from the
+    // manifest's tree height, as the server-side validator already requires.
+    if bundle.buckets.len() != bucket_count {
+        return Err(PrivateHnswClientError::BucketCountMismatch);
+    }
     decode_merkle_root(&manifest.root_hash)?;
     let expected_ciphertext_bytes = private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)
         .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("oram"))?;
@@ -3441,6 +3460,7 @@ where
     Ok(result)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn search_private_hnsw_oram_plaintext_with_cache<ReadPath, WriteBack, NextLeaf>(
     state: &mut PrivateHnswOramClientState,
     config: PrivateHnswOramClientConfig,
@@ -3512,6 +3532,7 @@ fn private_hnsw_pending_writeback_values(
     pending_writebacks.into_values().collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn search_private_hnsw_oram_plaintext_inner<ReadPath, WriteBack, NextLeaf>(
     state: &mut PrivateHnswOramClientState,
     config: PrivateHnswOramClientConfig,
@@ -3529,6 +3550,20 @@ where
 {
     validate_oram_client_config(config)?;
     validate_search_params(query, params)?;
+    // Configuration faults surface before the first read: a padding node without a position
+    // or an uncached padding node would otherwise abort at a query-dependent step, which the
+    // server can observe.
+    match params.padding_node_id {
+        Some(padding_node_id) if state.position(&padding_node_id).is_none() => {
+            return Err(PrivateHnswClientError::MissingPosition);
+        }
+        None if node_cache.is_some_and(|cache| !cache.is_empty()) => {
+            return Err(PrivateHnswClientError::InvalidSearchConfig(
+                "padding_node_id",
+            ));
+        }
+        _ => {}
+    }
 
     let mut pending = VecDeque::from([params.entry_node_id]);
     let mut queued = BTreeSet::from([params.entry_node_id]);
@@ -3646,6 +3681,10 @@ where
     })
 }
 
+/// Searches without a Merkle proof: served buckets are pinned only to the requested path and
+/// to epochs before `writeback_epoch`, not to the signed root. Production callers use the
+/// `_verified` variants; this one exists for benchmarks and recall tests.
+#[allow(clippy::too_many_arguments)]
 pub fn search_private_hnsw_oram_encrypted<ReadPath, WriteBack, NextLeaf>(
     keys: &PrivateHnswClientKeys,
     base_context: PrivateHnswBucketAeadBaseContext<'_>,
@@ -3670,7 +3709,25 @@ where
         query,
         params,
         |leaf| {
-            read_path(leaf)?
+            // Without a Merkle proof the only bounds are the requested path and the current
+            // epoch: a served bucket must be the one asked for and must not predate the state
+            // this search started from, or a replayed old bucket could resurrect blocks and
+            // make the search abort on a stash collision the server can observe.
+            let expected_bucket_ids =
+                private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?;
+            let buckets = read_path(leaf)?;
+            if buckets.len() != expected_bucket_ids.len()
+                || buckets
+                    .iter()
+                    .zip(&expected_bucket_ids)
+                    .any(|(bucket, expected_bucket_id)| {
+                        bucket.bucket_id != *expected_bucket_id
+                            || bucket.index_epoch >= writeback_epoch
+                    })
+            {
+                return Err(PrivateHnswClientError::PathBucketMismatch);
+            }
+            buckets
                 .into_iter()
                 .map(|bucket| {
                     open_private_hnsw_oram_plaintext_bucket(keys, base_context, &bucket, config)
@@ -3698,6 +3755,8 @@ where
     Ok(result)
 }
 
+/// The cached form of [`search_private_hnsw_oram_encrypted`]; the same caveat applies.
+#[allow(clippy::too_many_arguments)]
 pub fn search_private_hnsw_oram_encrypted_with_cache<ReadPath, WriteBack, NextLeaf>(
     keys: &PrivateHnswClientKeys,
     base_context: PrivateHnswBucketAeadBaseContext<'_>,
@@ -3724,7 +3783,25 @@ where
         params,
         node_cache,
         |leaf| {
-            read_path(leaf)?
+            // Without a Merkle proof the only bounds are the requested path and the current
+            // epoch: a served bucket must be the one asked for and must not predate the state
+            // this search started from, or a replayed old bucket could resurrect blocks and
+            // make the search abort on a stash collision the server can observe.
+            let expected_bucket_ids =
+                private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?;
+            let buckets = read_path(leaf)?;
+            if buckets.len() != expected_bucket_ids.len()
+                || buckets
+                    .iter()
+                    .zip(&expected_bucket_ids)
+                    .any(|(bucket, expected_bucket_id)| {
+                        bucket.bucket_id != *expected_bucket_id
+                            || bucket.index_epoch >= writeback_epoch
+                    })
+            {
+                return Err(PrivateHnswClientError::PathBucketMismatch);
+            }
+            buckets
                 .into_iter()
                 .map(|bucket| {
                     open_private_hnsw_oram_plaintext_bucket(keys, base_context, &bucket, config)
@@ -3752,6 +3829,7 @@ where
     Ok(result)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn search_private_hnsw_oram_encrypted_verified<ReadPath, WriteBack, NextLeaf>(
     keys: &PrivateHnswClientKeys,
     base_context: PrivateHnswBucketAeadBaseContext<'_>,
@@ -3823,6 +3901,7 @@ where
     Ok(result)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn search_private_hnsw_oram_encrypted_verified_with_cache<ReadPath, WriteBack, NextLeaf>(
     keys: &PrivateHnswClientKeys,
     base_context: PrivateHnswBucketAeadBaseContext<'_>,
@@ -3976,6 +4055,13 @@ pub fn verify_private_hnsw_oram_merkle_proof(
         {
             return Err(PrivateHnswClientError::InvalidMerkleProof);
         }
+        // Cap the decode before it allocates: the opener enforces the same bound later, but
+        // the proof check runs first on every served bucket.
+        if base64url_nopad_decoded_len(bucket.ciphertext.len())
+            .is_none_or(|decoded_len| decoded_len > PRIVATE_HNSW_BUCKET_CIPHERTEXT_OPEN_MAX_BYTES)
+        {
+            return Err(PrivateHnswClientError::InvalidBucketCiphertextEncoding);
+        }
         let raw_ciphertext = BASE64URL_NOPAD
             .decode(bucket.ciphertext.as_bytes())
             .map_err(|_| PrivateHnswClientError::InvalidBucketCiphertextEncoding)?;
@@ -3983,16 +4069,23 @@ pub fn verify_private_hnsw_oram_merkle_proof(
             return Err(PrivateHnswClientError::InvalidBucketCiphertextHash);
         }
         decode_bucket_commitment(&bucket.bucket_commitment)?;
-        if let Some(existing) = buckets_by_id.insert(bucket.bucket_id, bucket) {
-            if existing != bucket {
-                return Err(PrivateHnswClientError::InvalidMerkleProof);
-            }
+        if let Some(existing) = buckets_by_id.insert(bucket.bucket_id, bucket)
+            && existing != bucket
+        {
+            return Err(PrivateHnswClientError::InvalidMerkleProof);
         }
     }
 
+    // Every leaf sits at the same depth of the padded tree; a proof with fewer or more
+    // siblings is malformed even when its hashes happen to chain.
+    let expected_depth = expected_bucket_count
+        .checked_next_power_of_two()
+        .map(|padded| padded.trailing_zeros())
+        .and_then(|depth| usize::try_from(depth).ok())
+        .ok_or(PrivateHnswClientError::InvalidMerkleProof)?;
     let mut leaves_by_id = BTreeMap::new();
     for leaf in &proof.leaves {
-        if leaf.bucket_id >= expected_bucket_count {
+        if leaf.bucket_id >= expected_bucket_count || leaf.siblings.len() != expected_depth {
             return Err(PrivateHnswClientError::InvalidMerkleProof);
         }
         if let Some(existing) = leaves_by_id.insert(leaf.bucket_id, leaf) {
@@ -4614,17 +4707,13 @@ fn validate_private_hnsw_vector_shape(
     if vector_encoding != PrivateHnswVectorEncoding::F32Le {
         return Ok(());
     }
-    let chunks = vector_bytes.chunks_exact(4);
-    if !chunks.remainder().is_empty() {
+    let (chunks, remainder) = vector_bytes.as_chunks::<4>();
+    if !remainder.is_empty() {
         return Err(PrivateHnswClientError::InvalidF32VectorLength);
     }
     let vector = chunks
-        .map(|chunk| {
-            let bytes: [u8; 4] = chunk
-                .try_into()
-                .map_err(|_| PrivateHnswClientError::InvalidF32VectorLength)?;
-            Ok(f32::from_le_bytes(bytes))
-        })
+        .iter()
+        .map(|chunk| Ok(f32::from_le_bytes(*chunk)))
         .collect::<Result<Vec<_>, PrivateHnswClientError>>()?;
     if vector.is_empty() || vector.iter().any(|value| !value.is_finite()) {
         return Err(PrivateHnswClientError::NonFiniteDistance);
@@ -4650,16 +4739,17 @@ pub fn seal_private_hnsw_oram_bucket(
     let key = LessSafeKey::new(unbound_key);
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
     let aad = private_hnsw_bucket_aead(context)?;
-    let mut in_out = plaintext.to_vec();
+    let mut in_out = Zeroizing::new(plaintext.to_vec());
     let tag = key
-        .seal_in_place_separate_tag(nonce, Aad::from(aad.as_slice()), &mut in_out)
+        .seal_in_place_separate_tag(nonce, Aad::from(aad.as_slice()), &mut in_out[..])
         .map_err(|_| EncryptionError::SealFailed)?;
-    in_out.extend_from_slice(tag.as_ref());
 
-    let mut raw_ciphertext = Vec::with_capacity(1 + BUCKET_AEAD_NONCE_LEN + in_out.len());
+    let mut raw_ciphertext =
+        Vec::with_capacity(1 + BUCKET_AEAD_NONCE_LEN + in_out.len() + tag.as_ref().len());
     raw_ciphertext.push(BUCKET_AEAD_VERSION);
     raw_ciphertext.extend_from_slice(&nonce_bytes);
-    raw_ciphertext.extend_from_slice(&in_out);
+    raw_ciphertext.extend_from_slice(&in_out[..]);
+    raw_ciphertext.extend_from_slice(tag.as_ref());
 
     let ciphertext_sha256 = base64url_sha256(&raw_ciphertext);
     let bucket_commitment = private_hnsw_bucket_commitment(context, &ciphertext_sha256)?;
@@ -4717,14 +4807,14 @@ pub fn open_private_hnsw_oram_bucket(
         .try_into()
         .map_err(|_| PrivateHnswClientError::InvalidBucketCiphertextEncoding)?;
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
-    let mut ciphertext = raw_ciphertext[1 + BUCKET_AEAD_NONCE_LEN..].to_vec();
+    let mut ciphertext = Zeroizing::new(raw_ciphertext[1 + BUCKET_AEAD_NONCE_LEN..].to_vec());
 
     let unbound_key = UnboundKey::new(&AES_256_GCM, keys.bucket_aead_key().as_bytes())
         .map_err(|_| EncryptionError::OpenFailed)?;
     let key = LessSafeKey::new(unbound_key);
     let aad = private_hnsw_bucket_aead(context)?;
     let plaintext = key
-        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext)
+        .open_in_place(nonce, Aad::from(aad.as_slice()), &mut ciphertext[..])
         .map_err(|_| PrivateHnswClientError::BucketOpenFailed)?;
     Ok(plaintext.to_vec())
 }
@@ -5065,17 +5155,13 @@ pub fn decode_private_hnsw_f32_vector(
     if block.vector_encoding != PrivateHnswVectorEncoding::F32Le {
         return Err(PrivateHnswClientError::UnsupportedSearchVectorEncoding);
     }
-    let chunks = block.vector.chunks_exact(4);
-    if !chunks.remainder().is_empty() {
+    let (chunks, remainder) = block.vector.as_chunks::<4>();
+    if !remainder.is_empty() {
         return Err(PrivateHnswClientError::InvalidF32VectorLength);
     }
     chunks
-        .map(|chunk| {
-            let bytes: [u8; 4] = chunk
-                .try_into()
-                .map_err(|_| PrivateHnswClientError::InvalidF32VectorLength)?;
-            Ok(f32::from_le_bytes(bytes))
-        })
+        .iter()
+        .map(|chunk| Ok(f32::from_le_bytes(*chunk)))
         .collect()
 }
 
@@ -5249,8 +5335,8 @@ fn private_hnsw_oram_merkle_levels(
             return Err(PrivateHnswClientError::InvalidMerkleProof);
         };
         let mut next = Vec::with_capacity(previous.len() / 2);
-        for pair in previous.chunks_exact(2) {
-            next.push(private_hnsw_oram_merkle_parent_hash(&pair[0], &pair[1]));
+        for [left, right] in previous.as_chunks::<2>().0 {
+            next.push(private_hnsw_oram_merkle_parent_hash(left, right));
         }
         levels.push(next);
     }
@@ -5769,8 +5855,12 @@ mod tests {
                     .enumerate()
                     .take(levels.len().saturating_sub(1))
                     .map(|(level, level_hashes)| {
-                        let sibling_index = if index % 2 == 0 { index + 1 } else { index - 1 };
-                        let position = if index % 2 == 0 {
+                        let sibling_index = if index.is_multiple_of(2) {
+                            index + 1
+                        } else {
+                            index - 1
+                        };
+                        let position = if index.is_multiple_of(2) {
                             PrivateHnswMerkleSiblingPosition::Right
                         } else {
                             PrivateHnswMerkleSiblingPosition::Left
@@ -8660,7 +8750,8 @@ mod tests {
             std::slice::from_ref(&bucket),
         )
         .unwrap();
-        verify_private_hnsw_oram_merkle_proof(&proof, 42, &root, 4, &[bucket.clone()]).unwrap();
+        verify_private_hnsw_oram_merkle_proof(&proof, 42, &root, 4, std::slice::from_ref(&bucket))
+            .unwrap();
 
         let mut hash_mismatch_bucket = bucket.clone();
         hash_mismatch_bucket.ciphertext_sha256 = commitment(8);
@@ -9996,7 +10087,7 @@ mod tests {
         let far = node_block_with_vector(3, &[0.0, 1.0], vec![]);
         let entry = node_block_with_vector(1, &[10.0, 0.0], vec![[2; 32]]);
         let near = node_block_with_vector(2, &[1.0, 0.0], vec![[3; 32]]);
-        let leaves = plan_private_hnsw_oram_neighbor_clustered_leaves(
+        let leaves = plan_private_hnsw_oram_neighbor_clustered_leaves_for_benchmarks(
             config,
             &[far.clone(), entry.clone(), near.clone()],
             entry.node_id,
@@ -10005,11 +10096,15 @@ mod tests {
 
         assert_eq!(leaves, vec![2, 0, 1]);
         assert_eq!(
-            plan_private_hnsw_oram_neighbor_clustered_leaves(config, &[], entry.node_id),
+            plan_private_hnsw_oram_neighbor_clustered_leaves_for_benchmarks(
+                config,
+                &[],
+                entry.node_id
+            ),
             Err(PrivateHnswClientError::InvalidBuildConfig("blocks"))
         );
         assert_eq!(
-            plan_private_hnsw_oram_neighbor_clustered_leaves(
+            plan_private_hnsw_oram_neighbor_clustered_leaves_for_benchmarks(
                 config,
                 std::slice::from_ref(&entry),
                 [9; 32],
@@ -10017,7 +10112,7 @@ mod tests {
             Err(PrivateHnswClientError::InvalidBuildConfig("entry_node_id"))
         );
         assert_eq!(
-            plan_private_hnsw_oram_neighbor_clustered_leaves(
+            plan_private_hnsw_oram_neighbor_clustered_leaves_for_benchmarks(
                 config,
                 &[entry.clone(), entry],
                 [1; 32],
@@ -10038,7 +10133,7 @@ mod tests {
         let entry = node_block_with_vector(1, &[1.0, 0.0], vec![[2; 32], [2; 32], [3; 32]]);
         let first_neighbor = node_block_with_vector(2, &[2.0, 0.0], vec![[1; 32], [4; 32]]);
 
-        let leaves = plan_private_hnsw_oram_neighbor_clustered_leaves(
+        let leaves = plan_private_hnsw_oram_neighbor_clustered_leaves_for_benchmarks(
             config,
             &[
                 clustered_tail,
@@ -11060,14 +11155,13 @@ mod tests {
             PrivateHnswClientError::InvalidManifestSignatureContext("manifest_signature")
         );
 
+        // A bundle with fewer buckets than tree slots is refused on its count, before any
+        // table is sized from the manifest, like the server-side validator.
         let mut incomplete = decoded.clone();
         incomplete.buckets.pop();
-        let missing_bucket_id = incomplete.manifest.bucket_count - 1;
         assert_eq!(
             validate_private_hnsw_oram_upload_bundle(&incomplete),
-            Err(PrivateHnswClientError::MissingBucket {
-                bucket_id: missing_bucket_id
-            })
+            Err(PrivateHnswClientError::BucketCountMismatch)
         );
 
         let mut duplicate = decoded.clone();
